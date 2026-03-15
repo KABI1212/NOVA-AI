@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   MessageSquare,
@@ -11,17 +11,20 @@ import {
   Image,
   ShieldCheck,
   BookOpen,
+  Search,
+  Link,
   Moon,
   Sun,
   LogOut,
   Menu,
-  X,
-  Sparkles
+  X
 } from 'lucide-react';
 import { useAuthStore, useThemeStore, useChatStore } from '../../utils/store';
+import NovaLogo from './NovaLogo';
 
 function Layout({ children }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, logout } = useAuthStore();
   const { mode, setMode } = useChatStore();
   const { isDark, toggleTheme } = useThemeStore();
@@ -32,10 +35,12 @@ function Layout({ children }) {
     { icon: Code, label: 'Code Assistant', mode: 'code' },
     { icon: Lightbulb, label: 'Deep Explain', mode: 'deep' },
     { icon: Image, label: 'Image Generator', mode: 'image' },
+    { icon: Search, label: 'Web Search', mode: 'search', path: '/search'},
     { icon: ShieldCheck, label: 'Safe Reasoning', mode: 'safe' },
     { icon: BookOpen, label: 'Knowledge', mode: 'knowledge' },
     { icon: FileText, label: 'Documents', mode: 'documents' },
     { icon: GraduationCap, label: 'Learning', mode: 'learning' },
+    { icon: Link, label: 'Shared Chats', mode: 'my-shares', path: '/my-shares'},
   ];
 
   const handleLogout = () => {
@@ -53,25 +58,26 @@ function Layout({ children }) {
       >
         <div className="h-full flex flex-col p-4">
           {/* Logo */}
-          <div className="flex items-center gap-2 mb-8">
-            <Sparkles className="w-8 h-8 text-primary-600" />
-            <h1 className="text-xl font-bold text-gray-900 dark:text-white">
-              NOVA AI
-            </h1>
+          <div className="mb-8">
+            <NovaLogo size={36} textColor={isDark ? '#ffffff' : '#111111'} />
           </div>
 
           {/* Navigation */}
           <nav className="flex-1 space-y-2">
             {menuItems.map((item) => {
               const Icon = item.icon;
-              const isActive = mode === item.mode;
+              const isActive = item.path ? location.pathname === item.path : mode === item.mode;
 
               return (
                 <button
                   key={item.mode}
                   onClick={() => {
-                    setMode(item.mode);
-                    navigate(`/chat?mode=${item.mode}`);
+                    if (item.path) {
+                      navigate(item.path);
+                    } else {
+                      setMode(item.mode);
+                      navigate(`/chat?mode=${item.mode}`);
+                    }
                   }}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
                     isActive

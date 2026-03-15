@@ -1,38 +1,48 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, JSON
-from sqlalchemy.orm import relationship
-from datetime import datetime
+from sqlalchemy import Column, String, Boolean, DateTime, JSON, Text, ForeignKey, Integer
+from sqlalchemy.sql import func
 from config.database import Base
-
+from sqlalchemy.orm import relationship
+from pydantic import BaseModel
+from typing import List
+import uuid
 
 class Conversation(Base):
     __tablename__ = "conversations"
 
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    title = Column(String, default="New Chat")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    id           = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id      = Column(Integer, ForeignKey("users.id"), nullable=False)
+    title        = Column(String(200), default="New Chat")
+    messages     = Column(JSON, default=list)
+    model        = Column(String(50), default="gpt-4")
 
-    # Relationships
-    user = relationship("User", back_populates="conversations")
-    messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
+    # Relationship to user
+    user         = relationship("User", back_populates="conversations")
 
-    def __repr__(self):
-        return f"<Conversation {self.id}: {self.title}>"
+    # Share fields ← NEW
+    is_shared    = Column(Boolean, default=False)
+    share_id     = Column(String(12), unique=True, nullable=True)  # short public ID
+    share_title  = Column(String(200), nullable=True)
+    shared_at    = Column(DateTime, nullable=True)
+    view_count   = Column(String, default="0")
 
+    created_at   = Column(DateTime, server_default=func.now())
+    updated_at   = Column(DateTime, onupdate=func.now())
 
-class Message(Base):
-    __tablename__ = "messages"
+# ── Pydantic schemas (used in routes) ────────────────────
+class Message(BaseModel):
+    role:    str
+    content: str
 
-    id = Column(Integer, primary_key=True, index=True)
-    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False)
-    role = Column(String, nullable=False)  # 'user' or 'assistant'
-    content = Column(Text, nullable=False)
-    meta = Column("metadata", JSON, default={})  # For storing code language, file info, etc.
-    created_at = Column(DateTime, default=datetime.utcnow)
+class ConversationCreate(BaseModel):
+    title:   str = "New Chat"
+    model:   str = "gpt-4"
 
-    # Relationships
-    conversation = relationship("Conversation", back_populates="messages")
+class ConversationResponse(BaseModel):
+    id:         str
+    title:      str
+    model:      str
+    messages:   List[dict] = []
+    created_at: str = None
 
-    def __repr__(self):
-        return f"<Message {self.id} ({self.role})>"
+    class Config:
+        from_attributes = True

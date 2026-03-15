@@ -6,8 +6,6 @@ import {
   Plus,
   Trash2,
   RefreshCcw,
-  Mic,
-  Square,
   Volume2,
   VolumeX,
   Paperclip
@@ -15,6 +13,8 @@ import {
 import toast from 'react-hot-toast';
 import Layout from '../components/common/Layout';
 import MessageBubble from '../components/chat/MessageBubble';
+import VoiceInput from '../components/chat/VoiceInput';
+import ShareButton from "../components/chat/ShareButton";
 import { chatAPI, documentAPI, explainAPI } from '../services/api';
 import { useChatStore } from '../utils/store';
 
@@ -44,19 +44,26 @@ function Chat() {
 
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [isListening, setIsListening] = useState(false);
   const [autoSpeak, setAutoSpeak] = useState(false);
   const [speakingId, setSpeakingId] = useState(null);
   const [documents, setDocuments] = useState([]);
   const [selectedDocumentId, setSelectedDocumentId] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [providers, setProviders] = useState([]);
+  const [webSearch, setWebSearch] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState(
+    localStorage.getItem('ai_provider') || ''
+  );
+  const [selectedModel, setSelectedModel] = useState(
+    localStorage.getItem('ai_model') || ''
+  );
   const messagesEndRef = useRef(null);
-  const recognitionRef = useRef(null);
   const fileInputRef = useRef(null);
   const canRegenerate = !!currentConversation && messages.some((msg) => msg.role === 'assistant');
 
   useEffect(() => {
     loadConversations();
+    loadProviders();
   }, []);
 
   useEffect(() => {
@@ -71,31 +78,6 @@ function Chat() {
     scrollToBottom();
   }, [messages, isTyping]);
 
-  useEffect(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.interimResults = false;
-    recognition.continuous = false;
-
-    recognition.onresult = (event) => {
-      const transcript = event.results?.[0]?.[0]?.transcript || '';
-      if (transcript) {
-        setInput(transcript);
-        sendMessage(transcript);
-      }
-    };
-    recognition.onerror = () => {
-      setIsListening(false);
-      toast.error('Voice input failed');
-    };
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-
-    recognitionRef.current = recognition;
-  }, []);
 
   useEffect(() => {
     if (mode === 'documents') {
@@ -107,9 +89,43 @@ function Chat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const streamChat = async (payload, onToken, onFinal) => {
+  const loadProviders = async () => {
+    try {
+      const response = await chatAPI.getProviders();
+      const list = Array.isArray(response.data) ? response.data : [];
+      setProviders(list);
+
+      const storedProvider = localStorage.getItem('ai_provider') || '';
+      const storedModel = localStorage.getItem('ai_model') || '';
+
+      const providerId = list.some((p) => p.id === storedProvider)
+        ? storedProvider
+        : (list[0]?.id || '');
+      const provider = list.find((p) => p.id === providerId);
+      const models = provider?.models || [];
+      const modelId = models.includes(storedModel) ? storedModel : (models[0] || '');
+
+      setSelectedProvider(providerId);
+      setSelectedModel(modelId);
+
+      if (providerId) {
+        localStorage.setItem('ai_provider', providerId);
+      } else {
+        localStorage.removeItem('ai_provider');
+      }
+      if (modelId) {
+        localStorage.setItem('ai_model', modelId);
+      } else {
+        localStorage.removeItem('ai_model');
+      }
+    } catch (error) {
+      toast.error('Failed to load AI providers');
+    }
+  };
+
+  const streamChat = async (payload, onToken, onFinal, endpoint = '/api/chat') => {
     const token = localStorage.getItem('token');
-    const response = await fetch(`${API_URL}/api/chat`, {
+    const response = await fetch(`${API_URL}${endpoint}`, {
       method: 'POST',
       headers: token
         ? {
@@ -151,10 +167,21 @@ function Chat() {
         if (!line.startsWith('data:')) continue;
         const data = line.replace(/^data:\s*/, '');
         if (!data) continue;
-        const payload = JSON.parse(data);
-        if (payload.type === 'token' || payload.type === 'delta') {
-          onToken(payload.content || '');
+        if (data === '[DONE]') {
+          onFinal({});
+          return;
         }
+        const payload = JSON.parse(data);
+        if (webSearch) {
+          if (payload.type === 'chunk' || payload.type === 'delta') {
+            onToken(payload.content || '');
+          }
+        } else {
+          if (payload.type === 'token' || payload.type === 'delta') {
+            onToken(payload.content || '');
+          }
+        }
+        
         if (payload.type === 'final') {
           onFinal(payload);
         }
@@ -219,6 +246,59 @@ function Chat() {
     }
   };
 
+  const handleProviderChange = (providerId) => {
+    setSelectedProvider(providerId);
+    if (providerId) {
+      localStorage.setItem('ai_provider', providerId);
+    } else {
+      localStorage.removeItem('ai_provider');
+    }
+
+    const provider = providers.find((p) => p.id === providerId);
+    const modelId = provider?.models?.[0] || '';
+    setSelectedModel(modelId);
+    if (modelId) {
+      localStorage.setItem('ai_model', modelId);
+    } else {
+      localStorage.removeItem('ai_model');
+    }
+  };
+
+  const handleModelChange = (modelId) => {
+    setSelectedModel(modelId);
+    if (modelId) {
+      localStorage.setItem('ai_model', modelId);
+    } else {
+      localStorage.removeItem('ai_model');
+    }
+  };
+
+  const buildChatPayload = (overrides) => {
+    const common = {
+      model: selectedModel || null,
+      ...overrides,
+    };
+
+    if (webSearch) {
+      return {
+        ...common,
+        provider: selectedProvider || null,
+        message: overrides.message,
+        history: messages.filter(m => m.role !== 'system').map(m => ({ role: m.role, content: m.content })),
+      };
+    }
+
+    return {
+      ...common,
+      stream: true,
+      mode,
+      document_id: mode === 'documents' ? selectedDocumentId : null,
+      provider: selectedProvider || null,
+      conversation_id: currentConversation?.id,
+      message: overrides.message,
+    };
+  };
+
   const handleSend = async () => {
     if (!input.trim() || loading) return;
 
@@ -243,15 +323,11 @@ function Chat() {
       addMessage({ id: assistantId, role: 'assistant', content: '', images: [] });
       let assistantMessage = '';
       let assistantImages = [];
+      
+      const endpoint = webSearch ? '/api/search/chat' : '/api/chat';
 
       await streamChat(
-        {
-          conversation_id: currentConversation?.id,
-          message: messageText,
-          stream: true,
-          mode,
-          document_id: mode === 'documents' ? selectedDocumentId : null,
-        },
+        buildChatPayload({ message: messageText }),
         (token) => {
           assistantMessage += token;
           setIsTyping(false);
@@ -279,7 +355,8 @@ function Chat() {
             };
             return next;
           });
-        }
+        },
+        endpoint
       );
 
       if (autoSpeak) {
@@ -328,14 +405,12 @@ function Chat() {
       addMessage({ id: assistantId, role: 'assistant', content: '', images: [] });
       let assistantMessage = '';
       let assistantImages = [];
+      const endpoint = webSearch ? '/api/search/chat' : '/api/chat';
 
       await streamChat(
-        {
+        buildChatPayload({
           conversation_id: currentConversation.id,
-          stream: true,
-          mode,
-          document_id: mode === 'documents' ? selectedDocumentId : null,
-        },
+        }),
         (token) => {
           assistantMessage += token;
           setIsTyping(false);
@@ -363,7 +438,8 @@ function Chat() {
             };
             return next;
           });
-        }
+        },
+        endpoint
       );
 
       if (autoSpeak) {
@@ -395,19 +471,6 @@ function Chat() {
     setMessages([]);
   };
 
-  const handleMicClick = () => {
-    if (!recognitionRef.current) {
-      toast.error('Voice input not supported in this browser');
-      return;
-    }
-    if (isListening) {
-      recognitionRef.current.stop();
-      setIsListening(false);
-      return;
-    }
-    setIsListening(true);
-    recognitionRef.current.start();
-  };
 
   const speakText = (text, messageId) => {
     if (!window.speechSynthesis) {
@@ -478,6 +541,9 @@ function Chat() {
     }
   };
 
+  const activeProvider = providers.find((provider) => provider.id === selectedProvider);
+  const availableModels = activeProvider?.models || [];
+
   return (
     <Layout>
       <div className="flex h-full">
@@ -542,6 +608,11 @@ function Chat() {
                   <MessageBubble
                     key={msg.id || idx}
                     message={msg}
+                    isStreaming={
+                      loading &&
+                      idx === messages.length - 1 &&
+                      msg.role === 'assistant'
+                    }
                     onExplain={handleExplain}
                     onSave={handleSave}
                     onSpeak={(text) => speakText(text, msg.id || idx)}
@@ -568,6 +639,22 @@ function Chat() {
                   Regenerate Response
                 </button>
                 <div className="flex items-center gap-2">
+                   <button
+                    onClick={() => setWebSearch(!webSearch)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm
+                                border transition-all
+                                ${webSearch
+                                  ? "border-blue-500 bg-blue-500/10 text-blue-400"
+                                  : "border-gray-700 text-gray-500 hover:border-gray-500"}`}
+                  >
+                    🔍 {webSearch ? "Search ON" : "Search OFF"}
+                  </button>
+                  {currentConversation?.id && (
+                    <ShareButton
+                      conversationId={currentConversation?.id}
+                      conversationTitle={currentConversation?.title}
+                    />
+                  )}
                   <button
                     onClick={() => setAutoSpeak(!autoSpeak)}
                     className="btn-secondary flex items-center gap-2"
@@ -575,6 +662,33 @@ function Chat() {
                     {autoSpeak ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
                     Voice
                   </button>
+                  {providers.length > 0 && (
+                    <>
+                      <select
+                        value={selectedProvider}
+                        onChange={(e) => handleProviderChange(e.target.value)}
+                        className="input-field w-40 text-sm"
+                      >
+                        {providers.map((provider) => (
+                          <option key={provider.id} value={provider.id}>
+                            {provider.name}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={selectedModel}
+                        onChange={(e) => handleModelChange(e.target.value)}
+                        className="input-field w-56 text-sm"
+                        disabled={availableModels.length === 0}
+                      >
+                        {availableModels.map((model) => (
+                          <option key={model} value={model}>
+                            {model}
+                          </option>
+                        ))}
+                      </select>
+                    </>
+                  )}
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     className="btn-secondary flex items-center gap-2"
@@ -611,12 +725,12 @@ function Chat() {
               )}
 
               <div className="flex gap-2 items-end">
-                <button
-                  onClick={handleMicClick}
-                  className={`btn-secondary px-3 ${isListening ? 'bg-red-100 text-red-700' : ''}`}
-                >
-                  {isListening ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                </button>
+                <VoiceInput
+                  onTranscript={(transcript) => {
+                    setInput(transcript);
+                  }}
+                  disabled={loading}
+                />
                 <textarea
                   value={input}
                   onChange={(e) => setInput(e.target.value)}

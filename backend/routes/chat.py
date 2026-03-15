@@ -11,23 +11,19 @@ from models.conversation import Conversation, Message
 from models.document import Document
 from services.ai_service import ai_service
 from services.vector_service import vector_service
-from utils.dependencies import get_current_user
+from utils.dependencies import get_current_user, get_current_user_optional
 from ai_engine import build_messages, select_model, response_envelope
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 MAX_HISTORY_MESSAGES = 12
 
 
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-
-
 class ChatRequest(BaseModel):
-    conversation_id: Optional[int] = None
+    conversation_id: Optional[str] = None
     message: str = ""
     mode: str = "chat"
     provider: Optional[str] = None
+    model: Optional[str] = None
     document_id: Optional[int] = None
     stream: bool = True
 
@@ -35,9 +31,10 @@ class ChatRequest(BaseModel):
 
 
 class RegenerateRequest(BaseModel):
-    conversation_id: int
+    conversation_id: str
     mode: str = "chat"
     provider: Optional[str] = None
+    model: Optional[str] = None
     document_id: Optional[int] = None
     stream: bool = True
 
@@ -45,7 +42,7 @@ class RegenerateRequest(BaseModel):
 
 
 class ConversationResponse(BaseModel):
-    id: int
+    id: str
     title: str
     created_at: str
     updated_at: str
@@ -55,7 +52,7 @@ class ConversationResponse(BaseModel):
 @router.post("/")
 async def chat(
     request: ChatRequest = Body(default=ChatRequest()),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_current_user_optional),
     db: Session = Depends(get_db)
 ):
     """Send a chat message and get AI response"""
@@ -71,6 +68,62 @@ async def chat(
                 yield sse_event(response_envelope("Please enter a message.") | {"type": "final"})
             return StreamingResponse(generate_empty(), media_type="text/event-stream")
         return response_envelope("Please enter a message.")
+
+    if current_user is None:
+        if mode == "documents":
+            if request.stream:
+                async def generate_login_required():
+                    yield sse_event(response_envelope("Please log in to use document mode.") | {"type": "final"})
+                return StreamingResponse(generate_login_required(), media_type="text/event-stream")
+            return response_envelope("Please log in to use document mode.")
+
+        ai_messages = build_messages([{"role": "user", "content": request.message}], mode)
+        provider = (request.provider or settings.AI_PROVIDER or "openai").lower()
+        requested_model = (request.model or "").strip() or None
+        default_model = select_model(mode)
+        model = requested_model or (default_model if provider == "openai" else None)
+
+        if request.stream:
+            async def generate_public():
+                try:
+                    if mode == "image":
+                        yield sse_event({"type": "delta", "content": "Generating image..."})
+                        images = await ai_service.generate_image(request.message)
+                        yield sse_event(response_envelope("Here are your images.", images=images) | {"type": "final"})
+                        return
+
+                    full_response = ""
+                    async for chunk in ai_service.chat_stream(
+                        ai_messages,
+                        provider=provider,
+                        model=model
+                    ):
+                        full_response += chunk
+                        yield sse_event({"type": "delta", "content": chunk})
+
+                    yield sse_event(response_envelope(full_response) | {"type": "final"})
+                except Exception as exc:
+                    yield sse_event(
+                        response_envelope(fallback_message) | {"type": "final", "error": str(exc)}
+                    )
+
+            return StreamingResponse(generate_public(), media_type="text/event-stream")
+
+        if mode == "image":
+            images = await ai_service.generate_image(request.message)
+            return response_envelope("Here are your images.", images=images)
+
+        try:
+            response_text = ""
+            async for chunk in ai_service.chat_stream(
+                ai_messages,
+                provider=provider,
+                model=model
+            ):
+                response_text += chunk
+            return response_envelope(response_text)
+        except Exception:
+            return response_envelope(fallback_message)
 
     # Get or create conversation
     if request.conversation_id:
@@ -92,23 +145,12 @@ async def chat(
         db.refresh(conversation)
 
     # Save user message
-    user_message = Message(
-        conversation_id=conversation.id,
-        role="user",
-        content=request.message,
-        meta={"mode": mode, "document_id": request.document_id}
-    )
-    db.add(user_message)
+    conversation.messages.append({"role": "user", "content": request.message})
+    db.add(conversation)
     db.commit()
 
     # Get conversation history
-    messages = db.query(Message).filter(
-        Message.conversation_id == conversation.id
-    ).order_by(Message.created_at.desc()).limit(MAX_HISTORY_MESSAGES).all()
-    messages = list(reversed(messages))
-
-    # Prepare messages for AI
-    history = [{"role": msg.role, "content": msg.content} for msg in messages]
+    history = conversation.messages[-MAX_HISTORY_MESSAGES:]
     doc_context = None
     if mode == "documents":
         if not request.document_id:
@@ -135,9 +177,10 @@ async def chat(
     ai_messages = build_messages(history, mode)
     if doc_context:
         ai_messages.insert(1, {"role": "system", "content": f"Document context:\n{doc_context[:8000]}"})
-    model = select_model(mode)
-
     provider = (request.provider or settings.AI_PROVIDER or "openai").lower()
+    requested_model = (request.model or "").strip() or None
+    default_model = select_model(mode)
+    model = requested_model or (default_model if provider == "openai" else None)
 
     # Stream response
     if request.stream:
@@ -146,13 +189,9 @@ async def chat(
                 if mode == "image":
                     yield sse_event({"type": "delta", "content": "Generating image..."})
                     images = await ai_service.generate_image(request.message)
-                    assistant_message = Message(
-                        conversation_id=conversation.id,
-                        role="assistant",
-                        content="Here are your images.",
-                        meta={"mode": mode, "images": images}
-                    )
-                    db.add(assistant_message)
+                    assistant_message_data = {"role": "assistant", "content": "Here are your images.", "meta": {"mode": mode, "images": images}}
+                    conversation.messages.append(assistant_message_data)
+                    db.add(conversation)
                     db.commit()
                     yield sse_event(response_envelope("Here are your images.", images=images) | {"type": "final"})
                     return
@@ -161,19 +200,14 @@ async def chat(
                 async for chunk in ai_service.chat_stream(
                     ai_messages,
                     provider=provider,
-                    model=model if provider == "openai" else None
+                    model=model
                 ):
                     full_response += chunk
                     yield sse_event({"type": "delta", "content": chunk})
 
                 # Save assistant message after streaming
-                assistant_message = Message(
-                    conversation_id=conversation.id,
-                    role="assistant",
-                    content=full_response,
-                    meta={"mode": mode, "document_id": request.document_id}
-                )
-                db.add(assistant_message)
+                conversation.messages.append({"role": "assistant", "content": full_response})
+                db.add(conversation)
                 db.commit()
 
                 yield sse_event(response_envelope(full_response) | {"type": "final"})
@@ -186,13 +220,8 @@ async def chat(
     else:
         if mode == "image":
             images = await ai_service.generate_image(request.message)
-            assistant_message = Message(
-                conversation_id=conversation.id,
-                role="assistant",
-                content="Here are your images.",
-                meta={"mode": mode, "images": images}
-            )
-            db.add(assistant_message)
+            conversation.messages.append({"role": "assistant", "content": "Here are your images.", "meta": {"mode": mode, "images": images}})
+            db.add(conversation)
             db.commit()
             return response_envelope("Here are your images.", images=images)
 
@@ -202,18 +231,13 @@ async def chat(
             async for chunk in ai_service.chat_stream(
                 ai_messages,
                 provider=provider,
-                model=model if provider == "openai" else None
+                model=model
             ):
                 response_text += chunk
 
             # Save assistant message
-            assistant_message = Message(
-                conversation_id=conversation.id,
-                role="assistant",
-                content=response_text,
-                meta={"mode": mode, "document_id": request.document_id}
-            )
-            db.add(assistant_message)
+            conversation.messages.append({"role": "assistant", "content": response_text})
+            db.add(conversation)
             db.commit()
 
             return response_envelope(response_text)
@@ -240,29 +264,21 @@ async def regenerate(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    last_user_message = db.query(Message).filter(
-        Message.conversation_id == conversation.id,
-        Message.role == "user"
-    ).order_by(Message.created_at.desc()).first()
-
-    if not last_user_message:
+    # Find the last user message from the JSON list
+    user_messages = [m for m in conversation.messages if m.get("role") == "user"]
+    if not user_messages:
         raise HTTPException(status_code=400, detail="No user message to regenerate")
+    
+    last_user_message_content = user_messages[-1].get("content", "")
+    if not last_user_message_content:
+        raise HTTPException(status_code=400, detail="Last user message is empty")
 
-    last_assistant_message = db.query(Message).filter(
-        Message.conversation_id == conversation.id,
-        Message.role == "assistant"
-    ).order_by(Message.created_at.desc()).first()
-
-    if last_assistant_message and last_assistant_message.created_at >= last_user_message.created_at:
-        db.delete(last_assistant_message)
+    if conversation.messages and conversation.messages[-1].get("role") == "assistant":
+        conversation.messages.pop()
+        db.add(conversation)
         db.commit()
 
-    messages = db.query(Message).filter(
-        Message.conversation_id == conversation.id
-    ).order_by(Message.created_at.desc()).limit(MAX_HISTORY_MESSAGES).all()
-    messages = list(reversed(messages))
-
-    history = [{"role": msg.role, "content": msg.content} for msg in messages]
+    history = conversation.messages[-MAX_HISTORY_MESSAGES:]
     doc_context = None
     if mode == "documents":
         if not request.document_id:
@@ -283,27 +299,25 @@ async def regenerate(
         if not document.is_processed:
             raise HTTPException(status_code=400, detail="Document is still being processed")
 
-        search_results = await vector_service.search(last_user_message.content, k=3, doc_id=document.id)
+        search_results = await vector_service.search(last_user_message_content, k=3, doc_id=document.id)
         doc_context = "\n\n".join([result[0] for result in search_results]) or document.text_content
 
     ai_messages = build_messages(history, mode)
     if doc_context:
         ai_messages.insert(1, {"role": "system", "content": f"Document context:\n{doc_context[:8000]}"})
-    model = select_model(mode)
     provider = (request.provider or settings.AI_PROVIDER or "openai").lower()
+    requested_model = (request.model or "").strip() or None
+    default_model = select_model(mode)
+    model = requested_model or (default_model if provider == "openai" else None)
 
     if request.stream:
         async def generate():
             if mode == "image":
                 yield sse_event({"type": "delta", "content": "Generating image..."})
-                images = await ai_service.generate_image(last_user_message.content)
-                assistant_message = Message(
-                    conversation_id=conversation.id,
-                    role="assistant",
-                    content="Here are your images.",
-                    meta={"mode": mode, "images": images}
-                )
-                db.add(assistant_message)
+                images = await ai_service.generate_image(last_user_message_content)
+                assistant_message_data = {"role": "assistant", "content": "Here are your images.", "meta": {"mode": mode, "images": images}}
+                conversation.messages.append(assistant_message_data)
+                db.add(conversation)
                 db.commit()
                 yield sse_event(response_envelope("Here are your images.", images=images) | {"type": "final"})
                 return
@@ -312,18 +326,14 @@ async def regenerate(
             async for chunk in ai_service.chat_stream(
                 ai_messages,
                 provider=provider,
-                model=model if provider == "openai" else None
+                model=model
             ):
                 full_response += chunk
                 yield sse_event({"type": "delta", "content": chunk})
 
-            assistant_message = Message(
-                conversation_id=conversation.id,
-                role="assistant",
-                content=full_response,
-                meta={"mode": mode, "document_id": request.document_id}
-            )
-            db.add(assistant_message)
+            assistant_message_data = {"role": "assistant", "content": full_response}
+            conversation.messages.append(assistant_message_data)
+            db.add(conversation)
             db.commit()
 
             yield sse_event(response_envelope(full_response) | {"type": "final"})
@@ -331,14 +341,9 @@ async def regenerate(
         return StreamingResponse(generate(), media_type="text/event-stream")
 
     if mode == "image":
-        images = await ai_service.generate_image(last_user_message.content)
-        assistant_message = Message(
-            conversation_id=conversation.id,
-            role="assistant",
-            content="Here are your images.",
-            meta={"mode": mode, "images": images}
-        )
-        db.add(assistant_message)
+        images = await ai_service.generate_image(last_user_message_content)
+        conversation.messages.append({"role": "assistant", "content": "Here are your images.", "meta": {"mode": mode, "images": images}})
+        db.add(conversation)
         db.commit()
         return response_envelope("Here are your images.", images=images)
 
@@ -346,17 +351,12 @@ async def regenerate(
     async for chunk in ai_service.chat_stream(
         ai_messages,
         provider=provider,
-        model=model if provider == "openai" else None
+        model=model
     ):
         response_text += chunk
 
-    assistant_message = Message(
-        conversation_id=conversation.id,
-        role="assistant",
-        content=response_text,
-        meta={"mode": mode, "document_id": request.document_id}
-    )
-    db.add(assistant_message)
+    conversation.messages.append({"role": "assistant", "content": response_text})
+    db.add(conversation)
     db.commit()
 
     return response_envelope(response_text)
@@ -385,7 +385,7 @@ async def get_conversations(
             "id": conv.id,
             "title": conv.title,
             "created_at": conv.created_at.isoformat(),
-            "updated_at": conv.updated_at.isoformat()
+            "updated_at": conv.updated_at.isoformat() if conv.updated_at else (conv.created_at.isoformat() if conv.created_at else None),
         }
         for conv in conversations
     ]
@@ -393,7 +393,7 @@ async def get_conversations(
 
 @router.get("/conversations/{conversation_id}")
 async def get_conversation(
-    conversation_id: int,
+    conversation_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -406,22 +406,19 @@ async def get_conversation(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    messages = db.query(Message).filter(
-        Message.conversation_id == conversation_id
-    ).order_by(Message.created_at).all()
+    messages = conversation.messages
 
     return {
         "id": conversation.id,
         "title": conversation.title,
         "created_at": conversation.created_at.isoformat(),
-        "updated_at": conversation.updated_at.isoformat(),
+        "updated_at": conversation.updated_at.isoformat() if conversation.updated_at else (conversation.created_at.isoformat() if conversation.created_at else None),
         "messages": [
             {
-                "id": msg.id,
-                "role": msg.role,
-                "content": msg.content,
-                "created_at": msg.created_at.isoformat(),
-                "meta": msg.meta or {}
+                "role": msg.get("role"),
+                "content": msg.get("content"),
+                "images": msg.get("images") or (msg.get("meta") or {}).get("images") if msg.get("role") == "assistant" else None,
+                "meta": msg.get("meta")
             }
             for msg in messages
         ]
@@ -430,7 +427,7 @@ async def get_conversation(
 
 @router.delete("/conversations/{conversation_id}")
 async def delete_conversation(
-    conversation_id: int,
+    conversation_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):

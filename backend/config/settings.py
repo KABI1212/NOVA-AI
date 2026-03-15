@@ -1,5 +1,9 @@
 from pydantic_settings import BaseSettings
+from pathlib import Path
 from typing import List
+
+_BASE_DIR = Path(__file__).resolve().parents[1]
+_ENV_FILE = _BASE_DIR / ".env"
 
 
 class Settings(BaseSettings):
@@ -29,6 +33,8 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     GOOGLE_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
+    DEEPSEEK_API_KEY: str = ""
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     GROQ_API_KEY: str = ""
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_NUM_PREDICT: int = 512
@@ -56,7 +62,7 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
 
     class Config:
-        env_file = ".env"
+        env_file = str(_ENV_FILE)
         case_sensitive = True
 
 

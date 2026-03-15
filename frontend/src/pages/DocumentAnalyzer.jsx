@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useState, useEffect } from 'react';
 import { Upload, FileText, Trash2, Send } from 'lucide-react';
 import toast from 'react-hot-toast';

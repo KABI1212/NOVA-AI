@@ -1,6 +1,6 @@
 """
 ai_service.py - NOVA AI multi-provider service
-Priority order: Google Gemini -> Groq -> Anthropic -> Ollama -> Offline
+Priority order: OpenAI -> DeepSeek -> Google Gemini -> Groq -> Anthropic -> Ollama -> Offline
 Supports both streaming and non-streaming for all methods.
 """
 
@@ -20,16 +20,18 @@ from config.settings import settings
 
 _OFFLINE_TEXT = (
     "NOVA AI is running in offline mode. "
-    "Configure an AI provider (GOOGLE_API_KEY / GROQ_API_KEY / ANTHROPIC_API_KEY) "
+    "Configure an AI provider (OPENAI_API_KEY / DEEPSEEK_API_KEY / "
+    "GOOGLE_API_KEY / GROQ_API_KEY / ANTHROPIC_API_KEY) "
     "or start Ollama (ollama serve)."
 )
 
-_DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+_DEFAULT_GEMINI_MODEL = "gemini-1.5-flash"
+_DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 _DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
-_DEFAULT_ANTHROPIC_MODEL = "claude-3-sonnet-20240229"
-_DEFAULT_OLLAMA_MODEL = "llama2"
+_DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-5"
+_DEFAULT_OLLAMA_MODEL = "llama3"
 
-_FALLBACK_CHAIN = ["google", "groq", "anthropic", "ollama"]
+_FALLBACK_CHAIN = ["openai", "deepseek", "google", "groq", "anthropic", "ollama"]
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +44,10 @@ def _resolve_provider() -> str:
     p = (getattr(settings, "AI_PROVIDER", "") or "").lower()
     if p:
         return p
+    if _openai_api_key():
+        return "openai"
+    if _deepseek_api_key():
+        return "deepseek"
     if _google_api_key():
         return "google"
     if getattr(settings, "GROQ_API_KEY", ""):
@@ -59,9 +65,17 @@ def _google_api_key() -> str:
     )
 
 
+def _openai_api_key() -> str:
+    return getattr(settings, "OPENAI_API_KEY", "") or ""
+
+
+def _deepseek_api_key() -> str:
+    return getattr(settings, "DEEPSEEK_API_KEY", "") or ""
+
+
 def _messages_to_gemini(messages: List[Dict[str, str]]):
     """Convert OpenAI-style messages to Gemini contents + system instruction."""
-    from google.genai import types
+    from google.genai import types # type: ignore
 
     system_parts: List[str] = []
     contents = []
@@ -85,16 +99,22 @@ def _model_for_provider(
     requested_provider: str,
     explicit_model: Optional[str],
 ) -> Optional[str]:
-    if explicit_model:
+    if explicit_model and provider == requested_provider:
         return explicit_model
     if provider == requested_provider:
         model = getattr(settings, "AI_MODEL", "")
         if model:
+            if provider == "openai":
+                return model
+            if provider == "deepseek" and not model.startswith("deepseek-"):
+                return None
             if provider == "google" and not model.startswith("gemini-"):
                 return None
             if provider == "anthropic" and not model.startswith("claude-"):
                 return None
-            if provider == "groq" and model.startswith(("gemini-", "claude-", "gpt-")):
+            if provider == "groq" and model.startswith(
+                ("gemini-", "claude-", "gpt-", "deepseek-")
+            ):
                 return None
             return model
     return None
@@ -110,7 +130,7 @@ async def _stream_google(
     model: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     from google import genai
-    from google.genai import types
+    from google.genai import types # type: ignore
 
     api_key = _google_api_key()
     if not api_key:
@@ -178,11 +198,37 @@ async def _stream_groq(
                     continue
 
 
+async def _stream_deepseek(
+    messages: List[Dict[str, str]],
+    model: Optional[str] = None,
+) -> AsyncGenerator[str, None]:
+    from openai import AsyncOpenAI
+
+    api_key = _deepseek_api_key()
+    if not api_key:
+        raise RuntimeError("Missing DEEPSEEK_API_KEY")
+
+    deepseek_model = model or _DEFAULT_DEEPSEEK_MODEL
+    base_url = getattr(settings, "DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    stream = await client.chat.completions.create(
+        model=deepseek_model,
+        messages=messages,
+        stream=True,
+        temperature=0.7,
+        max_tokens=2048,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield delta
+
+
 async def _stream_anthropic(
     messages: List[Dict[str, str]],
     model: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
-    import anthropic as _anthropic
+    import anthropic as _anthropic # type: ignore
 
     api_key = getattr(settings, "ANTHROPIC_API_KEY", "")
     if not api_key:
@@ -236,7 +282,34 @@ async def _stream_ollama(
                     continue
 
 
+async def _stream_openai(
+    messages: List[Dict[str, str]],
+    model: Optional[str] = None,
+) -> AsyncGenerator[str, None]:
+    from openai import AsyncOpenAI
+
+    api_key = _openai_api_key()
+    if not api_key:
+        raise RuntimeError("Missing OPENAI_API_KEY")
+
+    openai_model = model or getattr(settings, "OPENAI_CHAT_MODEL", "gpt-4-turbo-preview")
+    client = AsyncOpenAI(api_key=api_key)
+    stream = await client.chat.completions.create(
+        model=openai_model,
+        messages=messages,
+        stream=True,
+        temperature=0.7,
+        max_tokens=2048,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield delta
+
+
 _PROVIDER_STREAM_MAP = {
+    "openai": _stream_openai,
+    "deepseek": _stream_deepseek,
     "google": _stream_google,
     "groq": _stream_groq,
     "anthropic": _stream_anthropic,
@@ -257,6 +330,10 @@ async def _stream_with_fallback(
         if fn is None:
             continue
 
+        if p == "openai" and not _openai_api_key():
+            continue
+        if p == "deepseek" and not _deepseek_api_key():
+            continue
         if p == "google" and not _google_api_key():
             continue
         if p == "groq" and not getattr(settings, "GROQ_API_KEY", ""):
@@ -439,7 +516,7 @@ class AIService:
                     "Provide a clear, concise summary highlighting key points and insights."
                 ),
             },
-            {"role": "user", "content": f"Summarize this document:\n\n{text[:8000]}"},
+            {"role": "user", "content": f"Summarize this document:\n\n{str(text)[:8000]}"},
         ]
         return await _complete_non_stream(messages)
 
@@ -454,7 +531,7 @@ class AIService:
             },
             {
                 "role": "user",
-                "content": f"Context:\n{context[:8000]}\n\nQuestion: {question}",
+                "content": f"Context:\n{str(context)[:8000]}\n\nQuestion: {question}",
             },
         ]
         return await _complete_non_stream(messages)
@@ -505,16 +582,38 @@ class AIService:
     async def get_available_providers(self) -> List[Dict]:
         providers = []
 
+        if _openai_api_key():
+            openai_models = [
+                getattr(settings, "OPENAI_CHAT_MODEL", ""),
+                getattr(settings, "OPENAI_CODE_MODEL", ""),
+                getattr(settings, "OPENAI_EXPLAIN_MODEL", ""),
+            ]
+            unique_models = [m for m in dict.fromkeys(openai_models) if m]
+            providers.append({
+                "id": "openai",
+                "name": "OpenAI",
+                "models": unique_models or ["gpt-4-turbo-preview"],
+            })
+
+        if _deepseek_api_key():
+            providers.append({
+                "id": "deepseek",
+                "name": "DeepSeek",
+                "models": [
+                    "deepseek-chat",
+                    "deepseek-coder",
+                    "deepseek-reasoner",
+                ],
+            })
+
         if _google_api_key():
             providers.append({
                 "id": "google",
                 "name": "Gemini (Google)",
                 "models": [
-                    "gemini-2.5-flash",
-                    "gemini-2.5-pro",
-                    "gemini-3-flash-preview",
-                    "gemini-3.1-pro-preview",
-                    "gemini-3.1-flash-lite-preview",
+                    "gemini-1.5-flash",
+                    "gemini-1.5-pro",
+                    "gemini-2.0-flash-exp",
                 ],
             })
 
@@ -535,7 +634,8 @@ class AIService:
                 "id": "anthropic",
                 "name": "Claude",
                 "models": [
-                    "claude-3-opus-20240229",
+                    "claude-opus-4-5",
+                    "claude-sonnet-4-5",
                     "claude-3-sonnet-20240229",
                     "claude-3-haiku-20240307",
                 ],
@@ -570,11 +670,24 @@ def generate_response(message: str) -> str:
     return f"NOVA AI: {cleaned}"
 
 
+async def stream_chat(
+    messages: List[Dict[str, str]],
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> AsyncGenerator[str, None]:
+    """
+    Standalone stream_chat function used by routes/search.py and routes/chat.py.
+    Wraps _stream_with_fallback for backward compatibility.
+    """
+    async for token in _stream_with_fallback(messages, provider, model):
+        yield token
+
+
 def generate_image_url(prompt: str) -> str:
     """Return a self-contained SVG data URL for image previews."""
     from urllib.parse import quote
 
-    safe_prompt = (prompt or "NOVA AI").strip()[:60]
+    safe_prompt = str(prompt or "NOVA AI").strip()[:60]
     svg = (
         "<svg xmlns='http://www.w3.org/2000/svg' width='1024' height='1024'>"
         "<defs>"

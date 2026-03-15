@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Sparkles, Mail, Lock, User } from 'lucide-react';
+import { Mail, Lock, User } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authAPI } from '../services/api';
-import { useAuthStore } from '../utils/store';
+import { useAuthStore, useThemeStore } from '../utils/store';
+import NovaLogo from '../components/common/NovaLogo';
 
 function Signup() {
   const navigate = useNavigate();
   const { setAuth } = useAuthStore();
+  const { isDark } = useThemeStore();
   const [formData, setFormData] = useState({
     email: '',
     username: '',
@@ -43,11 +45,8 @@ function Signup() {
       >
         <div className="text-center mb-8">
           <div className="flex items-center justify-center mb-4">
-            <Sparkles className="w-12 h-12 text-primary-600" />
+            <NovaLogo size={40} textColor={isDark ? '#ffffff' : '#111111'} />
           </div>
-          <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-2">
-            NOVA AI
-          </h1>
           <p className="text-gray-600 dark:text-gray-400">
             Your Intelligent Assistant
           </p>

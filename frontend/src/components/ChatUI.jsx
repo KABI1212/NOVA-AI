@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useEffect, useRef, useState } from 'react'
 import { sendMessage } from '../services/api'
 import MessageBubble from './MessageBubble'

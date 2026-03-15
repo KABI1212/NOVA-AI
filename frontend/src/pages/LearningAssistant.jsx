@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useState, useEffect } from 'react';
 import { BookOpen, Plus, Check } from 'lucide-react';
 import toast from 'react-hot-toast';

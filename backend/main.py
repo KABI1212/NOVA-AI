@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from config.settings import settings
 from config.database import init_db
 from routes import (
@@ -12,7 +14,9 @@ from routes import (
     document_router,
     learning_router,
     voice_router,
-    compat_router
+    compat_router,
+    search_router,
+    share_router,
 )
 
 # Initialize FastAPI app
@@ -22,6 +26,30 @@ app = FastAPI(
     description="AI-powered chatbot platform with code generation, document analysis, and learning assistance",
     redirect_slashes=False
 )
+
+# Paths
+BASE_DIR = Path(__file__).resolve().parent.parent
+FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
+FRONTEND_INDEX = FRONTEND_DIST / "index.html"
+DEV_SERVER_URL = "http://localhost:3000"
+DEV_INDEX_HTML = f"""
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NOVA AI</title>
+    <script type="module" src="{DEV_SERVER_URL}/@vite/client"></script>
+    <script type="module" src="{DEV_SERVER_URL}/src/main.jsx"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+"""
+
+if (FRONTEND_DIST / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
 # Configure CORS
 app.add_middleware(
@@ -47,6 +75,8 @@ app.include_router(document_router)
 app.include_router(learning_router)
 app.include_router(voice_router)
 app.include_router(compat_router)
+app.include_router(search_router, prefix="/api")
+app.include_router(share_router, prefix="/api")
 
 
 @app.on_event("startup")
@@ -58,9 +88,17 @@ async def startup_event():
     print(f"🔒 CORS enabled for: {settings.CORS_ORIGINS}")
 
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 async def root():
-    """Root endpoint"""
+    """Serve the NOVA AI UI"""
+    if FRONTEND_INDEX.exists():
+        return FileResponse(FRONTEND_INDEX, media_type="text/html")
+    return HTMLResponse(content=DEV_INDEX_HTML)
+
+
+@app.get("/api/status")
+async def api_status():
+    """API status endpoint (JSON)"""
     return {
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
@@ -77,6 +115,16 @@ async def health_check():
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION
     }
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def catch_all(full_path: str):
+    """Serve the NOVA AI UI for all non-API routes"""
+    if full_path.startswith("api"):
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
+    if FRONTEND_INDEX.exists():
+        return FileResponse(FRONTEND_INDEX, media_type="text/html")
+    return HTMLResponse(content=DEV_INDEX_HTML)
 
 
 @app.exception_handler(Exception)
