@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Body
+import os
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict
@@ -7,10 +8,14 @@ import json
 from config.database import get_db
 from config.settings import settings
 from models.user import User
-from models.conversation import Conversation, Message
+from models.conversation import Conversation
 from models.document import Document
 from services.ai_service import ai_service
+from services.ai_provider import generate_response, stream_response, PROVIDERS
 from services.vector_service import vector_service
+from services.instant_responses import instant_reply
+from services.conversation_memory import add_message, get_history
+from services.ai_router import generate_answer
 from utils.dependencies import get_current_user, get_current_user_optional
 from ai_engine import build_messages, select_model, response_envelope
 
@@ -68,6 +73,69 @@ async def chat(
                 yield sse_event(response_envelope("Please enter a message.") | {"type": "final"})
             return StreamingResponse(generate_empty(), media_type="text/event-stream")
         return response_envelope("Please enter a message.")
+
+    instant = instant_reply(request.message)
+    if instant:
+        add_message("user", request.message)
+        add_message("assistant", instant)
+        if request.stream:
+            async def generate_instant():
+                yield sse_event({"type": "final", "message": instant, "answer": instant})
+
+            return StreamingResponse(generate_instant(), media_type="text/event-stream")
+        return {"message": instant, "answer": instant}
+
+    provider_key = (request.provider or "").strip().lower()
+    if provider_key in PROVIDERS:
+        add_message("user", request.message)
+        if request.stream:
+            if not request.model:
+                async def generate_missing_model():
+                    yield sse_event(response_envelope("Model is required.") | {"type": "final"})
+
+                return StreamingResponse(generate_missing_model(), media_type="text/event-stream")
+
+            env_key = PROVIDERS[provider_key]["env_key"]
+            if not os.getenv(env_key):
+                async def generate_missing_key():
+                    yield sse_event(response_envelope("Missing API key for provider.") | {"type": "final"})
+
+                return StreamingResponse(generate_missing_key(), media_type="text/event-stream")
+
+            async def generate_provider_stream():
+                full_response = ""
+                try:
+                    async for chunk in stream_response(provider_key, request.model or "", request.message):
+                        full_response += chunk
+                        yield sse_event({"type": "delta", "content": chunk})
+
+                    yield sse_event(response_envelope(full_response) | {"type": "final"})
+                except Exception as exc:
+                    yield sse_event(
+                        response_envelope(fallback_message) | {"type": "final", "error": str(exc)}
+                    )
+
+            return StreamingResponse(generate_provider_stream(), media_type="text/event-stream")
+
+        answer = await generate_response(provider_key, request.model or "", request.message)
+        if isinstance(answer, dict):
+            add_message("assistant", answer.get("response", ""))
+        return answer
+
+    if mode not in {"documents", "image"}:
+        add_message("user", request.message)
+        history = get_history(limit=20)
+        answer = await generate_answer(request.message, history)
+        add_message("assistant", answer)
+        payload = {"message": answer, "answer": answer}
+
+        if request.stream:
+            async def generate_fast():
+                yield sse_event(payload | {"type": "final"})
+
+            return StreamingResponse(generate_fast(), media_type="text/event-stream")
+
+        return payload
 
     if current_user is None:
         if mode == "documents":

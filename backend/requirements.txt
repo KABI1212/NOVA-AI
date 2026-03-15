@@ -23,6 +23,7 @@ httpx>=0.25.2
 
 # ── Web Search ──────────────────────────────────────────────────────────────────
 ddgs
+duckduckgo-search
 beautifulsoup4
 lxml
 

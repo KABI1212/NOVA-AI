@@ -317,6 +317,50 @@ _PROVIDER_STREAM_MAP = {
 }
 
 
+def _provider_ready(provider: str) -> bool:
+    if provider == "openai":
+        return bool(_openai_api_key())
+    if provider == "deepseek":
+        return bool(_deepseek_api_key())
+    if provider == "google":
+        return bool(_google_api_key())
+    if provider == "groq":
+        return bool(getattr(settings, "GROQ_API_KEY", ""))
+    if provider == "anthropic":
+        return bool(getattr(settings, "ANTHROPIC_API_KEY", ""))
+    if provider == "ollama":
+        return True
+    return False
+
+
+async def stream_direct(
+    messages: List[Dict[str, str]],
+    provider: str,
+    model: Optional[str] = None,
+) -> AsyncGenerator[str, None]:
+    """Stream tokens from a specific provider without fallback."""
+    key = (provider or "").lower()
+    fn = _PROVIDER_STREAM_MAP.get(key)
+    if fn is None:
+        raise RuntimeError("Unsupported provider")
+    if not _provider_ready(key):
+        raise RuntimeError(f"Provider not configured: {key}")
+    async for token in fn(messages, model):
+        yield token
+
+
+async def direct_completion(
+    messages: List[Dict[str, str]],
+    provider: str,
+    model: Optional[str] = None,
+) -> str:
+    """Return a full completion from a specific provider without fallback."""
+    tokens: List[str] = []
+    async for token in stream_direct(messages, provider, model):
+        tokens.append(token)
+    return "".join(tokens)
+
+
 async def _stream_with_fallback(
     messages: List[Dict[str, str]],
     provider: Optional[str] = None,

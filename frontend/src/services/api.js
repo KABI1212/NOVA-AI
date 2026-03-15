@@ -53,7 +53,7 @@ export const sendMessage = async (message) => {
       message,
       stream: false,
     });
-    return response.data?.message || response.data?.answer || 'NOVA AI: ...';
+    return response.data?.answer || response.data?.message || response.data?.response || 'NOVA AI: ...';
   } catch (error) {
     return 'NOVA AI encountered an issue but is still running.';
   }

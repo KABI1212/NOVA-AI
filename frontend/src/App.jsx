@@ -4,9 +4,15 @@ import Topbar from "./components/Topbar";
 import ChatWindow from "./components/ChatWindow";
 import FeatureCards from "./components/FeatureCards";
 import ChatInput from "./components/ChatInput";
+import MouseSpark from "./components/MouseSpark";
 
-const API_ENDPOINT = "http://127.0.0.1:8000/api/chat";
-const DEFAULT_MODEL = "gpt-4o-mini";
+const API_BASE = (import.meta.env.VITE_API_URL || "").trim();
+const API_BASE_NORMALIZED = API_BASE.replace(/\/$/, "");
+const API_ENDPOINT = API_BASE_NORMALIZED
+  ? API_BASE_NORMALIZED.endsWith("/api")
+    ? `${API_BASE_NORMALIZED}/chat`
+    : `${API_BASE_NORMALIZED}/api/chat`
+  : "/api/chat";
 
 const createMessage = (role, content) => ({
   id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
@@ -18,18 +24,40 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [activeNav, setActiveNav] = useState("Chat");
-  const [model, setModel] = useState(DEFAULT_MODEL);
-  const [tools, setTools] = useState({
-    search: true,
-    think: false,
-    code: false,
-    research: false,
-    agent: false,
-    memory: false,
-  });
+  const tools = useMemo(
+    () => ({
+      search: true,
+      think: false,
+      code: false,
+      research: false,
+      agent: false,
+    }),
+    []
+  );
   const [input, setInput] = useState("");
   const [status, setStatus] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [hiddenHistoryIds, setHiddenHistoryIds] = useState([]);
+
+  const historyItems = useMemo(() => {
+    const items = messages.filter((msg) => msg.role === "user" && msg.content);
+    return items
+      .slice(-8)
+      .reverse()
+      .map((msg, index) => ({
+        id: msg.id,
+        text: msg.content.length > 48 ? `${msg.content.slice(0, 48)}...` : msg.content,
+      }));
+  }, [messages]);
+
+  const visibleHistoryItems = useMemo(
+    () => historyItems.filter((item) => !hiddenHistoryIds.includes(item.id)),
+    [historyItems, hiddenHistoryIds]
+  );
+
+  const handleDeleteHistory = (id) => {
+    setHiddenHistoryIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  };
 
   const toolPrefix = useMemo(() => {
     const lines = [];
@@ -43,10 +71,6 @@ function App() {
 
   const handleToggleSidebar = () => {
     setIsSidebarCollapsed((prev) => !prev);
-  };
-
-  const handleToggleTool = (tool) => {
-    setTools((prev) => ({ ...prev, [tool]: !prev[tool] }));
   };
 
   const handleNewChat = () => {
@@ -68,19 +92,20 @@ function App() {
       setStatus("Nova AI is thinking...");
 
       const prompt = toolPrefix ? `${toolPrefix}\n${trimmed}` : trimmed;
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 12000);
 
       try {
-        const token = localStorage.getItem("token");
         const response = await fetch(API_ENDPOINT, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
           body: JSON.stringify({
             message: prompt,
             stream: false,
           }),
+          signal: controller.signal,
         });
 
         let data = null;
@@ -95,15 +120,25 @@ function App() {
           const fallback = response.status === 401 || response.status === 403 ? "Please log in to continue." : detail;
           setMessages((prev) => [...prev, createMessage("assistant", fallback)]);
         } else {
-          const reply = data?.message || data?.answer || "NOVA AI: ...";
-          setMessages((prev) => [...prev, createMessage("assistant", reply)]);
+          const reply = data?.answer || data?.message || data?.response || "NOVA AI: ...";
+          setMessages((prev) => [
+            ...prev,
+            {
+              ...createMessage("assistant", reply),
+            },
+          ]);
         }
       } catch (error) {
+        const timeoutMessage =
+          error?.name === "AbortError"
+            ? "NOVA AI took too long to respond. Check that the backend is running and try again."
+            : null;
         setMessages((prev) => [
           ...prev,
-          createMessage("assistant", "NOVA AI encountered an issue but is still running."),
+          createMessage("assistant", timeoutMessage || "NOVA AI encountered an issue but is still running."),
         ]);
       } finally {
+        window.clearTimeout(timeoutId);
         setIsTyping(false);
         setStatus("");
       }
@@ -117,34 +152,33 @@ function App() {
   };
 
   return (
-    <div className="app">
-      <Sidebar
-        collapsed={isSidebarCollapsed}
-        activeNav={activeNav}
-        onNavChange={setActiveNav}
-        onNewChat={handleNewChat}
-      />
-      <main className="chat-container">
-        <Topbar
-          title={activeNav}
-          model={model}
-          onModelChange={setModel}
-          onToggleSidebar={handleToggleSidebar}
-          tools={tools}
-          onToggleTool={handleToggleTool}
+    <>
+      <MouseSpark />
+      <div className="app">
+        <Sidebar
+          collapsed={isSidebarCollapsed}
+          activeNav={activeNav}
+          onNavChange={setActiveNav}
+          onNewChat={handleNewChat}
+          history={visibleHistoryItems}
+          onDeleteHistory={handleDeleteHistory}
         />
-        <ChatWindow messages={messages} isTyping={isTyping} status={status} />
-        <FeatureCards visible={!messages.length} onSelect={handleSuggestion} />
-        <ChatInput
-          value={input}
-          onChange={setInput}
-          onSend={handleSend}
-          disabled={isTyping}
-          tools={tools}
-          onToggleTool={handleToggleTool}
-        />
-      </main>
-    </div>
+        <main className="chat-container">
+          <Topbar
+            title={activeNav}
+            onToggleSidebar={handleToggleSidebar}
+          />
+          <ChatWindow messages={messages} isTyping={isTyping} status={status} />
+          <ChatInput
+            value={input}
+            onChange={setInput}
+            onSend={handleSend}
+            disabled={isTyping}
+          />
+          <FeatureCards visible={!messages.length} onSelect={handleSuggestion} />
+        </main>
+      </div>
+    </>
   );
 }
 
