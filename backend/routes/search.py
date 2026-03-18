@@ -2,7 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
+<<<<<<< HEAD
 from datetime import datetime
+=======
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
 from services.search_service import search_web, fetch_page_content, format_results_for_ai
 from services.ai_service import stream_chat
 from utils.dependencies import get_current_user
@@ -35,7 +38,11 @@ async def search_query(
         results = await search_web(request.query, request.max_results)
 
         # Optionally fetch full content for top result
+<<<<<<< HEAD
         if request.deep and results and results[0].get("url"):
+=======
+        if request.deep and results:
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
             top_url      = results[0]["url"]
             full_content = await fetch_page_content(top_url)
             results[0]["full_content"] = full_content
@@ -63,17 +70,26 @@ async def search_chat(
 
         # Step 2: Build AI prompt with search context
         search_context = format_results_for_ai(results)
+<<<<<<< HEAD
         today = datetime.utcnow().strftime("%B %d, %Y")
 
         system_prompt = (
             "You are NOVA-AI with web search capabilities.\n"
             f"Today's date is {today}.\n"
+=======
+
+        system_prompt = (
+            "You are NOVA-AI with web search capabilities.\n"
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
             "You have access to real-time web search results below.\n\n"
             "Instructions:\n"
             "- Answer using the search results as your primary source\n"
             "- Always cite sources using [1], [2] etc. matching the result numbers\n"
             "- If search results don't contain the answer, say so honestly\n"
+<<<<<<< HEAD
             "- If the user asks about a specific year or range such as 2024 to 2025, prioritize results that match those years exactly\n"
+=======
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
             "- Be concise and accurate\n"
             "- Include the source URLs at the end of your response\n\n"
             + search_context

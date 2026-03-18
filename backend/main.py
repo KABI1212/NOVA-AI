@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 from web_search import enhance_with_real_time_data, RealTimeDataProvider
+=======
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse

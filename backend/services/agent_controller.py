@@ -1,6 +1,10 @@
 from typing import Dict, List
 
+<<<<<<< HEAD
 from backend.services.web_search_gemini import search_web
+=======
+from services.web_search import search_web
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
 from services.news_search import search_news
 from services.multi_model import multi_model_reasoning, verify_answer
 

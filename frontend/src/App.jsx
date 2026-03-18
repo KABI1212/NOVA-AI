@@ -13,8 +13,11 @@ const API_ENDPOINT = API_BASE_NORMALIZED
     ? `${API_BASE_NORMALIZED}/chat`
     : `${API_BASE_NORMALIZED}/api/chat`
   : "/api/chat";
+<<<<<<< HEAD
 const REQUEST_TIMEOUT_MS = 120000;
 const TEMPORAL_QUERY_PATTERN = /\b(current|latest|today|recent|news|breaking|updated|2024|2025|2026)\b/i;
+=======
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
 
 const createMessage = (role, content) => ({
   id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
@@ -91,6 +94,7 @@ function App() {
 
       setMessages((prev) => [...prev, createMessage("user", trimmed)]);
       setIsTyping(true);
+<<<<<<< HEAD
       setStatus(
         TEMPORAL_QUERY_PATTERN.test(trimmed)
           ? "NOVA AI is searching recent information..."
@@ -100,6 +104,13 @@ function App() {
       const prompt = toolPrefix ? `${toolPrefix}\n${trimmed}` : trimmed;
       const controller = new AbortController();
       const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+=======
+      setStatus("Nova AI is thinking...");
+
+      const prompt = toolPrefix ? `${toolPrefix}\n${trimmed}` : trimmed;
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 12000);
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
 
       try {
         const response = await fetch(API_ENDPOINT, {
@@ -137,7 +148,11 @@ function App() {
       } catch (error) {
         const timeoutMessage =
           error?.name === "AbortError"
+<<<<<<< HEAD
             ? "NOVA AI did not finish within 2 minutes. Please try again in a moment."
+=======
+            ? "NOVA AI took too long to respond. Check that the backend is running and try again."
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
             : null;
         setMessages((prev) => [
           ...prev,

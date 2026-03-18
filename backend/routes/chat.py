@@ -4,7 +4,10 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
+<<<<<<< HEAD
 from datetime import datetime
+=======
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
 import json
 from config.database import get_db
 from config.settings import settings
@@ -17,7 +20,10 @@ from services.vector_service import vector_service
 from services.instant_responses import instant_reply
 from services.conversation_memory import add_message, get_history
 from services.ai_router import generate_answer
+<<<<<<< HEAD
 from services.search_service import format_results_for_ai, is_temporal_query, search_web
+=======
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
 from utils.dependencies import get_current_user, get_current_user_optional
 from ai_engine import build_messages, select_model, response_envelope
 
@@ -127,6 +133,7 @@ async def chat(
     if mode not in {"documents", "image"}:
         add_message("user", request.message)
         history = get_history(limit=20)
+<<<<<<< HEAD
         enhanced_message = request.message
 
         if is_temporal_query(request.message):
@@ -142,6 +149,9 @@ async def chat(
             )
 
         answer = await generate_answer(enhanced_message, history)
+=======
+        answer = await generate_answer(request.message, history)
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
         add_message("assistant", answer)
         payload = {"message": answer, "answer": answer}
 
@@ -219,6 +229,10 @@ async def chat(
         conversation = None
 
     if not conversation:
+<<<<<<< HEAD
+=======
+        # Create new conversation if missing or not provided
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
         conversation = Conversation(
             user_id=current_user.id,
             title=request.message[:50] + "..." if len(request.message) > 50 else request.message
@@ -227,10 +241,18 @@ async def chat(
         db.commit()
         db.refresh(conversation)
 
+<<<<<<< HEAD
+=======
+    # Save user message
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
     conversation.messages.append({"role": "user", "content": request.message})
     db.add(conversation)
     db.commit()
 
+<<<<<<< HEAD
+=======
+    # Get conversation history
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
     history = conversation.messages[-MAX_HISTORY_MESSAGES:]
     doc_context = None
     if mode == "documents":
@@ -263,6 +285,10 @@ async def chat(
     default_model = select_model(mode)
     model = requested_model or (default_model if provider == "openai" else None)
 
+<<<<<<< HEAD
+=======
+    # Stream response
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
     if request.stream:
         async def generate():
             try:
@@ -285,6 +311,10 @@ async def chat(
                     full_response += chunk
                     yield sse_event({"type": "delta", "content": chunk})
 
+<<<<<<< HEAD
+=======
+                # Save assistant message after streaming
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
                 conversation.messages.append({"role": "assistant", "content": full_response})
                 db.add(conversation)
                 db.commit()
@@ -305,6 +335,10 @@ async def chat(
             return response_envelope("Here are your images.", images=images)
 
         try:
+<<<<<<< HEAD
+=======
+            # Non-streaming response (use provider-aware stream and aggregate)
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
             response_text = ""
             async for chunk in ai_service.chat_stream(
                 ai_messages,
@@ -313,6 +347,10 @@ async def chat(
             ):
                 response_text += chunk
 
+<<<<<<< HEAD
+=======
+            # Save assistant message
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
             conversation.messages.append({"role": "assistant", "content": response_text})
             db.add(conversation)
             db.commit()
@@ -341,10 +379,18 @@ async def regenerate(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+<<<<<<< HEAD
     user_messages = [m for m in conversation.messages if m.get("role") == "user"]
     if not user_messages:
         raise HTTPException(status_code=400, detail="No user message to regenerate")
 
+=======
+    # Find the last user message from the JSON list
+    user_messages = [m for m in conversation.messages if m.get("role") == "user"]
+    if not user_messages:
+        raise HTTPException(status_code=400, detail="No user message to regenerate")
+    
+>>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
     last_user_message_content = user_messages[-1].get("content", "")
     if not last_user_message_content:
         raise HTTPException(status_code=400, detail="Last user message is empty")
