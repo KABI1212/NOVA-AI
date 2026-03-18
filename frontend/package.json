@@ -1,0 +1,44 @@
+{
+  "name": "nova-ai-frontend",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "NOVA AI - Modern AI Chatbot Platform Frontend",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0"
+  },
+  "dependencies": {
+    "axios": "^1.6.2",
+    "framer-motion": "^10.18.0",
+    "lucide-react": "^0.294.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-hot-toast": "^2.6.0",
+    "react-icons": "^5.6.0",
+    "react-lazy-load-image-component": "^1.6.3",
+    "react-markdown": "^9.1.0",
+    "react-router-dom": "^6.30.3",
+    "react-syntax-highlighter": "^15.6.6",
+    "react-textarea-autosize": "^8.5.3",
+    "rehype-raw": "^7.0.0",
+    "remark-breaks": "^3.0.3",
+    "remark-gfm": "^4.0.1",
+    "zustand": "^4.5.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/typography": "^0.5.19",
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^4.7.0",
+    "autoprefixer": "^10.4.16",
+    "eslint": "^8.55.0",
+    "eslint-plugin-react": "^7.33.2",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.3.6",
+    "vite": "^5.4.21"
+  }
+}
