@@ -1,16 +1,16 @@
 from time import perf_counter
 from typing import Dict, List
 
+from prompts import get_mode_prompt
 from services.answer_evaluator import evaluate_answers, verify_answer
 from services.multi_ai import query_models
 
 SYSTEM_PROMPT = (
-    "You are NOVA AI, an advanced assistant powered by multiple AI systems.\n"
-    "Rules:\n"
-    "- Never say 'knowledge cutoff'.\n"
-    "- Combine knowledge from multiple models.\n"
-    "- Return the most accurate answer.\n"
-    "- Keep answers concise and clear."
+    f"{get_mode_prompt('chat')}\n\n"
+    "Additional orchestration rules:\n"
+    "- Combine useful signals from multiple models when available.\n"
+    "- Return the most accurate final answer.\n"
+    "- Do not mention internal model-selection mechanics."
 )
 
 

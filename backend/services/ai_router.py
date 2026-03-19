@@ -1,8 +1,11 @@
 import asyncio
+import logging
 import os
 from typing import List
 
 from config.settings import settings
+from prompts import get_mode_prompt
+from services.ai_service import ai_service
 
 from services.provider_clients import (
     ask_chatgpt,
@@ -18,15 +21,13 @@ FAST_TIMEOUT_SECONDS = 1.2
 MODEL_TIMEOUT_SECONDS = 8.0
 
 SYSTEM_PROMPT = (
-    "You are NOVA AI, an intelligent assistant.\n"
-    "Rules:\n"
-    "- Respond quickly and clearly.\n"
-    "- Use conversation history when answering.\n"
+    f"{get_mode_prompt('chat')}\n\n"
+    "Additional router rules:\n"
     "- Do not mention model names.\n"
-    "- Do not mention response times.\n"
-    "- Be accurate; avoid guessing. If uncertain, say so.\n"
-    "- Provide concise answers unless the user asks for detail."
+    "- Do not mention response times."
 )
+
+logger = logging.getLogger(__name__)
 
 
 def select_model(message: str) -> str:
@@ -255,59 +256,38 @@ def _merge_answers(primary: str, secondary: str) -> str:
 
 
 async def generate_answer(message: str, history: List[dict]) -> str:
-    prompt = build_prompt(history, message)
-    route = select_model(message)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for item in history or []:
+        role = str(item.get("role", "user")).strip().lower()
+        content = str(item.get("content", "") or "").strip()
+        if role in {"system", "user", "assistant"} and content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": message})
 
-    if route == "gemini":
-        try:
-            return await _call_with_timeout(
-                ask_gemini(prompt, SYSTEM_PROMPT, "gemini-1.5-flash"),
-                timeout=MODEL_TIMEOUT_SECONDS,
-            )
-        except Exception:
-            return await _fallback_fast(prompt)
+    provider = (getattr(settings, "AI_PROVIDER", "") or "").strip().lower() or None
+    model = (getattr(settings, "AI_MODEL", "") or "").strip() or None
 
-    if route == "groq":
-        try:
-            return await _call_with_timeout(
-                ask_groq(prompt, SYSTEM_PROMPT, "llama-3.3-70b-versatile"),
-                timeout=MODEL_TIMEOUT_SECONDS,
-            )
-        except Exception:
-            try:
-                return await _call_with_timeout(
-                    ask_chatgpt(prompt, SYSTEM_PROMPT, "gpt-4o-mini"),
-                    timeout=MODEL_TIMEOUT_SECONDS,
-                )
-            except Exception:
-                return await _fallback_fast(prompt)
+    logger.info(
+        "ai_router.generate_answer provider=%s model=%s history_count=%s message=%s",
+        provider or "<auto>",
+        model or "<default>",
+        len(history or []),
+        " ".join((message or "").split())[:200],
+    )
 
-    if route == "claude_deepseek":
-        tasks = [
-            asyncio.create_task(ask_claude(prompt, SYSTEM_PROMPT, "claude-sonnet-4-5")),
-            asyncio.create_task(ask_deepseek(prompt, SYSTEM_PROMPT, "deepseek-chat")),
-        ]
-        done, pending = await asyncio.wait(tasks, timeout=MODEL_TIMEOUT_SECONDS)
-        for task in pending:
-            task.cancel()
+    response_text = ""
+    async for chunk in ai_service.chat_completion(
+        messages,
+        stream=False,
+        provider=provider,
+        model=model,
+        temperature=float(getattr(settings, "AI_TEMPERATURE", 0.3) or 0.3),
+        max_tokens=int(getattr(settings, "AI_MAX_TOKENS", 2048) or 2048),
+    ):
+        response_text += chunk
 
-        results = []
-        for task in done:
-            if task.cancelled() or task.exception():
-                continue
-            text = (task.result() or "").strip()
-            if text:
-                results.append(text)
+    response_text = response_text.strip()
+    if response_text:
+        return response_text
 
-        if not results:
-            return await _fallback_fast(prompt)
-
-        if len(results) == 1:
-            return results[0]
-
-        return _merge_answers(results[0], results[1])
-
-    if route in {"instant", "race"}:
-        return await _race_short(prompt)
-
-    return await _race_short(prompt)
+    return "I don't know based on the information I have."

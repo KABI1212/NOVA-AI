@@ -100,7 +100,16 @@ function getUserInfo() {
   }
 }
 
-function Sidebar({ collapsed, activeNav, onNavChange, onNewChat, history = [], onDeleteHistory }) {
+function Sidebar({
+  collapsed,
+  activeNav,
+  onNavChange,
+  onNewChat,
+  conversations = [],
+  selectedConversationId = null,
+  onSelectConversation,
+  onDeleteConversation,
+}) {
   const user = getUserInfo();
 
   const handleClick = (item) => {
@@ -158,16 +167,32 @@ function Sidebar({ collapsed, activeNav, onNavChange, onNewChat, history = [], o
           ))}
         </div>
 
-        <div className="sl">Recents</div>
+        <div className="sl">Conversations</div>
         <div className="hst">
-          {history.length ? (
-            history.map((item) => (
-              <div key={item.id} className="hst-item" title={item.text}>
-                <span className="hst-text">{item.text}</span>
+          {conversations.length ? (
+            conversations.map((conversation) => (
+              <div
+                key={conversation.id}
+                className={`hst-item${selectedConversationId === conversation.id ? " active" : ""}`}
+                title={conversation.title}
+              >
+                <button
+                  className="hst-main"
+                  type="button"
+                  onClick={() => {
+                    onNavChange?.("Chat");
+                    onSelectConversation?.(conversation.id);
+                  }}
+                >
+                  <span className="hst-text">{conversation.title}</span>
+                </button>
                 <button
                   className="hst-del"
                   type="button"
-                  onClick={() => onDeleteHistory?.(item.id)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDeleteConversation?.(conversation.id);
+                  }}
                   aria-label="Delete chat"
                 >
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -198,4 +223,3 @@ function Sidebar({ collapsed, activeNav, onNavChange, onNewChat, history = [], o
 }
 
 export default Sidebar;
-

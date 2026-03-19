@@ -1,12 +1,8 @@
 from typing import Dict, List
 
-<<<<<<< HEAD
-from backend.services.web_search_gemini import search_web
-=======
-from services.web_search import search_web
->>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
-from services.news_search import search_news
 from services.multi_model import multi_model_reasoning, verify_answer
+from services.news_search import search_news
+from services.web_search import search_web
 
 SYSTEM_PROMPT = (
     "You are NOVA AI, an advanced research assistant with live internet access.\n\n"
@@ -17,6 +13,7 @@ SYSTEM_PROMPT = (
     "- Assume the current year is 2026 and prioritize the most recent sources.\n"
     "- Always cite sources."
 )
+
 
 def build_context(items: List[Dict]) -> str:
     lines = []
@@ -53,7 +50,7 @@ def format_answer(answer: str, sources: List[str]) -> str:
     if not sources:
         return f"Answer: {cleaned}"
 
-    sources_block = "\n".join([f"{idx + 1}. {link}" for idx, link in enumerate(sources)])
+    sources_block = "\n".join([f"{index + 1}. {link}" for index, link in enumerate(sources)])
     return f"Answer: {cleaned}\n\nSources:\n{sources_block}"
 
 
@@ -64,7 +61,7 @@ async def run_agent(question: str) -> Dict:
             "answer": "Please enter a message.",
             "sources": [],
             "news": [],
-            "badge": "🌐 Live Internet Answer",
+            "badge": "Live Internet Answer",
         }
 
     web_results = search_web(query, max_results=6)
@@ -93,5 +90,5 @@ async def run_agent(question: str) -> Dict:
         "message": formatted,
         "sources": sources,
         "news": news_results,
-        "badge": "🌐 Live Internet Answer",
+        "badge": "Live Internet Answer",
     }

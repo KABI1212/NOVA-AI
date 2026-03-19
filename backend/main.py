@@ -1,37 +1,30 @@
-<<<<<<< HEAD
-from web_search import enhance_with_real_time_data, RealTimeDataProvider
-=======
->>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
+import logging
+from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
-from config.settings import settings
+
 from config.database import init_db
+from config.settings import settings
 from routes import (
     auth_router,
     chat_router,
     code_router,
+    compat_router,
+    document_router,
     explain_router,
     image_router,
-    document_router,
     learning_router,
-    voice_router,
-    compat_router,
     search_router,
     share_router,
+    voice_router,
 )
 
-# Initialize FastAPI app
-app = FastAPI(
-    title=settings.APP_NAME,
-    version=settings.APP_VERSION,
-    description="AI-powered chatbot platform with code generation, document analysis, and learning assistance",
-    redirect_slashes=False
-)
 
-# Paths
+logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
 FRONTEND_INDEX = FRONTEND_DIST / "index.html"
@@ -52,24 +45,52 @@ DEV_INDEX_HTML = f"""
 </html>
 """
 
+
+def _configure_logging() -> None:
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(
+            level=logging.DEBUG if settings.DEBUG else logging.INFO,
+            format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        )
+    else:
+        root_logger.setLevel(logging.DEBUG if settings.DEBUG else logging.INFO)
+
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _configure_logging()
+    logger.info("%s v%s starting", settings.APP_NAME, settings.APP_VERSION)
+    init_db()
+    logger.info("Database connected: %s", settings.DATABASE_URL)
+    logger.info("CORS enabled for: %s", settings.cors_origins_list)
+    yield
+    logger.info("%s shutting down", settings.APP_NAME)
+
+
+app = FastAPI(
+    title=settings.APP_NAME,
+    version=settings.APP_VERSION,
+    description="AI-powered chatbot platform with code generation, document analysis, and learning assistance",
+    redirect_slashes=False,
+    lifespan=lifespan,
+)
+
 if (FRONTEND_DIST / "assets").exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
-# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include routers
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(code_router)
@@ -83,18 +104,9 @@ app.include_router(search_router, prefix="/api")
 app.include_router(share_router, prefix="/api")
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database on startup"""
-    init_db()
-    print(f"✅ {settings.APP_NAME} v{settings.APP_VERSION} started successfully!")
-    print(f"📊 Database connected: {settings.DATABASE_URL.split('@')[-1]}")
-    print(f"🔒 CORS enabled for: {settings.CORS_ORIGINS}")
-
-
 @app.get("/", include_in_schema=False)
 async def root():
-    """Serve the NOVA AI UI"""
+    """Serve the NOVA AI UI."""
     if FRONTEND_INDEX.exists():
         return FileResponse(FRONTEND_INDEX, media_type="text/html")
     return HTMLResponse(content=DEV_INDEX_HTML)
@@ -102,28 +114,28 @@ async def root():
 
 @app.get("/api/status")
 async def api_status():
-    """API status endpoint (JSON)"""
+    """API status endpoint."""
     return {
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
         "status": "running",
-        "message": "Welcome to NOVA AI - Your intelligent assistant platform"
+        "message": "Welcome to NOVA AI - Your intelligent assistant platform",
     }
 
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint."""
     return {
         "status": "healthy",
         "app": settings.APP_NAME,
-        "version": settings.APP_VERSION
+        "version": settings.APP_VERSION,
     }
 
 
 @app.get("/{full_path:path}", include_in_schema=False)
 async def catch_all(full_path: str):
-    """Serve the NOVA AI UI for all non-API routes"""
+    """Serve the NOVA AI UI for all non-API routes."""
     if full_path.startswith("api"):
         return JSONResponse(status_code=404, content={"detail": "Not found"})
     if FRONTEND_INDEX.exists():
@@ -133,13 +145,14 @@ async def catch_all(full_path: str):
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    """Global exception handler"""
+    """Global exception handler."""
+    logger.exception("Unhandled exception for path=%s", request.url.path)
     return JSONResponse(
         status_code=500,
         content={
             "detail": "An internal server error occurred",
-            "error": str(exc) if settings.DEBUG else "Internal server error"
-        }
+            "error": str(exc) if settings.DEBUG else "Internal server error",
+        },
     )
 
 
@@ -150,5 +163,5 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=settings.DEBUG
+        reload=settings.DEBUG,
     )

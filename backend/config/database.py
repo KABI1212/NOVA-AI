@@ -1,28 +1,42 @@
-import os
+from pathlib import Path
+
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.engine import make_url
+from sqlalchemy.orm import declarative_base, sessionmaker
 
-# make sure data folder exists
-os.makedirs("data", exist_ok=True)
+from config.settings import settings
 
-DATABASE_URL = "sqlite:///./data/nova_ai.db"
+DATABASE_URL = settings.DATABASE_URL
+
+
+def _build_connect_args(database_url: str) -> dict:
+    url = make_url(database_url)
+    if not url.drivername.startswith("sqlite"):
+        return {}
+
+    db_path = url.database or ""
+    if db_path and db_path != ":memory:":
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
+    return {"check_same_thread": False}
+
 
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False}
+    connect_args=_build_connect_args(DATABASE_URL),
 )
 
 SessionLocal = sessionmaker(
     autocommit=False,
     autoflush=False,
-    bind=engine
+    bind=engine,
 )
 
-Base = declarative_base()    
+Base = declarative_base()
 
 
 def get_db():
-    """Database dependency for FastAPI"""
+    """Database dependency for FastAPI."""
     db = SessionLocal()
     try:
         yield db
@@ -31,5 +45,5 @@ def get_db():
 
 
 def init_db():
-    """Initialize database tables"""
+    """Initialize database tables."""
     Base.metadata.create_all(bind=engine)

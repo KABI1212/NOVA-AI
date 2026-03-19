@@ -1,34 +1,43 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
-import os
-from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
-from pydantic import BaseModel, ConfigDict
-from typing import List, Optional
-<<<<<<< HEAD
-from datetime import datetime
-=======
->>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
 import json
+import logging
+import os
+import re
+from datetime import datetime
+from typing import List, Optional
+
+from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy.orm import Session
+
+from ai_engine import build_messages, response_envelope, select_model
 from config.database import get_db
 from config.settings import settings
-from models.user import User
 from models.conversation import Conversation
 from models.document import Document
+from models.user import User
+from services.ai_provider import PROVIDERS, generate_response, stream_response
 from services.ai_service import ai_service
-from services.ai_provider import generate_response, stream_response, PROVIDERS
-from services.vector_service import vector_service
-from services.instant_responses import instant_reply
+from services.conversation_store import (
+    append_conversation_message,
+    ensure_conversation_messages,
+    history_from_conversation,
+    save_conversation,
+    serialize_conversation_messages,
+)
 from services.conversation_memory import add_message, get_history
-from services.ai_router import generate_answer
-<<<<<<< HEAD
-from services.search_service import format_results_for_ai, is_temporal_query, search_web
-=======
->>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
+from services.instant_responses import instant_reply
+from services.search_service import fetch_page_content, format_results_for_ai, is_temporal_query, search_web
+from services.vector_service import vector_service
 from utils.dependencies import get_current_user, get_current_user_optional
-from ai_engine import build_messages, select_model, response_envelope
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 MAX_HISTORY_MESSAGES = 12
+logger = logging.getLogger(__name__)
+_SPORTS_QUERY_REWRITES = (
+    (re.compile(r"\bcaptions\b", re.IGNORECASE), "captains"),
+    (re.compile(r"\bcaption\b", re.IGNORECASE), "captain"),
+)
 
 
 class ChatRequest(BaseModel):
@@ -61,211 +70,474 @@ class ConversationResponse(BaseModel):
     updated_at: str
 
 
+def _sse_event(payload: dict) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _payload(
+    message: str,
+    conversation: Optional[Conversation] = None,
+    images: Optional[List[str]] = None,
+) -> dict:
+    payload = {
+        "message": message,
+        "answer": message,
+        "images": images or [],
+    }
+    if conversation is not None:
+        payload["conversation_id"] = conversation.id
+        payload["title"] = conversation.title
+    return payload
+
+
+def _preview_text(text: str) -> str:
+    limit = int(getattr(settings, "AI_LOG_PREVIEW_CHARS", 400) or 400)
+    return " ".join((text or "").split())[:limit]
+
+
+def _resolve_provider_and_model(
+    mode: str,
+    requested_provider: Optional[str],
+    requested_model: Optional[str],
+) -> tuple[str, Optional[str]]:
+    provider = (requested_provider or settings.AI_PROVIDER or "openai").strip().lower()
+    explicit_model = (requested_model or "").strip() or None
+    if explicit_model:
+        return provider, explicit_model
+    if provider == "openai":
+        return provider, select_model(mode)
+    return provider, None
+
+
+def _build_ai_messages(
+    history: List[dict],
+    user_message: str,
+    mode: str,
+    doc_context: Optional[str] = None,
+) -> List[dict]:
+    ai_messages = build_messages([*history, {"role": "user", "content": user_message}], mode)
+    if doc_context:
+        ai_messages.insert(1, {"role": "system", "content": f"Document context:\n{doc_context[:8000]}"})
+    return ai_messages
+
+
+async def _collect_ai_response(
+    ai_messages: List[dict],
+    provider: Optional[str],
+    model: Optional[str],
+) -> str:
+    response_text = ""
+    async for chunk in ai_service.chat_stream(
+        ai_messages,
+        provider=provider,
+        model=model,
+    ):
+        response_text += chunk
+
+    response_text = response_text.strip()
+    if not response_text:
+        raise RuntimeError("AI provider returned an empty response")
+    return response_text
+
+
+def _log_chat_request(
+    mode: str,
+    provider: Optional[str],
+    model: Optional[str],
+    message: str,
+    conversation_id: Optional[str] = None,
+):
+    logger.info(
+        "Chat request mode=%s provider=%s model=%s conversation_id=%s message=%s",
+        mode,
+        provider or "<auto>",
+        model or "<default>",
+        conversation_id or "<none>",
+        _preview_text(message),
+    )
+
+
+def _log_chat_response(
+    mode: str,
+    provider: Optional[str],
+    model: Optional[str],
+    text: str,
+):
+    logger.info(
+        "Chat response mode=%s provider=%s model=%s chars=%s preview=%s",
+        mode,
+        provider or "<auto>",
+        model or "<default>",
+        len(text or ""),
+        _preview_text(text),
+    )
+
+
+def _append_message(
+    db: Session,
+    conversation: Conversation,
+    role: str,
+    content: str,
+    meta: Optional[dict] = None,
+):
+    append_conversation_message(db, conversation, role, content, meta)
+
+
+def _save_conversation(db: Session, conversation: Conversation) -> Conversation:
+    return save_conversation(db, conversation)
+
+
+def _get_or_create_conversation(
+    db: Session,
+    current_user: User,
+    conversation_id: Optional[str],
+    first_message: str,
+) -> Conversation:
+    conversation = None
+    if conversation_id:
+        conversation = db.query(Conversation).filter(
+            Conversation.id == conversation_id,
+            Conversation.user_id == current_user.id,
+        ).first()
+
+    if conversation is None:
+        conversation = Conversation(
+            user_id=current_user.id,
+            title=first_message[:50] + "..." if len(first_message) > 50 else first_message,
+        )
+        db.add(conversation)
+        db.commit()
+        db.refresh(conversation)
+    else:
+        ensure_conversation_messages(db, conversation)
+
+    return conversation
+
+
+def _conversation_history(
+    db: Session,
+    conversation: Conversation,
+    limit: int = MAX_HISTORY_MESSAGES,
+    drop_last: bool = False,
+) -> List[dict]:
+    history = history_from_conversation(db, conversation)
+    if drop_last:
+        history = history[:-1]
+    return history[-limit:] if limit else history
+
+
+async def _maybe_enhance_temporal_message(message: str) -> str:
+    if not is_temporal_query(message):
+        return message
+
+    search_query = " ".join((message or "").split())
+    for pattern, replacement in _SPORTS_QUERY_REWRITES:
+        search_query = pattern.sub(replacement, search_query)
+
+    normalized_query = search_query.lower()
+    if "ipl" in normalized_query:
+        if "captain" in normalized_query:
+            search_query = f"{search_query} current IPL teams and captains"
+        elif "team" in normalized_query:
+            search_query = f"{search_query} current IPL team list"
+
+    search_results = await search_web(search_query, max_results=5)
+    if not search_results:
+        return message
+
+    today = datetime.utcnow().strftime("%B %d, %Y")
+    search_context = format_results_for_ai(search_results)
+    fetched_pages = []
+    for index, result in enumerate(search_results[:2], start=1):
+        url = (result.get("url") or "").strip()
+        if not url:
+            continue
+        page_text = await fetch_page_content(url, max_chars=2000)
+        if not page_text or page_text.startswith("Could not fetch page:"):
+            continue
+        fetched_pages.append(f"[Page {index}] {url}\n{page_text}")
+
+    page_context = "\n\n".join(fetched_pages).strip()
+    if page_context:
+        search_context = f"{search_context}\nPAGE EXCERPTS:\n\n{page_context}"
+
+    return (
+        f"Today's date is {today}.\n"
+        "Use the search results below as the primary source for recent or year-specific facts.\n"
+        "If the user asks about a specific year or range such as 2024 to 2025, prioritize results that match those years exactly.\n\n"
+        f"{search_context}\n"
+        f"User Question: {message}"
+    )
+
+
 @router.post("")
 @router.post("/")
 async def chat(
     request: ChatRequest = Body(default=ChatRequest()),
     current_user: Optional[User] = Depends(get_current_user_optional),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """Send a chat message and get AI response"""
+    """Send a chat message and get AI response."""
     mode = (request.mode or "chat").lower()
+    provider_key = (request.provider or "").strip().lower()
     fallback_message = "NOVA AI encountered an issue but is still running."
 
-    def sse_event(payload: dict) -> str:
-        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
     if not request.message or not request.message.strip():
+        payload = response_envelope("Please enter a message.")
+        payload["type"] = "final"
         if request.stream:
             async def generate_empty():
-                yield sse_event(response_envelope("Please enter a message.") | {"type": "final"})
+                yield _sse_event(payload)
+
             return StreamingResponse(generate_empty(), media_type="text/event-stream")
-        return response_envelope("Please enter a message.")
-
-    instant = instant_reply(request.message)
-    if instant:
-        add_message("user", request.message)
-        add_message("assistant", instant)
-        if request.stream:
-            async def generate_instant():
-                yield sse_event({"type": "final", "message": instant, "answer": instant})
-
-            return StreamingResponse(generate_instant(), media_type="text/event-stream")
-        return {"message": instant, "answer": instant}
-
-    provider_key = (request.provider or "").strip().lower()
-    if provider_key in PROVIDERS:
-        add_message("user", request.message)
-        if request.stream:
-            if not request.model:
-                async def generate_missing_model():
-                    yield sse_event(response_envelope("Model is required.") | {"type": "final"})
-
-                return StreamingResponse(generate_missing_model(), media_type="text/event-stream")
-
-            env_key = PROVIDERS[provider_key]["env_key"]
-            if not os.getenv(env_key):
-                async def generate_missing_key():
-                    yield sse_event(response_envelope("Missing API key for provider.") | {"type": "final"})
-
-                return StreamingResponse(generate_missing_key(), media_type="text/event-stream")
-
-            async def generate_provider_stream():
-                full_response = ""
-                try:
-                    async for chunk in stream_response(provider_key, request.model or "", request.message):
-                        full_response += chunk
-                        yield sse_event({"type": "delta", "content": chunk})
-
-                    yield sse_event(response_envelope(full_response) | {"type": "final"})
-                except Exception as exc:
-                    yield sse_event(
-                        response_envelope(fallback_message) | {"type": "final", "error": str(exc)}
-                    )
-
-            return StreamingResponse(generate_provider_stream(), media_type="text/event-stream")
-
-        answer = await generate_response(provider_key, request.model or "", request.message)
-        if isinstance(answer, dict):
-            add_message("assistant", answer.get("response", ""))
-        return answer
-
-    if mode not in {"documents", "image"}:
-        add_message("user", request.message)
-        history = get_history(limit=20)
-<<<<<<< HEAD
-        enhanced_message = request.message
-
-        if is_temporal_query(request.message):
-            search_results = await search_web(request.message, max_results=5)
-            search_context = format_results_for_ai(search_results)
-            today = datetime.utcnow().strftime("%B %d, %Y")
-            enhanced_message = (
-                f"Today's date is {today}.\n"
-                "Use the search results below as the primary source for recent or year-specific facts.\n"
-                "If the user asks about a specific year or range such as 2024 to 2025, prioritize results that match those years exactly.\n\n"
-                f"{search_context}\n"
-                f"User Question: {request.message}"
-            )
-
-        answer = await generate_answer(enhanced_message, history)
-=======
-        answer = await generate_answer(request.message, history)
->>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
-        add_message("assistant", answer)
-        payload = {"message": answer, "answer": answer}
-
-        if request.stream:
-            async def generate_fast():
-                yield sse_event(payload | {"type": "final"})
-
-            return StreamingResponse(generate_fast(), media_type="text/event-stream")
-
         return payload
 
     if current_user is None:
+        history = get_history(limit=20)
+        instant = instant_reply(request.message)
+        if instant:
+            add_message("user", request.message)
+            add_message("assistant", instant)
+            payload = _payload(instant)
+            if request.stream:
+                async def generate_instant():
+                    yield _sse_event(payload | {"type": "final"})
+
+                return StreamingResponse(generate_instant(), media_type="text/event-stream")
+            return payload
+
+        enhanced_message = request.message
+        if mode not in {"documents", "image"}:
+            enhanced_message = await _maybe_enhance_temporal_message(request.message)
+
+        public_messages = _build_ai_messages(history, enhanced_message, mode)
+        provider, model = _resolve_provider_and_model(mode, request.provider, request.model)
+        _log_chat_request(mode, provider, model, request.message)
+
+        if provider_key in PROVIDERS and mode not in {"documents", "image"}:
+            if request.stream:
+                if not request.model:
+                    async def generate_missing_model():
+                        yield _sse_event(_payload("Model is required.") | {"type": "final"})
+
+                    return StreamingResponse(generate_missing_model(), media_type="text/event-stream")
+
+                env_key = PROVIDERS[provider_key]["env_key"]
+                if not os.getenv(env_key):
+                    async def generate_missing_key():
+                        yield _sse_event(_payload("Missing API key for provider.") | {"type": "final"})
+
+                    return StreamingResponse(generate_missing_key(), media_type="text/event-stream")
+
+                async def generate_provider_stream():
+                    full_response = ""
+                    try:
+                        async for chunk in stream_response(provider_key, request.model or "", public_messages):
+                            full_response += chunk
+                            yield _sse_event({"type": "delta", "content": chunk})
+                        full_response = full_response.strip()
+                        if not full_response:
+                            raise RuntimeError("Provider returned an empty response")
+                        _log_chat_response(mode, provider_key, request.model, full_response)
+                        yield _sse_event(_payload(full_response) | {"type": "final"})
+                    except Exception as exc:
+                        yield _sse_event(_payload(fallback_message) | {"type": "final", "error": str(exc)})
+
+                return StreamingResponse(generate_provider_stream(), media_type="text/event-stream")
+
+            if not request.model:
+                return _payload("Model is required.")
+
+            answer = await generate_response(provider_key, request.model, public_messages)
+            text = (answer.get("response", "") if isinstance(answer, dict) else str(answer)).strip()
+            if text:
+                _log_chat_response(mode, provider_key, request.model, text)
+            return _payload(text or fallback_message)
+
         if mode == "documents":
+            payload = response_envelope("Please log in to use document mode.")
+            payload["type"] = "final"
             if request.stream:
                 async def generate_login_required():
-                    yield sse_event(response_envelope("Please log in to use document mode.") | {"type": "final"})
+                    yield _sse_event(payload)
+
                 return StreamingResponse(generate_login_required(), media_type="text/event-stream")
             return response_envelope("Please log in to use document mode.")
 
-        ai_messages = build_messages([{"role": "user", "content": request.message}], mode)
-        provider = (request.provider or settings.AI_PROVIDER or "openai").lower()
-        requested_model = (request.model or "").strip() or None
-        default_model = select_model(mode)
-        model = requested_model or (default_model if provider == "openai" else None)
+        if mode not in {"documents", "image"}:
+            add_message("user", request.message)
+            try:
+                answer = await _collect_ai_response(public_messages, provider, model)
+            except Exception as exc:
+                logger.warning("Public chat completion failed: %s", exc)
+                answer = fallback_message
+            add_message("assistant", answer)
+            _log_chat_response(mode, provider, model, answer)
+            payload = _payload(answer)
+            if request.stream:
+                async def generate_fast():
+                    yield _sse_event(payload | {"type": "final"})
+
+                return StreamingResponse(generate_fast(), media_type="text/event-stream")
+            return payload
+
+        ai_messages = _build_ai_messages([], request.message, mode)
 
         if request.stream:
             async def generate_public():
                 try:
                     if mode == "image":
-                        yield sse_event({"type": "delta", "content": "Generating image..."})
+                        yield _sse_event({"type": "delta", "content": "Generating image..."})
                         images = await ai_service.generate_image(request.message)
-                        yield sse_event(response_envelope("Here are your images.", images=images) | {"type": "final"})
+                        yield _sse_event(_payload("Here are your images.", images=images) | {"type": "final"})
                         return
 
                     full_response = ""
                     async for chunk in ai_service.chat_stream(
                         ai_messages,
                         provider=provider,
-                        model=model
+                        model=model,
                     ):
                         full_response += chunk
-                        yield sse_event({"type": "delta", "content": chunk})
+                        yield _sse_event({"type": "delta", "content": chunk})
 
-                    yield sse_event(response_envelope(full_response) | {"type": "final"})
+                    full_response = full_response.strip()
+                    if not full_response:
+                        raise RuntimeError("AI provider returned an empty response")
+                    _log_chat_response(mode, provider, model, full_response)
+                    yield _sse_event(_payload(full_response) | {"type": "final"})
                 except Exception as exc:
-                    yield sse_event(
-                        response_envelope(fallback_message) | {"type": "final", "error": str(exc)}
-                    )
+                    yield _sse_event(_payload(fallback_message) | {"type": "final", "error": str(exc)})
 
             return StreamingResponse(generate_public(), media_type="text/event-stream")
 
         if mode == "image":
             images = await ai_service.generate_image(request.message)
-            return response_envelope("Here are your images.", images=images)
+            return _payload("Here are your images.", images=images)
 
         try:
-            response_text = ""
-            async for chunk in ai_service.chat_stream(
-                ai_messages,
-                provider=provider,
-                model=model
-            ):
-                response_text += chunk
-            return response_envelope(response_text)
-        except Exception:
-            return response_envelope(fallback_message)
+            response_text = await _collect_ai_response(ai_messages, provider, model)
+            _log_chat_response(mode, provider, model, response_text)
+            return _payload(response_text)
+        except Exception as exc:
+            logger.warning("Public structured chat completion failed: %s", exc)
+            return _payload(fallback_message)
 
-    # Get or create conversation
-    if request.conversation_id:
-        conversation = db.query(Conversation).filter(
-            Conversation.id == request.conversation_id,
-            Conversation.user_id == current_user.id
-        ).first()
-    else:
-        conversation = None
+    conversation = _get_or_create_conversation(
+        db,
+        current_user,
+        request.conversation_id,
+        request.message,
+    )
+    _append_message(db, conversation, "user", request.message)
+    conversation = _save_conversation(db, conversation)
 
-    if not conversation:
-<<<<<<< HEAD
-=======
-        # Create new conversation if missing or not provided
->>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
-        conversation = Conversation(
-            user_id=current_user.id,
-            title=request.message[:50] + "..." if len(request.message) > 50 else request.message
-        )
-        db.add(conversation)
-        db.commit()
-        db.refresh(conversation)
+    instant = instant_reply(request.message)
+    if instant:
+        _append_message(db, conversation, "assistant", instant)
+        conversation = _save_conversation(db, conversation)
+        _log_chat_response(mode, request.provider, request.model, instant)
+        payload = _payload(instant, conversation)
+        if request.stream:
+            async def generate_instant_auth():
+                yield _sse_event(payload | {"type": "final"})
 
-<<<<<<< HEAD
-=======
-    # Save user message
->>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
-    conversation.messages.append({"role": "user", "content": request.message})
-    db.add(conversation)
-    db.commit()
+            return StreamingResponse(generate_instant_auth(), media_type="text/event-stream")
+        return payload
 
-<<<<<<< HEAD
-=======
-    # Get conversation history
->>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
-    history = conversation.messages[-MAX_HISTORY_MESSAGES:]
+    provider, model = _resolve_provider_and_model(mode, request.provider, request.model)
+    _log_chat_request(mode, provider, model, request.message, conversation.id)
+
+    if provider_key in PROVIDERS and mode not in {"documents", "image"}:
+        history = _conversation_history(db, conversation, drop_last=(mode not in {"documents", "image"}))
+        enhanced_message = request.message
+        if mode not in {"documents", "image"}:
+            enhanced_message = await _maybe_enhance_temporal_message(request.message)
+        provider_messages = _build_ai_messages(history, enhanced_message, mode)
+
+        if request.stream:
+            if not request.model:
+                async def generate_missing_model_auth():
+                    yield _sse_event(_payload("Model is required.", conversation) | {"type": "final"})
+
+                return StreamingResponse(generate_missing_model_auth(), media_type="text/event-stream")
+
+            env_key = PROVIDERS[provider_key]["env_key"]
+            if not os.getenv(env_key):
+                async def generate_missing_key_auth():
+                    yield _sse_event(_payload("Missing API key for provider.", conversation) | {"type": "final"})
+
+                return StreamingResponse(generate_missing_key_auth(), media_type="text/event-stream")
+
+            async def generate_provider_stream_auth():
+                full_response = ""
+                try:
+                    async for chunk in stream_response(provider_key, request.model or "", provider_messages):
+                        full_response += chunk
+                        yield _sse_event({"type": "delta", "content": chunk})
+
+                    full_response = full_response.strip()
+                    if not full_response:
+                        raise RuntimeError("Provider returned an empty response")
+                    _append_message(db, conversation, "assistant", full_response)
+                    saved_conversation = _save_conversation(db, conversation)
+                    _log_chat_response(mode, provider_key, request.model, full_response)
+                    yield _sse_event(_payload(full_response, saved_conversation) | {"type": "final"})
+                except Exception as exc:
+                    yield _sse_event(
+                        _payload(fallback_message, conversation) | {"type": "final", "error": str(exc)}
+                    )
+
+            return StreamingResponse(generate_provider_stream_auth(), media_type="text/event-stream")
+
+        if not request.model:
+            return _payload("Model is required.", conversation)
+
+        answer = await generate_response(provider_key, request.model, provider_messages)
+        text = (answer.get("response", "") if isinstance(answer, dict) else str(answer)).strip()
+        _append_message(db, conversation, "assistant", text or fallback_message)
+        conversation = _save_conversation(db, conversation)
+        if text:
+            _log_chat_response(mode, provider_key, request.model, text)
+        return _payload(text or fallback_message, conversation)
+
+    if mode not in {"documents", "image"}:
+        history = _conversation_history(db, conversation, drop_last=True)
+        try:
+            enhanced_message = await _maybe_enhance_temporal_message(request.message)
+            ai_messages = _build_ai_messages(history, enhanced_message, mode)
+            answer = await _collect_ai_response(ai_messages, provider, model)
+        except Exception as exc:
+            logger.warning("Chat completion failed conversation_id=%s error=%s", conversation.id, exc)
+            answer = fallback_message
+
+        _append_message(db, conversation, "assistant", answer)
+        conversation = _save_conversation(db, conversation)
+        _log_chat_response(mode, provider, model, answer)
+        payload = _payload(answer, conversation)
+
+        if request.stream:
+            async def generate_fast_auth():
+                yield _sse_event(payload | {"type": "final"})
+
+            return StreamingResponse(generate_fast_auth(), media_type="text/event-stream")
+        return payload
+
+    history = _conversation_history(db, conversation)
     doc_context = None
     if mode == "documents":
         if not request.document_id:
+            payload = _payload("Please upload a document first.", conversation)
             if request.stream:
                 async def generate_missing_doc():
-                    yield sse_event(response_envelope("Please upload a document first.") | {"type": "final"})
+                    yield _sse_event(payload | {"type": "final"})
+
                 return StreamingResponse(generate_missing_doc(), media_type="text/event-stream")
-            return response_envelope("Please upload a document first.")
+            return payload
 
         document = db.query(Document).filter(
             Document.id == request.document_id,
-            Document.user_id == current_user.id
+            Document.user_id == current_user.id,
         ).first()
 
         if not document:
@@ -280,139 +552,213 @@ async def chat(
     ai_messages = build_messages(history, mode)
     if doc_context:
         ai_messages.insert(1, {"role": "system", "content": f"Document context:\n{doc_context[:8000]}"})
-    provider = (request.provider or settings.AI_PROVIDER or "openai").lower()
-    requested_model = (request.model or "").strip() or None
-    default_model = select_model(mode)
-    model = requested_model or (default_model if provider == "openai" else None)
 
-<<<<<<< HEAD
-=======
-    # Stream response
->>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
     if request.stream:
         async def generate():
             try:
                 if mode == "image":
-                    yield sse_event({"type": "delta", "content": "Generating image..."})
+                    yield _sse_event({"type": "delta", "content": "Generating image..."})
                     images = await ai_service.generate_image(request.message)
-                    assistant_message_data = {"role": "assistant", "content": "Here are your images.", "meta": {"mode": mode, "images": images}}
-                    conversation.messages.append(assistant_message_data)
-                    db.add(conversation)
-                    db.commit()
-                    yield sse_event(response_envelope("Here are your images.", images=images) | {"type": "final"})
+                    _append_message(
+                        db,
+                        conversation,
+                        "assistant",
+                        "Here are your images.",
+                        meta={"mode": mode, "images": images},
+                    )
+                    saved_conversation = _save_conversation(db, conversation)
+                    _log_chat_response(mode, provider, model, "Here are your images.")
+                    yield _sse_event(
+                        _payload("Here are your images.", saved_conversation, images=images) | {"type": "final"}
+                    )
                     return
 
                 full_response = ""
                 async for chunk in ai_service.chat_stream(
                     ai_messages,
                     provider=provider,
-                    model=model
+                    model=model,
                 ):
                     full_response += chunk
-                    yield sse_event({"type": "delta", "content": chunk})
+                    yield _sse_event({"type": "delta", "content": chunk})
 
-<<<<<<< HEAD
-=======
-                # Save assistant message after streaming
->>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
-                conversation.messages.append({"role": "assistant", "content": full_response})
-                db.add(conversation)
-                db.commit()
-
-                yield sse_event(response_envelope(full_response) | {"type": "final"})
+                full_response = full_response.strip()
+                if not full_response:
+                    raise RuntimeError("AI provider returned an empty response")
+                _append_message(db, conversation, "assistant", full_response)
+                saved_conversation = _save_conversation(db, conversation)
+                _log_chat_response(mode, provider, model, full_response)
+                yield _sse_event(_payload(full_response, saved_conversation) | {"type": "final"})
             except Exception as exc:
-                yield sse_event(
-                    response_envelope(fallback_message) | {"type": "final", "error": str(exc)}
+                yield _sse_event(
+                    _payload(fallback_message, conversation) | {"type": "final", "error": str(exc)}
                 )
 
         return StreamingResponse(generate(), media_type="text/event-stream")
-    else:
-        if mode == "image":
-            images = await ai_service.generate_image(request.message)
-            conversation.messages.append({"role": "assistant", "content": "Here are your images.", "meta": {"mode": mode, "images": images}})
-            db.add(conversation)
-            db.commit()
-            return response_envelope("Here are your images.", images=images)
 
-        try:
-<<<<<<< HEAD
-=======
-            # Non-streaming response (use provider-aware stream and aggregate)
->>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
-            response_text = ""
-            async for chunk in ai_service.chat_stream(
-                ai_messages,
-                provider=provider,
-                model=model
-            ):
-                response_text += chunk
+    if mode == "image":
+        images = await ai_service.generate_image(request.message)
+        _append_message(
+            db,
+            conversation,
+            "assistant",
+            "Here are your images.",
+            meta={"mode": mode, "images": images},
+        )
+        conversation = _save_conversation(db, conversation)
+        _log_chat_response(mode, provider, model, "Here are your images.")
+        return _payload("Here are your images.", conversation, images=images)
 
-<<<<<<< HEAD
-=======
-            # Save assistant message
->>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
-            conversation.messages.append({"role": "assistant", "content": response_text})
-            db.add(conversation)
-            db.commit()
+    try:
+        response_text = await _collect_ai_response(ai_messages, provider, model)
 
-            return response_envelope(response_text)
-        except Exception:
-            return response_envelope(fallback_message)
+        _append_message(db, conversation, "assistant", response_text)
+        conversation = _save_conversation(db, conversation)
+        _log_chat_response(mode, provider, model, response_text)
+        return _payload(response_text, conversation)
+    except Exception as exc:
+        logger.warning("Structured chat completion failed conversation_id=%s error=%s", conversation.id, exc)
+        return _payload(fallback_message, conversation)
 
 
 @router.post("/regenerate")
 async def regenerate(
     request: RegenerateRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """Regenerate the last assistant response in a conversation"""
+    """Regenerate the last assistant response in a conversation."""
     mode = (request.mode or "chat").lower()
+    provider_key = (request.provider or "").strip().lower()
+    fallback_message = "NOVA AI encountered an issue but is still running."
 
-    def sse_event(payload: dict) -> str:
-        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
     conversation = db.query(Conversation).filter(
         Conversation.id == request.conversation_id,
-        Conversation.user_id == current_user.id
+        Conversation.user_id == current_user.id,
     ).first()
 
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-<<<<<<< HEAD
-    user_messages = [m for m in conversation.messages if m.get("role") == "user"]
+    message_records = ensure_conversation_messages(db, conversation)
+    user_messages = [message for message in message_records if message.role == "user"]
     if not user_messages:
         raise HTTPException(status_code=400, detail="No user message to regenerate")
 
-=======
-    # Find the last user message from the JSON list
-    user_messages = [m for m in conversation.messages if m.get("role") == "user"]
-    if not user_messages:
-        raise HTTPException(status_code=400, detail="No user message to regenerate")
-    
->>>>>>> 3520f8c8a820e9822841d33c9bb59a09576e92cf
-    last_user_message_content = user_messages[-1].get("content", "")
+    last_user_message_content = (user_messages[-1].content or "").strip()
     if not last_user_message_content:
         raise HTTPException(status_code=400, detail="Last user message is empty")
 
-    if conversation.messages and conversation.messages[-1].get("role") == "assistant":
-        conversation.messages.pop()
-        db.add(conversation)
-        db.commit()
+    if message_records and message_records[-1].role == "assistant":
+        db.delete(message_records[-1])
+        conversation = _save_conversation(db, conversation)
 
-    history = conversation.messages[-MAX_HISTORY_MESSAGES:]
+    instant = instant_reply(last_user_message_content)
+    if instant:
+        _append_message(db, conversation, "assistant", instant)
+        conversation = _save_conversation(db, conversation)
+        _log_chat_response(mode, request.provider, request.model, instant)
+        payload = _payload(instant, conversation)
+        if request.stream:
+            async def generate_instant():
+                yield _sse_event(payload | {"type": "final"})
+
+            return StreamingResponse(generate_instant(), media_type="text/event-stream")
+        return payload
+
+    provider, model = _resolve_provider_and_model(mode, request.provider, request.model)
+    _log_chat_request(mode, provider, model, last_user_message_content, conversation.id)
+
+    if provider_key in PROVIDERS and mode not in {"documents", "image"}:
+        history = _conversation_history(db, conversation, drop_last=(mode not in {"documents", "image"}))
+        enhanced_message = last_user_message_content
+        if mode not in {"documents", "image"}:
+            enhanced_message = await _maybe_enhance_temporal_message(last_user_message_content)
+        provider_messages = _build_ai_messages(history, enhanced_message, mode)
+
+        if request.stream:
+            if not request.model:
+                async def generate_missing_model():
+                    yield _sse_event(_payload("Model is required.", conversation) | {"type": "final"})
+
+                return StreamingResponse(generate_missing_model(), media_type="text/event-stream")
+
+            env_key = PROVIDERS[provider_key]["env_key"]
+            if not os.getenv(env_key):
+                async def generate_missing_key():
+                    yield _sse_event(_payload("Missing API key for provider.", conversation) | {"type": "final"})
+
+                return StreamingResponse(generate_missing_key(), media_type="text/event-stream")
+
+            async def generate_provider_stream():
+                full_response = ""
+                try:
+                    async for chunk in stream_response(provider_key, request.model or "", provider_messages):
+                        full_response += chunk
+                        yield _sse_event({"type": "delta", "content": chunk})
+
+                    full_response = full_response.strip()
+                    if not full_response:
+                        raise RuntimeError("Provider returned an empty response")
+                    _append_message(db, conversation, "assistant", full_response)
+                    saved_conversation = _save_conversation(db, conversation)
+                    _log_chat_response(mode, provider_key, request.model, full_response)
+                    yield _sse_event(_payload(full_response, saved_conversation) | {"type": "final"})
+                except Exception as exc:
+                    yield _sse_event(
+                        _payload(fallback_message, conversation) | {"type": "final", "error": str(exc)}
+                    )
+
+            return StreamingResponse(generate_provider_stream(), media_type="text/event-stream")
+
+        if not request.model:
+            return _payload("Model is required.", conversation)
+
+        answer = await generate_response(provider_key, request.model, provider_messages)
+        text = (answer.get("response", "") if isinstance(answer, dict) else str(answer)).strip()
+        _append_message(db, conversation, "assistant", text or fallback_message)
+        conversation = _save_conversation(db, conversation)
+        if text:
+            _log_chat_response(mode, provider_key, request.model, text)
+        return _payload(text or fallback_message, conversation)
+
+    if mode not in {"documents", "image"}:
+        history = _conversation_history(db, conversation, drop_last=True)
+        try:
+            enhanced_message = await _maybe_enhance_temporal_message(last_user_message_content)
+            ai_messages = _build_ai_messages(history, enhanced_message, mode)
+            answer = await _collect_ai_response(ai_messages, provider, model)
+        except Exception as exc:
+            logger.warning("Regenerate completion failed conversation_id=%s error=%s", conversation.id, exc)
+            answer = fallback_message
+
+        _append_message(db, conversation, "assistant", answer)
+        conversation = _save_conversation(db, conversation)
+        _log_chat_response(mode, provider, model, answer)
+        payload = _payload(answer, conversation)
+
+        if request.stream:
+            async def generate_fast():
+                yield _sse_event(payload | {"type": "final"})
+
+            return StreamingResponse(generate_fast(), media_type="text/event-stream")
+        return payload
+
+    history = _conversation_history(db, conversation)
     doc_context = None
     if mode == "documents":
         if not request.document_id:
+            payload = _payload("Please upload a document first.", conversation)
             if request.stream:
                 async def generate_missing_doc():
-                    yield sse_event(response_envelope("Please upload a document first.") | {"type": "final"})
+                    yield _sse_event(payload | {"type": "final"})
+
                 return StreamingResponse(generate_missing_doc(), media_type="text/event-stream")
-            return response_envelope("Please upload a document first.")
+            return payload
 
         document = db.query(Document).filter(
             Document.id == request.document_id,
-            Document.user_id == current_user.id
+            Document.user_id == current_user.id,
         ).first()
 
         if not document:
@@ -427,77 +773,88 @@ async def regenerate(
     ai_messages = build_messages(history, mode)
     if doc_context:
         ai_messages.insert(1, {"role": "system", "content": f"Document context:\n{doc_context[:8000]}"})
-    provider = (request.provider or settings.AI_PROVIDER or "openai").lower()
-    requested_model = (request.model or "").strip() or None
-    default_model = select_model(mode)
-    model = requested_model or (default_model if provider == "openai" else None)
 
     if request.stream:
         async def generate():
-            if mode == "image":
-                yield sse_event({"type": "delta", "content": "Generating image..."})
-                images = await ai_service.generate_image(last_user_message_content)
-                assistant_message_data = {"role": "assistant", "content": "Here are your images.", "meta": {"mode": mode, "images": images}}
-                conversation.messages.append(assistant_message_data)
-                db.add(conversation)
-                db.commit()
-                yield sse_event(response_envelope("Here are your images.", images=images) | {"type": "final"})
-                return
+            try:
+                if mode == "image":
+                    yield _sse_event({"type": "delta", "content": "Generating image..."})
+                    images = await ai_service.generate_image(last_user_message_content)
+                    _append_message(
+                        db,
+                        conversation,
+                        "assistant",
+                        "Here are your images.",
+                        meta={"mode": mode, "images": images},
+                    )
+                    saved_conversation = _save_conversation(db, conversation)
+                    _log_chat_response(mode, provider, model, "Here are your images.")
+                    yield _sse_event(
+                        _payload("Here are your images.", saved_conversation, images=images) | {"type": "final"}
+                    )
+                    return
 
-            full_response = ""
-            async for chunk in ai_service.chat_stream(
-                ai_messages,
-                provider=provider,
-                model=model
-            ):
-                full_response += chunk
-                yield sse_event({"type": "delta", "content": chunk})
+                full_response = ""
+                async for chunk in ai_service.chat_stream(
+                    ai_messages,
+                    provider=provider,
+                    model=model,
+                ):
+                    full_response += chunk
+                    yield _sse_event({"type": "delta", "content": chunk})
 
-            assistant_message_data = {"role": "assistant", "content": full_response}
-            conversation.messages.append(assistant_message_data)
-            db.add(conversation)
-            db.commit()
-
-            yield sse_event(response_envelope(full_response) | {"type": "final"})
+                full_response = full_response.strip()
+                if not full_response:
+                    raise RuntimeError("AI provider returned an empty response")
+                _append_message(db, conversation, "assistant", full_response)
+                saved_conversation = _save_conversation(db, conversation)
+                _log_chat_response(mode, provider, model, full_response)
+                yield _sse_event(_payload(full_response, saved_conversation) | {"type": "final"})
+            except Exception as exc:
+                yield _sse_event(
+                    _payload(fallback_message, conversation) | {"type": "final", "error": str(exc)}
+                )
 
         return StreamingResponse(generate(), media_type="text/event-stream")
 
     if mode == "image":
         images = await ai_service.generate_image(last_user_message_content)
-        conversation.messages.append({"role": "assistant", "content": "Here are your images.", "meta": {"mode": mode, "images": images}})
-        db.add(conversation)
-        db.commit()
-        return response_envelope("Here are your images.", images=images)
+        _append_message(
+            db,
+            conversation,
+            "assistant",
+            "Here are your images.",
+            meta={"mode": mode, "images": images},
+        )
+        conversation = _save_conversation(db, conversation)
+        _log_chat_response(mode, provider, model, "Here are your images.")
+        return _payload("Here are your images.", conversation, images=images)
 
-    response_text = ""
-    async for chunk in ai_service.chat_stream(
-        ai_messages,
-        provider=provider,
-        model=model
-    ):
-        response_text += chunk
-
-    conversation.messages.append({"role": "assistant", "content": response_text})
-    db.add(conversation)
-    db.commit()
-
-    return response_envelope(response_text)
+    try:
+        response_text = await _collect_ai_response(ai_messages, provider, model)
+        _append_message(db, conversation, "assistant", response_text)
+        conversation = _save_conversation(db, conversation)
+        _log_chat_response(mode, provider, model, response_text)
+        return _payload(response_text, conversation)
+    except Exception as exc:
+        logger.warning("Regenerate structured completion failed conversation_id=%s error=%s", conversation.id, exc)
+        return _payload(fallback_message, conversation)
 
 
 @router.get("/providers")
 async def get_providers(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    """Return available AI providers and models"""
+    """Return available AI providers and models."""
     return await ai_service.get_available_providers()
 
 
 @router.get("/conversations", response_model=List[ConversationResponse])
 async def get_conversations(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """Get all conversations for current user"""
+    """Get all conversations for current user."""
     conversations = db.query(Conversation).filter(
         Conversation.user_id == current_user.id
     ).order_by(Conversation.updated_at.desc()).all()
@@ -517,33 +874,25 @@ async def get_conversations(
 async def get_conversation(
     conversation_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """Get a specific conversation with messages"""
+    """Get a specific conversation with messages."""
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id,
-        Conversation.user_id == current_user.id
+        Conversation.user_id == current_user.id,
     ).first()
 
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    messages = conversation.messages
+    serialized_messages = serialize_conversation_messages(db, conversation)
 
     return {
         "id": conversation.id,
         "title": conversation.title,
         "created_at": conversation.created_at.isoformat(),
         "updated_at": conversation.updated_at.isoformat() if conversation.updated_at else (conversation.created_at.isoformat() if conversation.created_at else None),
-        "messages": [
-            {
-                "role": msg.get("role"),
-                "content": msg.get("content"),
-                "images": msg.get("images") or (msg.get("meta") or {}).get("images") if msg.get("role") == "assistant" else None,
-                "meta": msg.get("meta")
-            }
-            for msg in messages
-        ]
+        "messages": serialized_messages,
     }
 
 
@@ -551,12 +900,12 @@ async def get_conversation(
 async def delete_conversation(
     conversation_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """Delete a conversation"""
+    """Delete a conversation."""
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id,
-        Conversation.user_id == current_user.id
+        Conversation.user_id == current_user.id,
     ).first()
 
     if not conversation:

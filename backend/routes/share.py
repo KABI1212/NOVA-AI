@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from config.database import get_db
 from models.conversation import Conversation
+from services.conversation_store import conversation_message_count, serialize_conversation_messages
 from utils.dependencies import get_current_user
 from sqlalchemy.orm import Session
 from datetime import datetime
@@ -40,7 +40,7 @@ async def create_share(
     if not convo:
         raise HTTPException(status_code=404, detail="Conversation not found.")
 
-    if not convo.messages:
+    if conversation_message_count(db, convo) == 0:
         raise HTTPException(status_code=400, detail="Cannot share an empty conversation.")
 
     # Generate share ID if not exists
@@ -140,7 +140,7 @@ async def view_shared(
     return {
         "share_id":    convo.share_id,
         "title":       convo.share_title or convo.title,
-        "messages":    convo.messages,
+        "messages":    serialize_conversation_messages(db, convo),
         "model":       convo.model,
         "shared_at":   convo.shared_at,
         "view_count":  convo.view_count,
@@ -167,7 +167,7 @@ async def my_shares(
                 "title":           c.share_title or c.title,
                 "shared_at":       c.shared_at,
                 "view_count":      c.view_count,
-                "message_count":   len(c.messages or []),
+                "message_count":   conversation_message_count(db, c),
             }
             for c in convos
         ]
