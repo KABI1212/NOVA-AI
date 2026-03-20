@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -20,6 +21,15 @@ const API_ENDPOINT = API_BASE_NORMALIZED
   : "/api/chat";
 const REQUEST_TIMEOUT_MS = 120000;
 const TEMPORAL_QUERY_PATTERN = /\b(current|latest|today|recent|news|breaking|updated|2024|2025|2026)\b/i;
+const ACTIVE_NAV_TO_MODE = {
+  Chat: "chat",
+  Search: "search",
+  Code: "code",
+  Customize: "chat",
+  Chats: "chat",
+  Projects: "chat",
+  Artifacts: "chat",
+};
 
 const createMessage = (role, content, conversationId = null, extra = {}) => ({
   id:
@@ -62,6 +72,16 @@ const NAV_TO_INSTRUCTION = {
   Code: ["[Code mode: use markdown code blocks with language labels for all code]"],
 };
 
+const markdownToSpeechText = (value) =>
+  String(value || "")
+    .replace(/```[\s\S]*?```/g, " Code block omitted. ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/[#>*_~|-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
 function Chat() {
   const navigate = useNavigate();
   const logout = useAuthStore((state) => state.logout);
@@ -75,16 +95,109 @@ function Chat() {
   const [isTyping, setIsTyping] = useState(false);
   const [isConversationLoading, setIsConversationLoading] = useState(false);
   const [currentConversationId, setCurrentConversationId] = useState(null);
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [speakingMessageId, setSpeakingMessageId] = useState(null);
 
   const toolPrefix = useMemo(
     () => (NAV_TO_INSTRUCTION[activeNav] || []).join("\n"),
     [activeNav]
   );
+  const resolvedMode = useMemo(() => ACTIVE_NAV_TO_MODE[activeNav] || "chat", [activeNav]);
+  const regeneratableMessageId = useMemo(() => {
+    if (!currentConversationId) {
+      return null;
+    }
+
+    const lastAssistantMessage = [...messages].reverse().find((message) => message.role === "assistant");
+    return lastAssistantMessage?.id || null;
+  }, [currentConversationId, messages]);
 
   const handleUnauthorized = useCallback(() => {
     logout();
     navigate("/login", { replace: true });
   }, [logout, navigate]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    setSpeechSupported(Boolean(window.speechSynthesis));
+
+    return () => {
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  const stopSpeaking = useCallback(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) {
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+    setSpeakingMessageId(null);
+  }, []);
+
+  const speakAssistantMessage = useCallback(
+    (message) => {
+      if (typeof window === "undefined" || !window.speechSynthesis || !message?.content) {
+        return false;
+      }
+
+      const spokenText = markdownToSpeechText(message.content);
+      if (!spokenText) {
+        return false;
+      }
+
+      window.speechSynthesis.cancel();
+
+      const utterance = new SpeechSynthesisUtterance(spokenText);
+      utterance.rate = 1;
+      utterance.pitch = 1;
+
+      const voices = window.speechSynthesis.getVoices?.() || [];
+      const preferredVoice =
+        voices.find((voice) => voice.lang?.toLowerCase().startsWith("en-in")) ||
+        voices.find((voice) => voice.lang?.toLowerCase().startsWith("en")) ||
+        voices[0];
+
+      if (preferredVoice) {
+        utterance.voice = preferredVoice;
+      }
+
+      setSpeakingMessageId(message.id);
+
+      utterance.onend = () => {
+        setSpeakingMessageId((current) => (current === message.id ? null : current));
+      };
+
+      utterance.onerror = () => {
+        setSpeakingMessageId((current) => (current === message.id ? null : current));
+      };
+
+      window.speechSynthesis.speak(utterance);
+      return true;
+    },
+    []
+  );
+
+  const handleSpeak = useCallback(
+    (message) => {
+      if (!message || !speechSupported) {
+        return;
+      }
+
+      if (speakingMessageId === message.id) {
+        stopSpeaking();
+        return;
+      }
+
+      speakAssistantMessage(message);
+    },
+    [speakAssistantMessage, speakingMessageId, speechSupported, stopSpeaking]
+  );
 
   const loadConversations = useCallback(
     async (selectedId = null) => {
@@ -119,6 +232,7 @@ function Chat() {
         return;
       }
 
+      stopSpeaking();
       setIsConversationLoading(true);
       setStatus("Loading conversation...");
 
@@ -143,7 +257,7 @@ function Chat() {
         setStatus("");
       }
     },
-    [handleUnauthorized]
+    [handleUnauthorized, stopSpeaking]
   );
 
   useEffect(() => {
@@ -155,6 +269,7 @@ function Chat() {
   };
 
   const handleNewChat = () => {
+    stopSpeaking();
     setMessages([]);
     setInput("");
     setStatus("");
@@ -177,6 +292,7 @@ function Chat() {
         });
 
         if (conversationId === currentConversationId) {
+          stopSpeaking();
           startTransition(() => {
             setCurrentConversationId(null);
             setMessages([]);
@@ -189,7 +305,7 @@ function Chat() {
         }
       }
     },
-    [currentConversationId, handleUnauthorized]
+    [currentConversationId, handleUnauthorized, stopSpeaking]
   );
 
   const handleSend = useCallback(
@@ -199,6 +315,7 @@ function Chat() {
         return;
       }
 
+      stopSpeaking();
       const optimisticUserMessage = createMessage("user", trimmed, currentConversationId);
       setMessages((previous) => [...previous, optimisticUserMessage]);
       setIsTyping(true);
@@ -223,6 +340,7 @@ function Chat() {
           body: JSON.stringify({
             message: prompt,
             stream: false,
+            mode: resolvedMode,
             conversation_id: currentConversationId,
           }),
           signal: controller.signal,
@@ -282,7 +400,90 @@ function Chat() {
       isConversationLoading,
       isTyping,
       loadConversations,
+      resolvedMode,
+      stopSpeaking,
       toolPrefix,
+    ]
+  );
+
+  const handleRegenerate = useCallback(
+    async (messageId) => {
+      if (
+        !currentConversationId ||
+        !messageId ||
+        messageId !== regeneratableMessageId ||
+        isTyping ||
+        isConversationLoading
+      ) {
+        return;
+      }
+
+      stopSpeaking();
+      setIsTyping(true);
+      setStatus(
+        resolvedMode === "search"
+          ? "NOVA AI is re-checking the latest information..."
+          : "NOVA AI is refining the latest answer..."
+      );
+
+      try {
+        const response = await chatAPI.regenerate({
+          conversation_id: currentConversationId,
+          mode: resolvedMode,
+          stream: false,
+        });
+        const data = response?.data || {};
+        const nextConversationId = data?.conversation_id || currentConversationId;
+        const reply = data?.answer || data?.message || data?.response || "";
+
+        if (nextConversationId) {
+          setCurrentConversationId(nextConversationId);
+        }
+
+        startTransition(() => {
+          setMessages((previous) => {
+            const updated = [...previous];
+            for (let index = updated.length - 1; index >= 0; index -= 1) {
+              if (updated[index]?.role === "assistant") {
+                updated.splice(index, 1);
+                break;
+              }
+            }
+
+            if (reply) {
+              updated.push(createMessage("assistant", reply, nextConversationId));
+            }
+
+            return updated;
+          });
+        });
+
+        await loadConversations(nextConversationId);
+      } catch (error) {
+        if (error?.response?.status === 401 || error?.response?.status === 403) {
+          handleUnauthorized();
+          return;
+        }
+
+        const detail =
+          error?.response?.data?.detail ||
+          error?.response?.data?.message ||
+          "NOVA AI could not regenerate that answer right now.";
+        setMessages((previous) => [...previous, createMessage("assistant", detail, currentConversationId)]);
+      } finally {
+        setIsTyping(false);
+        setStatus("");
+      }
+    },
+    [
+      currentConversationId,
+      handleUnauthorized,
+      isConversationLoading,
+      isTyping,
+      loadConversations,
+      regeneratableMessageId,
+      resolvedMode,
+      stopSpeaking,
     ]
   );
 
@@ -307,7 +508,16 @@ function Chat() {
         />
         <main className="chat-container">
           <Topbar title={activeNav} onToggleSidebar={handleToggleSidebar} />
-          <ChatWindow messages={messages} isTyping={isTyping} status={status} />
+          <ChatWindow
+            messages={messages}
+            isTyping={isTyping}
+            status={status}
+            regeneratableMessageId={regeneratableMessageId}
+            onRegenerate={handleRegenerate}
+            speechSupported={speechSupported}
+            speakingMessageId={speakingMessageId}
+            onSpeak={handleSpeak}
+          />
           <ChatInput
             value={input}
             onChange={setInput}

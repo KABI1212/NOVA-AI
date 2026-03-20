@@ -150,8 +150,7 @@ async def global_exception_handler(request, exc):
     return JSONResponse(
         status_code=500,
         content={
-            "detail": "An internal server error occurred",
-            "error": str(exc) if settings.DEBUG else "Internal server error",
+            "detail": "Something interrupted that request. Please try again.",
         },
     )
 

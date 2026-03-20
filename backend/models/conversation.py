@@ -58,4 +58,4 @@ class ConversationResponse(BaseModel):
         from_attributes = True
 
 
-from models.message import ChatMessage  # noqa: E402,F401
+from models.chat import ChatMessage  # noqa: E402,F401

@@ -4,7 +4,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from models.conversation import Conversation
-from models.message import ChatMessage
+from models.chat import ChatMessage
 
 
 def _message_meta(payload: dict) -> Optional[dict]:

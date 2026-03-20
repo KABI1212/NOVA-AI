@@ -1,6 +1,6 @@
 from .user import User
 from .conversation import Conversation
-from .message import ChatMessage
+from .chat import ChatMessage
 from .document import Document
 from .learning import LearningProgress
 

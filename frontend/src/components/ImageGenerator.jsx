@@ -15,7 +15,7 @@ function ImageGenerator() {
     setError('')
     const url = await generateImage(trimmed)
     if (!url) {
-      setError('NOVA AI encountered an issue but is still running.')
+      setError('Looks like I got stuck for a second. Want me to try again?')
       setLoading(false)
       return
     }

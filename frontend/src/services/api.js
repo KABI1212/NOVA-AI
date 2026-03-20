@@ -55,7 +55,11 @@ export const sendMessage = async (message) => {
     });
     return response.data?.answer || response.data?.message || response.data?.response || 'NOVA AI: ...';
   } catch (error) {
-    return 'NOVA AI encountered an issue but is still running.';
+    return (
+      error?.response?.data?.detail ||
+      error?.response?.data?.message ||
+      'I could not get a reliable answer right now.'
+    );
   }
 };
 

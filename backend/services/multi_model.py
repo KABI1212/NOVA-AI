@@ -44,8 +44,8 @@ async def _call_with_fallback(
             continue
 
     if last_error:
-        return "NOVA AI could not reach any AI provider at the moment."
-    return "NOVA AI could not generate a response."
+        return "Hmm, something interrupted my response. Want me to try that again?"
+    return "I didn't finish that properly. Give me another shot."
 
 
 async def multi_model_reasoning(

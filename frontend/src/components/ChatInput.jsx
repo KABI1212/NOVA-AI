@@ -1,9 +1,22 @@
-﻿import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 function ChatInput({ value, onChange, onSend, disabled }) {
   const [attachedFile, setAttachedFile] = useState(null);
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [heardText, setHeardText] = useState("");
+  const [showVoiceDraft, setShowVoiceDraft] = useState(false);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const valueRef = useRef(value);
+  const attachedFileRef = useRef(attachedFile);
+  const disabledRef = useRef(disabled);
+  const onChangeRef = useRef(onChange);
+  const onSendRef = useRef(onSend);
+  const voiceBaseValueRef = useRef("");
+  const capturedSpeechRef = useRef("");
+  const previewSpeechRef = useRef("");
 
   useEffect(() => {
     if (!textareaRef.current) {
@@ -12,6 +25,26 @@ function ChatInput({ value, onChange, onSend, disabled }) {
     textareaRef.current.style.height = "auto";
     textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 140)}px`;
   }, [value]);
+
+  useEffect(() => {
+    valueRef.current = value;
+  }, [value]);
+
+  useEffect(() => {
+    attachedFileRef.current = attachedFile;
+  }, [attachedFile]);
+
+  useEffect(() => {
+    disabledRef.current = disabled;
+  }, [disabled]);
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
+    onSendRef.current = onSend;
+  }, [onSend]);
 
   const handleFileChange = (event) => {
     const file = event.target.files?.[0];
@@ -28,20 +61,54 @@ function ChatInput({ value, onChange, onSend, disabled }) {
     }
   };
 
-  const handleSend = () => {
-    if (disabled) {
+  const resetVoiceDraft = () => {
+    voiceBaseValueRef.current = "";
+    capturedSpeechRef.current = "";
+    previewSpeechRef.current = "";
+    setHeardText("");
+    setShowVoiceDraft(false);
+  };
+
+  const dispatchMessage = (rawValue) => {
+    if (disabledRef.current) {
       return;
     }
-    const trimmed = value.trim();
-    if (!trimmed && !attachedFile) {
+
+    const trimmed = String(rawValue || "").trim();
+    const currentFile = attachedFileRef.current;
+    if (!trimmed && !currentFile) {
       return;
     }
-    const payload = attachedFile
-      ? `${trimmed}${trimmed ? " + " : ""}[File: ${attachedFile.name}]`
+
+    const payload = currentFile
+      ? `${trimmed}${trimmed ? " + " : ""}[File: ${currentFile.name}]`
       : trimmed;
-    onSend(payload);
+
+    onSendRef.current?.(payload);
+    resetVoiceDraft();
     clearFile();
-    onChange("");
+    onChangeRef.current?.("");
+  };
+
+  const handleSend = () => {
+    dispatchMessage(valueRef.current);
+  };
+
+  const handleVoiceSend = () => {
+    dispatchMessage(valueRef.current);
+  };
+
+  const handleVoiceEdit = () => {
+    textareaRef.current?.focus();
+    const cursorPosition = valueRef.current.length;
+
+    try {
+      textareaRef.current?.setSelectionRange(cursorPosition, cursorPosition);
+    } catch {}
+  };
+
+  const handleInputChange = (event) => {
+    onChange(event.target.value);
   };
 
   const handleKeyDown = (event) => {
@@ -51,10 +118,190 @@ function ChatInput({ value, onChange, onSend, disabled }) {
     }
   };
 
+  useEffect(() => {
+    if (!disabled || !isListening || !recognitionRef.current) {
+      return;
+    }
+
+    try {
+      recognitionRef.current.stop();
+    } catch {}
+  }, [disabled, isListening]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setSpeechSupported(false);
+      return undefined;
+    }
+
+    setSpeechSupported(true);
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-US";
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      setIsListening(true);
+    };
+
+    recognition.onresult = (event) => {
+      let finalChunk = "";
+      let interimChunk = "";
+
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        const transcript = result?.[0]?.transcript?.trim();
+
+        if (!transcript) {
+          continue;
+        }
+
+        if (result.isFinal) {
+          finalChunk = [finalChunk, transcript].filter(Boolean).join(" ").trim();
+        } else {
+          interimChunk = [interimChunk, transcript].filter(Boolean).join(" ").trim();
+        }
+      }
+
+      if (finalChunk) {
+        capturedSpeechRef.current = [capturedSpeechRef.current, finalChunk].filter(Boolean).join(" ").trim();
+      }
+
+      const previewSpoken = [capturedSpeechRef.current, interimChunk].filter(Boolean).join(" ").trim();
+      previewSpeechRef.current = previewSpoken;
+      setHeardText(previewSpoken);
+
+      const nextValue = [voiceBaseValueRef.current, previewSpoken].filter(Boolean).join(" ").trim();
+      onChangeRef.current?.(nextValue);
+    };
+
+    recognition.onerror = () => {
+      previewSpeechRef.current = "";
+      capturedSpeechRef.current = "";
+      setHeardText("");
+      setShowVoiceDraft(false);
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+
+      const finalSpoken = (capturedSpeechRef.current || previewSpeechRef.current).trim();
+      if (!finalSpoken || disabledRef.current) {
+        setHeardText("");
+        setShowVoiceDraft(false);
+        return;
+      }
+
+      capturedSpeechRef.current = finalSpoken;
+      previewSpeechRef.current = finalSpoken;
+      setHeardText(finalSpoken);
+      setShowVoiceDraft(true);
+
+      const nextValue = [voiceBaseValueRef.current, finalSpoken].filter(Boolean).join(" ").trim();
+      onChangeRef.current?.(nextValue);
+
+      window.setTimeout(() => {
+        textareaRef.current?.focus();
+      }, 0);
+    };
+
+    recognitionRef.current = recognition;
+
+    return () => {
+      recognition.onstart = null;
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      try {
+        recognition.stop();
+      } catch {}
+      recognitionRef.current = null;
+    };
+  }, []);
+
+  const handleVoiceToggle = () => {
+    if (!speechSupported || disabled) {
+      return;
+    }
+
+    const recognition = recognitionRef.current;
+    if (!recognition) {
+      return;
+    }
+
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+
+    if (isListening) {
+      recognition.stop();
+      return;
+    }
+
+    try {
+      voiceBaseValueRef.current = valueRef.current.trim();
+      capturedSpeechRef.current = "";
+      previewSpeechRef.current = "";
+      setHeardText("");
+      setShowVoiceDraft(false);
+      recognition.start();
+    } catch {
+      setIsListening(false);
+    }
+  };
+
   const isSendDisabled = disabled || (!value.trim() && !attachedFile);
+  const voiceButtonTitle = speechSupported
+    ? isListening
+      ? "Stop voice input"
+      : "Start voice input"
+    : "Voice input is not supported in this browser";
+  const showVoicePanel = isListening || showVoiceDraft;
 
   return (
     <div className="input-wrap">
+      {showVoicePanel ? (
+        <div className={`voice-capture${isListening ? " live" : ""}`}>
+          <div className="voice-capture-head">
+            <div className="voice-capture-status">
+              <span className="voice-capture-dot" aria-hidden="true" />
+              <span>{isListening ? "Listening..." : "Voice draft ready"}</span>
+            </div>
+            <div className="voice-capture-label">
+              {isListening ? "Speak naturally and I will show it here." : "Edit it below or send it directly."}
+            </div>
+          </div>
+
+          <div className={`voice-capture-text${heardText ? "" : " empty"}`}>
+            {heardText || "Start speaking and your words will appear here."}
+          </div>
+
+          {!isListening ? (
+            <div className="voice-capture-actions">
+              <button className="voice-capture-btn secondary" type="button" onClick={handleVoiceEdit}>
+                Edit
+              </button>
+              <button
+                className="voice-capture-btn primary"
+                type="button"
+                disabled={isSendDisabled}
+                onClick={handleVoiceSend}
+              >
+                OK, Send
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       {attachedFile ? (
         <div className="fp">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -82,7 +329,7 @@ function ChatInput({ value, onChange, onSend, disabled }) {
           placeholder="How can I help you today?"
           rows={1}
           value={value}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={handleInputChange}
           onKeyDown={handleKeyDown}
         />
 
@@ -93,7 +340,13 @@ function ChatInput({ value, onChange, onSend, disabled }) {
               <polyline points="6 9 12 15 18 9" />
             </svg>
           </button>
-          <button className="input-btn ghost" type="button" title="Voice input" disabled>
+          <button
+            className={`input-btn ghost${isListening ? " listening" : ""}`}
+            type="button"
+            title={voiceButtonTitle}
+            onClick={handleVoiceToggle}
+            disabled={!speechSupported || disabled}
+          >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
               <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
@@ -122,4 +375,3 @@ function ChatInput({ value, onChange, onSend, disabled }) {
 }
 
 export default ChatInput;
-

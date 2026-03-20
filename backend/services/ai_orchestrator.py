@@ -53,7 +53,7 @@ async def run_orchestrator(question: str) -> Dict:
     if not valid:
         elapsed = perf_counter() - start
         return {
-            "answer": "NOVA AI could not reach any AI provider right now.",
+            "answer": "Hmm, something interrupted my response. Want me to try that again?",
             "models_used": [],
             "response_time": round(elapsed, 3),
             "badge": "⚡ Multi-AI Answer",
