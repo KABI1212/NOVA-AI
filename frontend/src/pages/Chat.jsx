@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { startTransition, useCallback, useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
 
 import "../index.css";
@@ -9,7 +10,7 @@ import FeatureCards from "../components/FeatureCards";
 import MouseSpark from "../components/MouseSpark";
 import Sidebar from "../components/Sidebar";
 import Topbar from "../components/Topbar";
-import { chatAPI } from "../services/api";
+import { chatAPI, documentAPI } from "../services/api";
 import { useAuthStore } from "../utils/store";
 
 const API_BASE = (import.meta.env.VITE_API_URL || "").trim();
@@ -49,18 +50,58 @@ const normalizeConversation = (conversation) => ({
   updated_at: conversation?.updated_at || null,
 });
 
-const normalizeMessage = (message, conversationId = null) => ({
-  id:
-    message?.id ??
-    (typeof crypto !== "undefined" && crypto.randomUUID
-      ? crypto.randomUUID()
-      : String(Date.now() + Math.random())),
-  role: message?.role || "assistant",
-  content: message?.content || "",
-  conversation_id: message?.conversation_id || conversationId,
-  images: Array.isArray(message?.images) ? message.images : [],
-  meta: message?.meta || null,
-});
+const resolveDocumentContext = (meta) => {
+  const rawId = meta?.document_id;
+  const numericId = Number(rawId);
+  const id = Number.isFinite(numericId) ? numericId : null;
+  const name = typeof meta?.document_name === "string" && meta.document_name.trim()
+    ? meta.document_name.trim()
+    : null;
+
+  return id ? { id, name } : null;
+};
+
+const withDocumentLabel = (content, role, meta) => {
+  if (role !== "user") {
+    return content || "";
+  }
+
+  const documentContext = resolveDocumentContext(meta);
+  if (!documentContext?.name || String(content || "").includes("[File:")) {
+    return content || "";
+  }
+
+  const base = String(content || "").trim();
+  return `${base}${base ? " + " : ""}[File: ${documentContext.name}]`;
+};
+
+const normalizeMessage = (message, conversationId = null) => {
+  const role = message?.role || "assistant";
+  const meta = message?.meta || null;
+
+  return {
+    id:
+      message?.id ??
+      (typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : String(Date.now() + Math.random())),
+    role,
+    content: withDocumentLabel(message?.content || "", role, meta),
+    conversation_id: message?.conversation_id || conversationId,
+    images: Array.isArray(message?.images) ? message.images : [],
+    meta,
+  };
+};
+
+const extractDocumentContextFromMessages = (messageList = []) => {
+  for (let index = messageList.length - 1; index >= 0; index -= 1) {
+    const documentContext = resolveDocumentContext(messageList[index]?.meta);
+    if (documentContext?.id) {
+      return documentContext;
+    }
+  }
+  return null;
+};
 
 const NAV_TO_INSTRUCTION = {
   Chat: [],
@@ -139,6 +180,7 @@ function Chat() {
   const [speakingMessageId, setSpeakingMessageId] = useState(null);
   const [generatePromptImage, setGeneratePromptImage] = useState(false);
   const [generateAnswerImage, setGenerateAnswerImage] = useState(true);
+  const [activeDocumentContext, setActiveDocumentContext] = useState(null);
 
   const toolPrefix = useMemo(
     () => (NAV_TO_INSTRUCTION[activeNav] || []).join("\n"),
@@ -241,6 +283,20 @@ function Chat() {
     [speakAssistantMessage, speakingMessageId, speechSupported, stopSpeaking]
   );
 
+  const uploadDocumentForChat = useCallback(
+    async (file) => {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await documentAPI.upload(formData);
+      return {
+        id: response?.data?.id,
+        name: response?.data?.filename || file?.name || "document",
+      };
+    },
+    []
+  );
+
   const loadConversations = useCallback(
     async (selectedId = null) => {
       try {
@@ -257,6 +313,7 @@ function Chat() {
           startTransition(() => {
             setCurrentConversationId(null);
             setMessages([]);
+            setActiveDocumentContext(null);
           });
         }
       } catch (error) {
@@ -289,6 +346,7 @@ function Chat() {
           setActiveNav("Chat");
           setCurrentConversationId(conversation?.id || conversationId);
           setMessages(loadedMessages);
+          setActiveDocumentContext(extractDocumentContextFromMessages(loadedMessages));
         });
       } catch (error) {
         if (error?.response?.status === 401 || error?.response?.status === 403) {
@@ -316,6 +374,7 @@ function Chat() {
     setInput("");
     setStatus("");
     setCurrentConversationId(null);
+    setActiveDocumentContext(null);
     setActiveNav("Chat");
   };
 
@@ -339,6 +398,7 @@ function Chat() {
             setCurrentConversationId(null);
             setMessages([]);
             setStatus("");
+            setActiveDocumentContext(null);
           });
         }
       } catch (error) {
@@ -351,36 +411,81 @@ function Chat() {
   );
 
   const handleSend = useCallback(
-    async (text) => {
-      const trimmed = text.trim();
+    async (payload) => {
+      const isStructuredPayload = payload && typeof payload === "object" && !Array.isArray(payload);
+      const text = isStructuredPayload ? payload.text : payload;
+      const displayText = isStructuredPayload ? payload.displayText : payload;
+      const attachedFile = isStructuredPayload ? payload.file : null;
+      const trimmed = String(text || "").trim();
+      const displayValue = String(displayText || trimmed).trim();
+
       if (!trimmed || isTyping || isConversationLoading) {
         return;
       }
 
       stopSpeaking();
-      const optimisticUserMessage = createMessage("user", trimmed, currentConversationId, {
+      const optimisticUserMessage = createMessage("user", displayValue || trimmed, currentConversationId, {
         images: [],
         meta: {
           generate_prompt_image: generatePromptImage,
           generate_answer_image: generateAnswerImage,
+          ...(attachedFile?.name ? { document_name: attachedFile.name } : {}),
+          ...(activeDocumentContext?.id && !attachedFile
+            ? {
+                document_id: activeDocumentContext.id,
+                document_name: activeDocumentContext.name,
+              }
+            : {}),
         },
       });
       setMessages((previous) => [...previous, optimisticUserMessage]);
       setIsTyping(true);
-      setStatus(
-        buildProgressStatus({
-          text: trimmed,
-          isSearch: activeNav === "Search",
-          generatePromptImage,
-          generateAnswerImage,
-        })
-      );
+      if (attachedFile?.name) {
+        setStatus(`Reading ${attachedFile.name}...`);
+      } else {
+        setStatus(
+          buildProgressStatus({
+            text: trimmed,
+            isSearch: activeNav === "Search",
+            generatePromptImage,
+            generateAnswerImage,
+          })
+        );
+      }
 
-      const prompt = toolPrefix ? `${toolPrefix}\n${trimmed}` : trimmed;
-      const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      let controller = null;
+      let timeoutId = null;
 
       try {
+        let documentContext = attachedFile ? null : activeDocumentContext;
+
+        if (attachedFile) {
+          const uploadedDocument = await uploadDocumentForChat(attachedFile);
+          if (!uploadedDocument?.id) {
+            throw new Error("Document upload did not return an id.");
+          }
+          documentContext = uploadedDocument;
+          setActiveDocumentContext(uploadedDocument);
+        }
+
+        const requestMode = documentContext?.id ? "documents" : resolvedMode;
+        setStatus(
+          buildProgressStatus({
+            text: trimmed,
+            isSearch: requestMode === "search",
+            generatePromptImage,
+            generateAnswerImage,
+          })
+        );
+
+        const prompt = requestMode === "documents"
+          ? trimmed
+          : toolPrefix
+            ? `${toolPrefix}\n${trimmed}`
+            : trimmed;
+
+        controller = new AbortController();
+        timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
         const token = localStorage.getItem("token");
         const response = await fetch(API_ENDPOINT, {
           method: "POST",
@@ -391,8 +496,9 @@ function Chat() {
           body: JSON.stringify({
             message: prompt,
             stream: false,
-            mode: resolvedMode,
+            mode: requestMode,
             conversation_id: currentConversationId,
+            ...(documentContext?.id ? { document_id: documentContext.id } : {}),
             generate_prompt_image: generatePromptImage,
             generate_answer_image: generateAnswerImage,
           }),
@@ -432,6 +538,15 @@ function Chat() {
                   ...message,
                   conversation_id: nextConversationId,
                   images: promptImages,
+                  meta: {
+                    ...(message.meta || {}),
+                    ...(documentContext?.id
+                      ? {
+                          document_id: documentContext.id,
+                          document_name: documentContext.name,
+                        }
+                      : {}),
+                  },
                 }
               : message
           );
@@ -447,25 +562,45 @@ function Chat() {
           return updated;
         });
 
+        if (documentContext?.id) {
+          setActiveDocumentContext(documentContext);
+        }
+
         await loadConversations(nextConversationId);
       } catch (error) {
+        if (error?.response?.status === 401 || error?.response?.status === 403) {
+          handleUnauthorized();
+          return;
+        }
+
+        const uploadError =
+          error?.response?.data?.detail ||
+          error?.message ||
+          null;
+        if (uploadError && attachedFile) {
+          toast.error(uploadError);
+        }
+
         const timeoutMessage =
           error?.name === "AbortError"
             ? "NOVA AI did not finish within 2 minutes. Please try again in a moment."
-            : "NOVA AI encountered an issue but is still running.";
+            : uploadError || "NOVA AI encountered an issue but is still running.";
 
         setMessages((previous) => [
           ...previous,
           createMessage("assistant", timeoutMessage, currentConversationId),
         ]);
       } finally {
-        window.clearTimeout(timeoutId);
+        if (timeoutId) {
+          window.clearTimeout(timeoutId);
+        }
         setIsTyping(false);
         setStatus("");
       }
     },
     [
       activeNav,
+      activeDocumentContext,
       currentConversationId,
       handleUnauthorized,
       isConversationLoading,
@@ -474,6 +609,7 @@ function Chat() {
       resolvedMode,
       stopSpeaking,
       toolPrefix,
+      uploadDocumentForChat,
       generateAnswerImage,
       generatePromptImage,
     ]
@@ -492,10 +628,12 @@ function Chat() {
       }
 
       stopSpeaking();
+      const documentContext = activeDocumentContext || extractDocumentContextFromMessages(messages);
+      const requestMode = documentContext?.id ? "documents" : resolvedMode;
       setIsTyping(true);
       setStatus(
         buildProgressStatus({
-          isSearch: resolvedMode === "search",
+          isSearch: requestMode === "search",
           generateAnswerImage,
           regenerate: true,
         })
@@ -504,8 +642,9 @@ function Chat() {
       try {
         const response = await chatAPI.regenerate({
           conversation_id: currentConversationId,
-          mode: resolvedMode,
+          mode: requestMode,
           stream: false,
+          ...(documentContext?.id ? { document_id: documentContext.id } : {}),
           generate_answer_image: generateAnswerImage,
         });
         const data = response?.data || {};
@@ -542,6 +681,12 @@ function Chat() {
               updated.push(
                 createMessage("assistant", reply, nextConversationId, {
                   images: answerImages,
+                  meta: documentContext?.id
+                    ? {
+                        document_id: documentContext.id,
+                        document_name: documentContext.name,
+                      }
+                    : null,
                 })
               );
             }
@@ -549,6 +694,10 @@ function Chat() {
             return updated;
           });
         });
+
+        if (documentContext?.id) {
+          setActiveDocumentContext(documentContext);
+        }
 
         await loadConversations(nextConversationId);
       } catch (error) {
@@ -568,11 +717,13 @@ function Chat() {
       }
     },
     [
+      activeDocumentContext,
       currentConversationId,
       handleUnauthorized,
       isConversationLoading,
       isTyping,
       loadConversations,
+      messages,
       regeneratableMessageId,
       resolvedMode,
       stopSpeaking,

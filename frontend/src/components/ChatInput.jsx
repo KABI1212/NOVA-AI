@@ -89,11 +89,16 @@ function ChatInput({
       return;
     }
 
-    const payload = currentFile
+    const displayText = currentFile
       ? `${trimmed}${trimmed ? " + " : ""}[File: ${currentFile.name}]`
       : trimmed;
+    const text = trimmed || (currentFile ? "Summarize this document in simple words." : "");
 
-    onSendRef.current?.(payload);
+    onSendRef.current?.({
+      text,
+      displayText: displayText || text,
+      file: currentFile || null,
+    });
     resetVoiceDraft();
     clearFile();
     onChangeRef.current?.("");
@@ -396,7 +401,7 @@ function ChatInput({
         ref={fileInputRef}
         type="file"
         style={{ display: "none" }}
-        accept="image/*,.pdf,.txt,.csv,.py,.js,.html,.json"
+        accept=".pdf,.txt,.docx,.md,.csv,.json,.py,.js,.jsx,.ts,.tsx,.html,.htm,.css,.xml,.yml,.yaml"
         onChange={handleFileChange}
       />
     </div>

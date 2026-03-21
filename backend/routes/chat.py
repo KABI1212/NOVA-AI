@@ -78,6 +78,7 @@ _SPORTS_QUERY_REWRITES = (
     (re.compile(r"\bcaptions\b", re.IGNORECASE), "captains"),
     (re.compile(r"\bcaption\b", re.IGNORECASE), "captain"),
 )
+_FILE_TAG_PATTERN = re.compile(r"(?:\s*\+\s*)?\[File:\s*([^\]]+)\]\s*", re.IGNORECASE)
 
 
 class ChatRequest(BaseModel):
@@ -199,6 +200,9 @@ def _apply_images_to_message(
     if message is None:
         return
     message.meta = _merge_message_meta(getattr(message, "meta", None), images=images, **extra)
+    db_session = getattr(message, "_db_session", None)
+    if db_session is not None:
+        db_session.add(message)
 
 
 def _message_images(message) -> List[str]:
@@ -828,6 +832,45 @@ def _resolve_answer_image_request(requested: Optional[bool], meta: Optional[dict
     return False
 
 
+def _strip_inline_file_tags(text: str) -> str:
+    return " ".join(_FILE_TAG_PATTERN.sub(" ", text or "").split()).strip()
+
+
+def _normalize_user_message(text: str) -> str:
+    raw_text = (text or "").strip()
+    cleaned_text = _strip_inline_file_tags(raw_text)
+    if cleaned_text:
+        return cleaned_text
+    if _FILE_TAG_PATTERN.search(raw_text):
+        return "Summarize this document."
+    return raw_text
+
+
+def _document_reference_from_meta(meta: Optional[dict]) -> tuple[Optional[int], Optional[str]]:
+    if not isinstance(meta, dict):
+        return None, None
+
+    raw_document_id = meta.get("document_id")
+    try:
+        document_id = int(raw_document_id) if raw_document_id is not None else None
+    except (TypeError, ValueError):
+        document_id = None
+
+    document_name = str(meta.get("document_name") or "").strip() or None
+    return document_id, document_name
+
+
+def _resolve_document_id(requested_document_id: Optional[int], *metas: Optional[dict]) -> Optional[int]:
+    if requested_document_id is not None:
+        return requested_document_id
+
+    for meta in metas:
+        document_id, _ = _document_reference_from_meta(meta)
+        if document_id is not None:
+            return document_id
+    return None
+
+
 def _preview_text(text: str) -> str:
     limit = int(getattr(settings, "AI_LOG_PREVIEW_CHARS", 400) or 400)
     return " ".join((text or "").split())[:limit]
@@ -1153,8 +1196,9 @@ async def chat(
     fallback_message = FALLBACK_MESSAGE
     generate_prompt_image = bool(request.generate_prompt_image)
     generate_answer_image = bool(request.generate_answer_image)
+    message_text = _normalize_user_message(request.message)
 
-    if not request.message or not request.message.strip():
+    if not message_text:
         payload = response_envelope("Please enter a message.")
         payload["type"] = "final"
         if request.stream:
@@ -1166,17 +1210,17 @@ async def chat(
 
     if current_user is None or db is None:
         history = get_history(limit=20)
-        instant = instant_reply(request.message)
+        instant = instant_reply(message_text)
         if instant:
             prompt_images = []
             answer_images = []
             if generate_prompt_image and mode != "image":
-                prompt_images = await _generate_images_best_effort(_build_prompt_image_prompt(request.message))
+                prompt_images = await _generate_images_best_effort(_build_prompt_image_prompt(message_text))
             if generate_answer_image and mode != "image":
                 answer_images = await _generate_images_best_effort(
-                    _build_answer_image_prompt(request.message, instant)
+                    _build_answer_image_prompt(message_text, instant)
                 )
-            add_message("user", request.message)
+            add_message("user", message_text)
             add_message("assistant", instant)
             payload = _payload(instant, prompt_images=prompt_images, answer_images=answer_images)
             if request.stream:
@@ -1193,13 +1237,13 @@ async def chat(
             return payload
 
         force_search = mode == "search"
-        enhanced_message = request.message
+        enhanced_message = message_text
         if mode not in {"documents", "image"}:
-            enhanced_message = await _maybe_enhance_temporal_message(request.message, force_search=force_search)
+            enhanced_message = await _maybe_enhance_temporal_message(message_text, force_search=force_search)
 
         public_messages = _build_ai_messages(history, enhanced_message, mode)
         provider, model = _resolve_provider_and_model(mode, request.provider, request.model)
-        _log_chat_request(mode, provider, model, request.message)
+        _log_chat_request(mode, provider, model, message_text)
 
         if provider_key in PROVIDERS and mode not in {"documents", "image"}:
             if request.stream:
@@ -1216,7 +1260,7 @@ async def chat(
 
                     return StreamingResponse(generate_missing_key(), media_type="text/event-stream")
 
-                prompt_image_task = _start_prompt_image_task(generate_prompt_image, request.message)
+                prompt_image_task = _start_prompt_image_task(generate_prompt_image, message_text)
 
                 async def generate_provider_stream():
                     full_response = ""
@@ -1231,7 +1275,7 @@ async def chat(
                         answer_images = []
                         if generate_answer_image:
                             answer_images = await _generate_images_best_effort(
-                                _build_answer_image_prompt(request.message, full_response)
+                                _build_answer_image_prompt(message_text, full_response)
                             )
                         _log_chat_response(mode, provider_key, request.model, full_response)
                         yield _sse_event(
@@ -1249,7 +1293,7 @@ async def chat(
             if not request.model:
                 return _payload(SETUP_RETRY_MESSAGE)
 
-            prompt_image_task = _start_prompt_image_task(generate_prompt_image, request.message)
+            prompt_image_task = _start_prompt_image_task(generate_prompt_image, message_text)
 
             try:
                 answer = await generate_response(provider_key, request.model, public_messages)
@@ -1258,7 +1302,7 @@ async def chat(
                 answer_images = []
                 if text and generate_answer_image:
                     answer_images = await _generate_images_best_effort(
-                        _build_answer_image_prompt(request.message, text)
+                        _build_answer_image_prompt(message_text, text)
                     )
                 if text:
                     _log_chat_response(mode, provider_key, request.model, text)
@@ -1269,12 +1313,12 @@ async def chat(
                 )
             except Exception as exc:
                 logger.warning("Compatible provider public chat failed provider=%s model=%s error=%s", provider_key, request.model, exc)
-                answer = await _best_effort_answer(history, request.message, mode, None, None, force_search=force_search)
+                answer = await _best_effort_answer(history, message_text, mode, None, None, force_search=force_search)
                 prompt_images = await _await_image_task(prompt_image_task)
                 answer_images = []
                 if answer and generate_answer_image and answer != FALLBACK_MESSAGE:
                     answer_images = await _generate_images_best_effort(
-                        _build_answer_image_prompt(request.message, answer)
+                        _build_answer_image_prompt(message_text, answer)
                     )
                 return _payload(
                     answer,
@@ -1293,11 +1337,11 @@ async def chat(
             return response_envelope("Please log in to use document mode.")
 
         if mode not in {"documents", "image"}:
-            prompt_image_task = _start_prompt_image_task(generate_prompt_image, request.message)
-            add_message("user", request.message)
+            prompt_image_task = _start_prompt_image_task(generate_prompt_image, message_text)
+            add_message("user", message_text)
             answer = await _best_effort_answer(
                 history,
-                request.message,
+                message_text,
                 mode,
                 provider,
                 model,
@@ -1307,7 +1351,7 @@ async def chat(
             answer_images = []
             if answer and generate_answer_image and answer != FALLBACK_MESSAGE:
                 answer_images = await _generate_images_best_effort(
-                    _build_answer_image_prompt(request.message, answer)
+                    _build_answer_image_prompt(message_text, answer)
                 )
             add_message("assistant", answer)
             _log_chat_response(mode, provider, model, answer)
@@ -1329,14 +1373,14 @@ async def chat(
                 return StreamingResponse(generate_fast(), media_type="text/event-stream")
             return payload
 
-        ai_messages = _build_ai_messages([], request.message, mode)
+        ai_messages = _build_ai_messages([], message_text, mode)
 
         if request.stream:
             async def generate_public():
                 try:
                     if mode == "image":
                         yield _sse_event({"type": "delta", "content": "Generating image..."})
-                        images = await ai_service.generate_image(request.message)
+                        images = await ai_service.generate_image(message_text)
                         yield _sse_event(_final_payload("Here are your images.", images=images))
                         return
 
@@ -1360,7 +1404,7 @@ async def chat(
             return StreamingResponse(generate_public(), media_type="text/event-stream")
 
         if mode == "image":
-            images = await ai_service.generate_image(request.message)
+            images = await ai_service.generate_image(message_text)
             return _payload("Here are your images.", images=images)
 
         try:
@@ -1371,29 +1415,56 @@ async def chat(
             logger.warning("Public structured chat completion failed: %s", exc)
             return _payload(fallback_message)
 
+    document = None
+    if mode == "documents":
+        resolved_document_id = _resolve_document_id(request.document_id)
+        if resolved_document_id is None:
+            payload = _payload("Please upload a document first.")
+            if request.stream:
+                async def generate_missing_doc():
+                    yield _sse_event(_final_payload("Please upload a document first."))
+
+                return StreamingResponse(generate_missing_doc(), media_type="text/event-stream")
+            return payload
+
+        document = db.query(Document).filter(
+            Document.id == resolved_document_id,
+            Document.user_id == current_user.id,
+        ).first()
+
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        if not document.is_processed:
+            raise HTTPException(status_code=400, detail="Document is still being processed")
+
     conversation = _get_or_create_conversation(
         db,
         current_user,
         request.conversation_id,
-        request.message,
+        message_text,
     )
     user_message = _append_message(
         db,
         conversation,
         "user",
-        request.message,
-        meta=_image_preferences(generate_prompt_image, generate_answer_image),
+        message_text,
+        meta=_merge_message_meta(
+            _image_preferences(generate_prompt_image, generate_answer_image),
+            document_id=document.id if document else None,
+            document_name=document.filename if document else None,
+        ),
     )
     conversation = _save_conversation(db, conversation)
-    prompt_image_task = _start_prompt_image_task(generate_prompt_image and mode != "image", request.message)
+    prompt_image_task = _start_prompt_image_task(generate_prompt_image and mode != "image", message_text)
 
-    instant = instant_reply(request.message)
+    instant = instant_reply(message_text)
     if instant:
         prompt_images = await _await_image_task(prompt_image_task)
         answer_images = []
         if generate_answer_image and mode != "image":
             answer_images = await _generate_images_best_effort(
-                _build_answer_image_prompt(request.message, instant)
+                _build_answer_image_prompt(message_text, instant)
             )
         _apply_images_to_message(
             user_message,
@@ -1436,13 +1507,13 @@ async def chat(
 
     provider, model = _resolve_provider_and_model(mode, request.provider, request.model)
     force_search = mode == "search"
-    _log_chat_request(mode, provider, model, request.message, conversation.id)
+    _log_chat_request(mode, provider, model, message_text, conversation.id)
 
     if provider_key in PROVIDERS and mode not in {"documents", "image"}:
         history = _conversation_history(db, conversation, drop_last=(mode not in {"documents", "image"}))
-        enhanced_message = request.message
+        enhanced_message = message_text
         if mode not in {"documents", "image"}:
-            enhanced_message = await _maybe_enhance_temporal_message(request.message, force_search=force_search)
+            enhanced_message = await _maybe_enhance_temporal_message(message_text, force_search=force_search)
         provider_messages = _build_ai_messages(
             history,
             enhanced_message,
@@ -1478,7 +1549,7 @@ async def chat(
                     answer_images = []
                     if generate_answer_image:
                         answer_images = await _generate_images_best_effort(
-                            _build_answer_image_prompt(request.message, full_response)
+                            _build_answer_image_prompt(message_text, full_response)
                         )
                     _apply_images_to_message(
                         user_message,
@@ -1522,7 +1593,7 @@ async def chat(
             logger.warning("Compatible provider chat failed provider=%s model=%s error=%s", provider_key, request.model, exc)
             text = await _best_effort_answer(
                 history,
-                request.message,
+                message_text,
                 mode,
                 None,
                 None,
@@ -1534,7 +1605,7 @@ async def chat(
         answer_images = []
         if text and generate_answer_image and text != FALLBACK_MESSAGE:
             answer_images = await _generate_images_best_effort(
-                _build_answer_image_prompt(request.message, text)
+                _build_answer_image_prompt(message_text, text)
             )
         _apply_images_to_message(
             user_message,
@@ -1567,7 +1638,7 @@ async def chat(
         history = _conversation_history(db, conversation, drop_last=True)
         answer = await _best_effort_answer(
             history,
-            request.message,
+            message_text,
             mode,
             provider,
             model,
@@ -1579,7 +1650,7 @@ async def chat(
         answer_images = []
         if answer and generate_answer_image and answer != FALLBACK_MESSAGE:
             answer_images = await _generate_images_best_effort(
-                _build_answer_image_prompt(request.message, answer)
+                _build_answer_image_prompt(message_text, answer)
             )
         _apply_images_to_message(
             user_message,
@@ -1624,27 +1695,7 @@ async def chat(
     history = _conversation_history(db, conversation)
     doc_context = None
     if mode == "documents":
-        if not request.document_id:
-            payload = _payload("Please upload a document first.", conversation)
-            if request.stream:
-                async def generate_missing_doc():
-                    yield _sse_event(_final_payload("Please upload a document first.", conversation))
-
-                return StreamingResponse(generate_missing_doc(), media_type="text/event-stream")
-            return payload
-
-        document = db.query(Document).filter(
-            Document.id == request.document_id,
-            Document.user_id == current_user.id,
-        ).first()
-
-        if not document:
-            raise HTTPException(status_code=404, detail="Document not found")
-
-        if not document.is_processed:
-            raise HTTPException(status_code=400, detail="Document is still being processed")
-
-        search_results = await vector_service.search(request.message, k=3, doc_id=document.id)
+        search_results = await vector_service.search(message_text, k=3, doc_id=document.id)
         doc_context = "\n\n".join([result[0] for result in search_results]) or document.text_content
 
     ai_messages = build_messages(history, mode)
@@ -1657,7 +1708,7 @@ async def chat(
             try:
                 if mode == "image":
                     yield _sse_event({"type": "delta", "content": "Generating image..."})
-                    images = await ai_service.generate_image(request.message)
+                    images = await ai_service.generate_image(message_text)
                     _append_message(
                         db,
                         conversation,
@@ -1686,13 +1737,15 @@ async def chat(
                 answer_images = []
                 if generate_answer_image and mode != "image":
                     answer_images = await _generate_images_best_effort(
-                        _build_answer_image_prompt(request.message, full_response)
+                        _build_answer_image_prompt(message_text, full_response)
                     )
                 _apply_images_to_message(
                     user_message,
                     images=prompt_images,
                     generate_prompt_image=generate_prompt_image,
                     generate_answer_image=generate_answer_image,
+                    document_id=document.id if document else None,
+                    document_name=document.filename if document else None,
                 )
                 _append_message(
                     db,
@@ -1703,6 +1756,8 @@ async def chat(
                         {"mode": mode},
                         images=answer_images,
                         image_origin="answer" if answer_images else None,
+                        document_id=document.id if document else None,
+                        document_name=document.filename if document else None,
                     ),
                 )
                 saved_conversation = _save_conversation(db, conversation)
@@ -1721,7 +1776,7 @@ async def chat(
         return StreamingResponse(generate(), media_type="text/event-stream")
 
     if mode == "image":
-        images = await ai_service.generate_image(request.message)
+        images = await ai_service.generate_image(message_text)
         _append_message(
             db,
             conversation,
@@ -1735,7 +1790,7 @@ async def chat(
 
     response_text = await _best_effort_answer(
         history,
-        request.message,
+        message_text,
         mode,
         provider,
         model,
@@ -1747,13 +1802,15 @@ async def chat(
     answer_images = []
     if response_text and generate_answer_image and mode != "image" and response_text != FALLBACK_MESSAGE:
         answer_images = await _generate_images_best_effort(
-            _build_answer_image_prompt(request.message, response_text)
+            _build_answer_image_prompt(message_text, response_text)
         )
     _apply_images_to_message(
         user_message,
         images=prompt_images,
         generate_prompt_image=generate_prompt_image,
         generate_answer_image=generate_answer_image,
+        document_id=document.id if document else None,
+        document_name=document.filename if document else None,
     )
     _append_message(
         db,
@@ -1764,6 +1821,8 @@ async def chat(
             {"mode": mode},
             images=answer_images,
             image_origin="answer" if answer_images else None,
+            document_id=document.id if document else None,
+            document_name=document.filename if document else None,
         ),
     )
     conversation = _save_conversation(db, conversation)
@@ -1801,12 +1860,16 @@ async def regenerate(
         raise HTTPException(status_code=400, detail="No user message to regenerate")
 
     last_user_message = user_messages[-1]
-    last_user_message_content = (last_user_message.content or "").strip()
+    last_user_message_content = _normalize_user_message(last_user_message.content or "")
     if not last_user_message_content:
         raise HTTPException(status_code=400, detail="Last user message is empty")
+    last_user_message_meta = getattr(last_user_message, "meta", None)
+    last_assistant_meta = None
+    if message_records and message_records[-1].role == "assistant":
+        last_assistant_meta = getattr(message_records[-1], "meta", None)
     generate_answer_image = _resolve_answer_image_request(
         request.generate_answer_image,
-        getattr(last_user_message, "meta", None),
+        last_user_message_meta,
     )
 
     if message_records and message_records[-1].role == "assistant":
@@ -2030,8 +2093,14 @@ async def regenerate(
 
     history = _conversation_history(db, conversation)
     doc_context = None
+    document = None
     if mode == "documents":
-        if not request.document_id:
+        resolved_document_id = _resolve_document_id(
+            request.document_id,
+            last_user_message_meta,
+            last_assistant_meta,
+        )
+        if resolved_document_id is None:
             payload = _payload("Please upload a document first.", conversation)
             if request.stream:
                 async def generate_missing_doc():
@@ -2041,7 +2110,7 @@ async def regenerate(
             return payload
 
         document = db.query(Document).filter(
-            Document.id == request.document_id,
+            Document.id == resolved_document_id,
             Document.user_id == current_user.id,
         ).first()
 
@@ -2095,17 +2164,19 @@ async def regenerate(
                     answer_images = await _generate_images_best_effort(
                         _build_answer_image_prompt(last_user_message_content, full_response)
                     )
-                _append_message(
-                    db,
-                    conversation,
-                    "assistant",
-                    full_response,
-                    meta=_merge_message_meta(
-                        {"mode": mode},
-                        images=answer_images,
-                        image_origin="answer" if answer_images else None,
-                    ),
-                )
+                    _append_message(
+                        db,
+                        conversation,
+                        "assistant",
+                        full_response,
+                        meta=_merge_message_meta(
+                            {"mode": mode},
+                            images=answer_images,
+                            image_origin="answer" if answer_images else None,
+                            document_id=document.id if document else None,
+                            document_name=document.filename if document else None,
+                        ),
+                    )
                 saved_conversation = _save_conversation(db, conversation)
                 _log_chat_response(mode, provider, model, full_response)
                 yield _sse_event(
@@ -2158,6 +2229,8 @@ async def regenerate(
             {"mode": mode},
             images=answer_images,
             image_origin="answer" if answer_images else None,
+            document_id=document.id if document else None,
+            document_name=document.filename if document else None,
         ),
     )
     conversation = _save_conversation(db, conversation)

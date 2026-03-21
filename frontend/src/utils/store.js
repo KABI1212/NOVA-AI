@@ -14,6 +14,10 @@ export const useAuthStore = create((set) => ({
     localStorage.removeItem('token');
     set({ user: null, token: null });
   },
+  setUser: (user) => {
+    localStorage.setItem('user', JSON.stringify(user));
+    set((state) => ({ ...state, user }));
+  },
 }));
 
 // Chat Store

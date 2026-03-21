@@ -88,7 +88,7 @@ function DocumentAnalyzer() {
             {uploading ? 'Uploading...' : 'Upload Document'}
             <input
               type="file"
-              accept=".pdf,.txt"
+              accept=".pdf,.txt,.docx,.md,.csv,.json,.py,.js,.jsx,.ts,.tsx,.html,.htm,.css,.xml,.yml,.yaml"
               onChange={handleUpload}
               className="hidden"
               disabled={uploading}

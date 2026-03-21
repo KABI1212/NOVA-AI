@@ -1,3 +1,5 @@
+import logging
+import re
 from typing import List, Tuple
 import math
 
@@ -21,9 +23,13 @@ class VectorService:
         self.index = faiss.IndexFlatL2(self.dimension) if HAS_FAISS else None
         self.documents = []  # Store document chunks
         self.embeddings = []  # Fallback storage when FAISS is unavailable
+        self.embeddings_enabled = bool((settings.OPENAI_API_KEY or "").strip())
+        self.logger = logging.getLogger(__name__)
 
     async def get_embedding(self, text: str) -> List[float]:
         """Get embedding vector for text using OpenAI"""
+        if not self.embeddings_enabled:
+            raise RuntimeError("Embeddings are disabled because no OpenAI API key is configured.")
         try:
             response = await self.client.embeddings.create(
                 input=text,
@@ -31,7 +37,8 @@ class VectorService:
             )
             return response.data[0].embedding
         except Exception as e:
-            raise Exception(f"Error getting embedding: {str(e)}")
+            self.embeddings_enabled = False
+            raise RuntimeError(f"Error getting embedding: {str(e)}")
 
     def chunk_text(self, text: str, chunk_size: int = 500) -> List[str]:
         """Split text into chunks for embedding"""
@@ -49,20 +56,68 @@ class VectorService:
         chunks = self.chunk_text(text)
 
         for chunk in chunks:
-            embedding = await self.get_embedding(chunk)
-            if HAS_FAISS:
-                embedding_array = np.array([embedding], dtype=np.float32)
-                self.index.add(embedding_array)
-            else:
-                self.embeddings.append(embedding)
+            if self.embeddings_enabled:
+                try:
+                    embedding = await self.get_embedding(chunk)
+                    if HAS_FAISS:
+                        embedding_array = np.array([embedding], dtype=np.float32)
+                        self.index.add(embedding_array)
+                    else:
+                        self.embeddings.append(embedding)
+                except Exception as exc:
+                    self.logger.warning(
+                        "vector_add_embedding_failed doc_id=%s error=%s; falling back to lexical retrieval",
+                        doc_id,
+                        exc,
+                    )
+
             self.documents.append({
                 "doc_id": doc_id,
                 "text": chunk
             })
 
+    def _tokenize(self, text: str) -> set[str]:
+        return set(re.findall(r"[A-Za-z0-9_]+", (text or "").lower()))
+
+    def _lexical_search(self, query: str, k: int = 5, doc_id: int = None) -> List[Tuple[str, float]]:
+        query_tokens = self._tokenize(query)
+        scored: List[Tuple[str, float]] = []
+
+        for document in self.documents:
+            if doc_id is not None and document["doc_id"] != doc_id:
+                continue
+
+            text = document["text"]
+            document_tokens = self._tokenize(text)
+            if not document_tokens:
+                continue
+
+            overlap = len(query_tokens & document_tokens)
+            if overlap == 0:
+                continue
+
+            score = overlap / max(len(query_tokens), 1)
+            scored.append((text, float(score)))
+
+        scored.sort(key=lambda item: item[1], reverse=True)
+        return scored[:k]
+
     async def search(self, query: str, k: int = 5, doc_id: int = None) -> List[Tuple[str, float]]:
         """Search for similar documents"""
-        query_embedding = await self.get_embedding(query)
+        if not self.documents:
+            return []
+
+        if not self.embeddings_enabled:
+            return self._lexical_search(query, k=k, doc_id=doc_id)
+
+        try:
+            query_embedding = await self.get_embedding(query)
+        except Exception as exc:
+            self.logger.warning(
+                "vector_query_embedding_failed error=%s; using lexical retrieval fallback",
+                exc,
+            )
+            return self._lexical_search(query, k=k, doc_id=doc_id)
         results: List[Tuple[str, float]] = []
 
         if HAS_FAISS:

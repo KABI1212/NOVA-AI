@@ -13,6 +13,25 @@ from utils.dependencies import get_current_user
 from config.settings import settings
 
 router = APIRouter(prefix="/api/document", tags=["Document Analyzer"])
+SUPPORTED_DOCUMENT_EXTENSIONS = {
+    ".pdf",
+    ".txt",
+    ".docx",
+    ".md",
+    ".csv",
+    ".json",
+    ".py",
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx",
+    ".html",
+    ".htm",
+    ".css",
+    ".xml",
+    ".yml",
+    ".yaml",
+}
 
 
 class DocumentResponse(BaseModel):
@@ -40,10 +59,10 @@ async def upload_document(
 
     # Validate file type
     file_ext = os.path.splitext(file.filename)[1].lower()
-    if file_ext not in ['.pdf', '.txt', '.docx']:
+    if file_ext not in SUPPORTED_DOCUMENT_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail="Only PDF, TXT, and DOCX files are supported"
+            detail="Supported files: PDF, DOCX, TXT, Markdown, CSV, JSON, HTML, XML, YAML, and common code files"
         )
 
     # Validate file size
@@ -180,7 +199,7 @@ async def ask_question(
         raise HTTPException(status_code=400, detail="Document is still being processed")
 
     # Use vector search to find relevant context
-    search_results = await vector_service.search(request.question, k=3)
+    search_results = await vector_service.search(request.question, k=3, doc_id=document.id)
 
     # Combine relevant chunks
     context = "\n\n".join([result[0] for result in search_results])

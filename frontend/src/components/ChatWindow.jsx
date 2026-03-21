@@ -49,6 +49,51 @@ async function shareMessage(value) {
   return false;
 }
 
+function MarkdownCodeBlock({ className, children, ...props }) {
+  const [copied, setCopied] = useState(false);
+  const code = String(children || "").replace(/\n$/, "");
+
+  useEffect(() => {
+    if (!copied) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => setCopied(false), 1600);
+    return () => window.clearTimeout(timeoutId);
+  }, [copied]);
+
+  const handleCopy = async () => {
+    try {
+      await copyToClipboard(code);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="code-block-wrap">
+      <button
+        type="button"
+        className={`code-copy-btn${copied ? " copied" : ""}`}
+        onClick={handleCopy}
+        aria-label={copied ? "Code copied" : "Copy code"}
+        title={copied ? "Copied" : "Copy code"}
+      >
+        <Icon>
+          <rect x="9" y="9" width="11" height="11" rx="2" />
+          <path d="M5 15V6a2 2 0 0 1 2-2h9" />
+        </Icon>
+      </button>
+      <pre className="code-block">
+        <code className={className} {...props}>
+          {code}
+        </code>
+      </pre>
+    </div>
+  );
+}
+
 function Icon({ children }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
@@ -227,7 +272,7 @@ function ChatWindow({
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm, remarkBreaks]}
                         components={{
-                          code({ inline, children, ...props }) {
+                          code({ inline, className, children, ...props }) {
                             if (inline) {
                               return (
                                 <code className="inline-code" {...props}>
@@ -235,11 +280,7 @@ function ChatWindow({
                                 </code>
                               );
                             }
-                            return (
-                              <pre className="code-block" {...props}>
-                                <code>{children}</code>
-                              </pre>
-                            );
+                            return <MarkdownCodeBlock className={className} {...props}>{children}</MarkdownCodeBlock>;
                           },
                         }}
                       >
