@@ -1,26 +1,24 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean
-from sqlalchemy.orm import relationship
+from __future__ import annotations
+
 from datetime import datetime
-from config.database import Base
+
+from models.base import Field, MongoModel
 
 
-class User(Base):
-    __tablename__ = "users"
+class User(MongoModel):
+    __collection__ = "users"
+    __primary_field__ = "id"
+    __auto_id__ = "counter"
 
-    id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True, nullable=False)
-    username = Column(String, unique=True, index=True, nullable=False)
-    hashed_password = Column(String, nullable=False)
-    full_name = Column(String, nullable=True)
-    is_active = Column(Boolean, default=True)
-    is_verified = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    id = Field(default=None)
+    email = Field(default="")
+    username = Field(default="")
+    hashed_password = Field(default="")
+    full_name = Field(default="")
+    is_active = Field(default=True)
+    is_verified = Field(default=False)
+    created_at = Field(default_factory=datetime.utcnow)
+    updated_at = Field(default_factory=datetime.utcnow)
 
-    # Relationships
-    conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
-    documents = relationship("Document", back_populates="user", cascade="all, delete-orphan")
-    learning_progress = relationship("LearningProgress", back_populates="user", cascade="all, delete-orphan")
-
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<User {self.username}>"

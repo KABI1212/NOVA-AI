@@ -57,6 +57,48 @@ function Icon({ children }) {
   );
 }
 
+function resolveImageSource(value) {
+  if (!value) {
+    return "";
+  }
+  return value.startsWith("data:") || value.startsWith("http://") || value.startsWith("https://")
+    ? value
+    : `data:image/png;base64,${value}`;
+}
+
+function MessageImages({ message }) {
+  if (!Array.isArray(message?.images) || !message.images.length) {
+    return null;
+  }
+
+  const isUser = message.role === "user";
+
+  return (
+    <div className={`bb-images${isUser ? " user" : ""}`}>
+      {message.images.map((image, index) => {
+        const imageSrc = resolveImageSource(image);
+
+        return (
+        <a
+          key={`${message.id}-image-${index}`}
+          href={imageSrc}
+          target="_blank"
+          rel="noreferrer"
+          className="bb-image-link"
+        >
+          <img
+            src={imageSrc}
+            alt={`${isUser ? "Prompt" : "Answer"} visual ${index + 1}`}
+            className="bb-image"
+            loading="lazy"
+          />
+        </a>
+        );
+      })}
+    </div>
+  );
+}
+
 function ChatWindow({
   messages,
   isTyping,
@@ -176,29 +218,35 @@ function ChatWindow({
                 <div className="mlb">{isUser ? "You" : "Nova AI"}</div>
                 <div className="bb">
                   {isUser ? (
-                    message.content
-                  ) : (
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm, remarkBreaks]}
-                      components={{
-                        code({ inline, children, ...props }) {
-                          if (inline) {
-                            return (
-                              <code className="inline-code" {...props}>
-                                {children}
-                              </code>
-                            );
-                          }
-                          return (
-                            <pre className="code-block" {...props}>
-                              <code>{children}</code>
-                            </pre>
-                          );
-                        },
-                      }}
-                    >
+                    <>
                       {message.content}
-                    </ReactMarkdown>
+                      <MessageImages message={message} />
+                    </>
+                  ) : (
+                    <>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm, remarkBreaks]}
+                        components={{
+                          code({ inline, children, ...props }) {
+                            if (inline) {
+                              return (
+                                <code className="inline-code" {...props}>
+                                  {children}
+                                </code>
+                              );
+                            }
+                            return (
+                              <pre className="code-block" {...props}>
+                                <code>{children}</code>
+                              </pre>
+                            );
+                          },
+                        }}
+                      >
+                        {message.content}
+                      </ReactMarkdown>
+                      <MessageImages message={message} />
+                    </>
                   )}
                 </div>
 

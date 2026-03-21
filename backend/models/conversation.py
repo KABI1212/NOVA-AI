@@ -1,40 +1,30 @@
+from __future__ import annotations
+
 import uuid
+from datetime import datetime
 from typing import List
 
 from pydantic import BaseModel
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String
-from sqlalchemy.ext.mutable import MutableList
-from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 
-from config.database import Base
+from models.base import Field, MongoModel
 
 
-class Conversation(Base):
-    __tablename__ = "conversations"
+class Conversation(MongoModel):
+    __collection__ = "conversations"
+    __primary_field__ = "id"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    title = Column(String(200), default="New Chat")
-    legacy_messages = Column("messages", MutableList.as_mutable(JSON), default=list)
-    model = Column(String(50), default="gpt-4")
-
-    user = relationship("User", back_populates="conversations")
-    messages = relationship(
-        "ChatMessage",
-        back_populates="conversation",
-        cascade="all, delete-orphan",
-        order_by="ChatMessage.created_at",
-    )
-
-    is_shared = Column(Boolean, default=False)
-    share_id = Column(String(12), unique=True, nullable=True)
-    share_title = Column(String(200), nullable=True)
-    shared_at = Column(DateTime, nullable=True)
-    view_count = Column(String, default="0")
-
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, onupdate=func.now())
+    id = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id = Field(default=None)
+    title = Field(default="New Chat")
+    legacy_messages = Field(default_factory=list)
+    model = Field(default="gpt-4")
+    is_shared = Field(default=False)
+    share_id = Field(default=None)
+    share_title = Field(default=None)
+    shared_at = Field(default=None)
+    view_count = Field(default="0")
+    created_at = Field(default_factory=datetime.utcnow)
+    updated_at = Field(default_factory=datetime.utcnow)
 
 
 class Message(BaseModel):
@@ -56,6 +46,3 @@ class ConversationResponse(BaseModel):
 
     class Config:
         from_attributes = True
-
-
-from models.chat import ChatMessage  # noqa: E402,F401

@@ -1,22 +1,21 @@
+from __future__ import annotations
+
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text
-from sqlalchemy.orm import relationship
-
-from config.database import Base
+from models.base import Field, MongoModel
 
 
-class ChatMessage(Base):
-    __tablename__ = "messages"
+class ChatMessage(MongoModel):
+    __collection__ = "messages"
+    __primary_field__ = "id"
+    __auto_id__ = "counter"
 
-    id = Column(Integer, primary_key=True, index=True)
-    conversation_id = Column(String, ForeignKey("conversations.id"), nullable=False, index=True)
-    role = Column(String(50), nullable=False)
-    content = Column(Text, nullable=False)
-    meta = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    id = Field(default=None)
+    conversation_id = Field(default="")
+    role = Field(default="assistant")
+    content = Field(default="")
+    meta = Field(default=None)
+    created_at = Field(default_factory=datetime.utcnow)
 
-    conversation = relationship("Conversation", back_populates="messages")
-
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<ChatMessage {self.id} {self.role}>"

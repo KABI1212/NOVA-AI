@@ -1,27 +1,25 @@
+from __future__ import annotations
+
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.ext.mutable import MutableList
-from sqlalchemy.orm import relationship
-
-from config.database import Base
+from models.base import Field, MongoModel
 
 
-class LearningProgress(Base):
-    __tablename__ = "learning_progress"
+class LearningProgress(MongoModel):
+    __collection__ = "learning_progress"
+    __primary_field__ = "id"
+    __auto_id__ = "counter"
 
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    topic = Column(String, nullable=False)
-    roadmap = Column(JSON, default=dict)
-    completed_items = Column(MutableList.as_mutable(JSON), default=list)
-    current_level = Column(String, default="beginner")
-    notes = Column(Text, nullable=True)
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    id = Field(default=None)
+    user_id = Field(default=None)
+    topic = Field(default="")
+    roadmap = Field(default_factory=dict)
+    completed_items = Field(default_factory=list)
+    current_level = Field(default="beginner")
+    notes = Field(default=None)
+    is_active = Field(default=True)
+    created_at = Field(default_factory=datetime.utcnow)
+    updated_at = Field(default_factory=datetime.utcnow)
 
-    user = relationship("User", back_populates="learning_progress")
-
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<LearningProgress {self.topic}>"

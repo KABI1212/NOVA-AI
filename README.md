@@ -69,7 +69,7 @@ A production-ready, full-stack AI chatbot platform similar to ChatGPT, featuring
 
 ### Backend Stack
 - **Framework**: FastAPI (Python)
-- **Database**: PostgreSQL
+- **Database**: MongoDB
 - **Cache**: Redis
 - **AI**: OpenAI GPT-4
 - **Vector DB**: FAISS
@@ -155,7 +155,7 @@ nova-ai/
 
 - Python 3.11+
 - Node.js 18+
-- PostgreSQL 15+
+- Docker Desktop or MongoDB 7+
 - Redis 7+
 - OpenAI API Key
 
@@ -186,16 +186,16 @@ cp .env.example .env
 
 5. Configure environment variables in `.env`:
 ```env
-DATABASE_URL=postgresql://username:password@localhost:5432/nova_ai_db
+DATABASE_URL=mongodb://localhost:27017/nova_ai
 SECRET_KEY=your-super-secret-key-here
 OPENAI_API_KEY=your-openai-api-key
 REDIS_URL=redis://localhost:6379
 CORS_ORIGINS=http://localhost:3000
 ```
 
-6. Create PostgreSQL database:
+6. Start MongoDB:
 ```bash
-createdb nova_ai_db
+docker compose up mongo -d
 ```
 
 7. Run the backend:
@@ -247,7 +247,7 @@ export SECRET_KEY=your-secret-key
 
 2. Build and run with Docker Compose:
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
 Access the application:
@@ -433,7 +433,7 @@ npm run lint
 
 ### Backend (.env)
 ```env
-DATABASE_URL=postgresql://user:pass@host:5432/db
+DATABASE_URL=mongodb://localhost:27017/nova_ai
 SECRET_KEY=your-secret-key
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=30

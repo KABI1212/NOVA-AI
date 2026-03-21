@@ -4,7 +4,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from config.database import get_db
+from config.database import get_db, get_db_optional
 from models.user import User
 from .auth import decode_access_token
 
@@ -53,10 +53,13 @@ async def get_current_user(
 
 async def get_current_user_optional(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
-    db: Session = Depends(get_db),
+    db: Optional[Session] = Depends(get_db_optional),
 ) -> Optional[User]:
     """Get the current authenticated user if provided, otherwise return None."""
     if credentials is None:
+        return None
+
+    if db is None:
         return None
 
     payload = decode_access_token(credentials.credentials)

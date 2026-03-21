@@ -6,21 +6,30 @@ Get NOVA AI up and running in 5 minutes!
 
 ✅ Python 3.11+
 ✅ Node.js 18+
-✅ PostgreSQL 15+
+✅ Docker Desktop (recommended) or MongoDB 7+
 ✅ Redis 7+
 ✅ OpenAI API Key
 
 ## 5-Minute Setup
 
-### Step 1: Database Setup (1 minute)
+### Step 1: Start MongoDB (1 minute)
 
 ```bash
-# Create PostgreSQL database
-sudo -u postgres psql
-CREATE DATABASE nova_ai_db;
-CREATE USER nova_user WITH PASSWORD 'nova_password';
-GRANT ALL PRIVILEGES ON DATABASE nova_ai_db TO nova_user;
-\q
+# Recommended: Docker
+docker compose up mongo -d
+
+# Alternative: use your local MongoDB service
+# mongod --dbpath C:\data\db
+```
+
+For Windows local backend development after Docker Desktop is installed:
+```powershell
+.\scripts\start-local-dev-services.ps1
+```
+
+For Windows local backend development without Docker:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-portable-mongo.ps1
 ```
 
 ### Step 2: Backend Setup (2 minutes)
@@ -36,12 +45,18 @@ pip install -r requirements.txt
 # Configure environment
 cp .env.example .env
 # Edit .env and add your OPENAI_API_KEY
+# DATABASE_URL defaults to mongodb://localhost:27017/nova_ai
 
 # Run backend
 python main.py
 ```
 
 ✅ Backend running at: http://localhost:8000
+
+Windows shortcut for local Mongo + backend:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-nova-local.ps1
+```
 
 ### Step 3: Frontend Setup (2 minutes)
 
@@ -73,8 +88,8 @@ npm run dev
 # Set your OpenAI API key
 export OPENAI_API_KEY=your-key-here
 
-# Run everything with one command
-docker-compose up --build
+# Run frontend, backend, MongoDB, and Redis
+docker compose up --build
 ```
 
 Access at: http://localhost

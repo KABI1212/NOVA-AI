@@ -1,6 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
 
-function ChatInput({ value, onChange, onSend, disabled }) {
+function ChatInput({
+  value,
+  onChange,
+  onSend,
+  disabled,
+  generatePromptImage = false,
+  generateAnswerImage = false,
+  onTogglePromptImage,
+  onToggleAnswerImage,
+}) {
   const [attachedFile, setAttachedFile] = useState(null);
   const [speechSupported, setSpeechSupported] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -301,6 +310,26 @@ function ChatInput({ value, onChange, onSend, disabled }) {
           ) : null}
         </div>
       ) : null}
+
+      <div className="input-tools">
+        <button
+          className={`input-chip${generatePromptImage ? " on" : ""}`}
+          type="button"
+          disabled={disabled}
+          onClick={onTogglePromptImage}
+        >
+          Prompt image
+        </button>
+        <button
+          className={`input-chip${generateAnswerImage ? " on" : ""}`}
+          type="button"
+          disabled={disabled}
+          onClick={onToggleAnswerImage}
+        >
+          Answer image
+        </button>
+        <div className="input-tools-hint">Generated visuals appear inline in the chat.</div>
+      </div>
 
       {attachedFile ? (
         <div className="fp">

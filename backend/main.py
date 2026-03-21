@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from config.database import init_db
+from config.database import check_database_connection, get_database_status, init_db
 from config.settings import settings
 from routes import (
     auth_router,
@@ -58,6 +58,9 @@ def _configure_logging() -> None:
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("pymongo").setLevel(logging.WARNING)
+    logging.getLogger("pymongo.serverSelection").setLevel(logging.WARNING)
+    logging.getLogger("pymongo.topology").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.INFO)
 
 
@@ -65,8 +68,11 @@ def _configure_logging() -> None:
 async def lifespan(app: FastAPI):
     _configure_logging()
     logger.info("%s v%s starting", settings.APP_NAME, settings.APP_VERSION)
-    init_db()
-    logger.info("Database connected: %s", settings.DATABASE_URL)
+    db_ready = init_db()
+    if db_ready:
+        logger.info("Database connected: %s", settings.DATABASE_URL)
+    else:
+        logger.warning("Database unavailable during startup: %s", get_database_status())
     logger.info("CORS enabled for: %s", settings.cors_origins_list)
     yield
     logger.info("%s shutting down", settings.APP_NAME)
@@ -126,11 +132,28 @@ async def api_status():
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
+    db_status = get_database_status()
     return {
         "status": "healthy",
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
+        "database": db_status,
     }
+
+
+@app.get("/health/db")
+async def health_db():
+    """Database readiness endpoint."""
+    check_database_connection(log_errors=False)
+    db_status = get_database_status()
+    status_code = 200 if db_status.get("available") else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "healthy" if db_status.get("available") else "degraded",
+            "database": db_status,
+        },
+    )
 
 
 @app.get("/{full_path:path}", include_in_schema=False)
@@ -160,7 +183,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
-        port=8000,
+        host=settings.APP_HOST,
+        port=settings.APP_PORT,
         reload=settings.DEBUG,
     )

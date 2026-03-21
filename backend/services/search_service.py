@@ -123,6 +123,25 @@ def _normalize_news_result(result: Dict) -> Dict:
     }
 
 
+def _normalize_image_result(result: Dict) -> Dict:
+    def _safe_int(value) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "title": result.get("title", ""),
+        "url": result.get("url", ""),
+        "image_url": result.get("image", ""),
+        "thumbnail_url": result.get("thumbnail", ""),
+        "width": _safe_int(result.get("width")),
+        "height": _safe_int(result.get("height")),
+        "source": result.get("source", "Image"),
+        "kind": "image",
+    }
+
+
 def _score_result(result: Dict, query: str, query_years: List[str], index: int) -> float:
     haystack = " ".join(
         str(result.get(field, "") or "").lower()
@@ -212,6 +231,39 @@ async def search_web(query: str, max_results: int = 5) -> List[Dict]:
                         pass
 
             return _dedupe_and_rank(combined_results, query, max_results)
+
+        return await loop.run_in_executor(None, _search)
+    except Exception:
+        return []
+
+
+async def search_web_images(query: str, max_results: int = 4) -> List[Dict]:
+    try:
+        loop = asyncio.get_running_loop()
+
+        def _search():
+            normalized_results: List[Dict] = []
+            seen_images = set()
+            with DDGS() as ddgs:
+                raw_results = list(
+                    ddgs.images(
+                        query,
+                        max_results=max_results * 2,
+                        safesearch="moderate",
+                        size="Large",
+                    )
+                )
+
+            for result in raw_results:
+                normalized = _normalize_image_result(result)
+                image_url = (normalized.get("image_url") or normalized.get("thumbnail_url") or "").strip()
+                if not image_url or image_url in seen_images:
+                    continue
+                seen_images.add(image_url)
+                normalized_results.append(normalized)
+                if len(normalized_results) >= max_results:
+                    break
+            return normalized_results
 
         return await loop.run_in_executor(None, _search)
     except Exception:

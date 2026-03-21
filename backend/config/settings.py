@@ -12,8 +12,19 @@ class Settings(BaseSettings):
     APP_NAME: str = "NOVA AI"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = True
+    APP_HOST: str = "127.0.0.1"
+    APP_PORT: int = 8000
 
-    DATABASE_URL: str = "sqlite:///./data/nova_ai.db"
+    DATABASE_URL: str = "mongodb://localhost:27017/nova_ai"
+    MONGODB_DB_NAME: str = ""
+    MONGODB_SERVER_SELECTION_TIMEOUT_MS: int = 5000
+    MONGODB_CONNECT_TIMEOUT_MS: int = 5000
+    MONGODB_SOCKET_TIMEOUT_MS: int = 10000
+    MONGODB_RETRY_ATTEMPTS: int = 3
+    MONGODB_RETRY_DELAY_SECONDS: float = 2.0
+    MONGODB_RETRY_BACKOFF_MULTIPLIER: float = 2.0
+    MONGODB_RETRY_MAX_DELAY_SECONDS: float = 15.0
+    MONGODB_REQUIRED: bool = False
 
     SECRET_KEY: str = "change-me-in-production"
     ALGORITHM: str = "HS256"
@@ -24,6 +35,7 @@ class Settings(BaseSettings):
     OPENAI_CODE_MODEL: str = "gpt-4-turbo-preview"
     OPENAI_EXPLAIN_MODEL: str = "gpt-4-turbo-preview"
     OPENAI_IMAGE_MODEL: str = "dall-e-3"
+    OPENAI_IMAGE_QUALITY: str = "hd"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-ada-002"
     OPENAI_EMBEDDING_DIM: int = 1536
 

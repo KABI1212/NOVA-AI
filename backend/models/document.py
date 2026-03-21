@@ -1,26 +1,26 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean
-from sqlalchemy.orm import relationship
+from __future__ import annotations
+
 from datetime import datetime
-from config.database import Base
+
+from models.base import Field, MongoModel
 
 
-class Document(Base):
-    __tablename__ = "documents"
+class Document(MongoModel):
+    __collection__ = "documents"
+    __primary_field__ = "id"
+    __auto_id__ = "counter"
 
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    filename = Column(String, nullable=False)
-    file_path = Column(String, nullable=False)
-    file_type = Column(String, nullable=False)  # pdf, txt, etc.
-    file_size = Column(Integer, nullable=False)  # in bytes
-    text_content = Column(Text, nullable=True)  # Extracted text
-    summary = Column(Text, nullable=True)
-    is_processed = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    id = Field(default=None)
+    user_id = Field(default=None)
+    filename = Field(default="")
+    file_path = Field(default="")
+    file_type = Field(default="")
+    file_size = Field(default=0)
+    text_content = Field(default=None)
+    summary = Field(default=None)
+    is_processed = Field(default=False)
+    created_at = Field(default_factory=datetime.utcnow)
+    updated_at = Field(default_factory=datetime.utcnow)
 
-    # Relationships
-    user = relationship("User", back_populates="documents")
-
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<Document {self.filename}>"

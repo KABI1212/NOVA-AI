@@ -29,6 +29,22 @@ _DETAILED_REQUEST_PATTERN = re.compile(
     r"\b(detailed|detail|long answer|elaborate|essay|explain in detail|discussion)\b",
     re.IGNORECASE,
 )
+_EXPLANATION_PATTERN = re.compile(
+    r"\b(explain|how|why|working|works|mechanism|process|flow|steps?|advantages?|disadvantages?|uses?|importance|role)\b",
+    re.IGNORECASE,
+)
+_MINIMAL_REQUEST_PATTERN = re.compile(
+    r"\b(minimal|minimally|brief|briefly|concise|short|in short|one line|few lines|summary)\b",
+    re.IGNORECASE,
+)
+_STRICT_EXAM_PATTERN = re.compile(
+    r"\b(exam-ready|exam ready|exam format|for exam|for exams|easy to write in exams|strict academic tone|internal verification|definition.*explanation.*key points.*conclusion)\b",
+    re.IGNORECASE,
+)
+_TECHNICAL_FOUNDATIONS_PATTERN = re.compile(
+    r"\b(network|networking|protocol|http|https|smtp|imap|pop3|tcp/ip|tcp|udp|tls|ssl|dns|client|server|database|api|system|systems|architecture|ram|rom|memory|cache|operating system|os|compiler|process)\b",
+    re.IGNORECASE,
+)
 
 
 def select_model(mode: str) -> str:
@@ -139,6 +155,74 @@ def _comparison_answer_instruction(message: str) -> str | None:
     )
 
 
+def _exam_ready_instruction(message: str) -> str | None:
+    text = " ".join((message or "").split())
+    if not text:
+        return None
+
+    exam_like = bool(_STRICT_EXAM_PATTERN.search(text))
+    technical = bool(_TECHNICAL_FOUNDATIONS_PATTERN.search(text))
+    academic_context = bool(_EXAM_CONTEXT_PATTERN.search(text))
+    if not exam_like and not (academic_context and technical):
+        return None
+
+    return (
+        "This request needs a complete exam-ready response.\n"
+        "- Use strict academic tone.\n"
+        "- Before writing, internally verify that the explanation matches standard real-world CS, systems, or networking fundamentals when applicable.\n"
+        "- Use this structure in order when relevant:\n"
+        "  1. Definition\n"
+        "  2. Explanation\n"
+        "  3. Key Points / Features\n"
+        "  4. Comparison Table (only if the question is a comparison)\n"
+        "  5. Conclusion\n"
+        "- Keep the definition short and precise.\n"
+        "- In the explanation, describe the real working model, actual components, technical flow, and correct protocols only when they truly apply.\n"
+        "- Do not force unrelated protocols, architecture terms, or extra examples.\n"
+        "- Avoid storytelling, filler, and unnecessary side notes.\n"
+        "- Make the answer easy to reproduce in exams."
+    )
+
+
+def _general_response_instruction(message: str) -> str | None:
+    text = " ".join((message or "").split())
+    if not text:
+        return None
+
+    simple_requested = bool(_SIMPLE_REQUEST_PATTERN.search(text) or _MINIMAL_REQUEST_PATTERN.search(text))
+    short_requested = bool(_SHORT_REQUEST_PATTERN.search(text) or _MINIMAL_REQUEST_PATTERN.search(text))
+    detailed_requested = bool(_DETAILED_REQUEST_PATTERN.search(text))
+    explanation_requested = bool(_EXPLANATION_PATTERN.search(text))
+    multi_topic = len(re.findall(r"\b(and|vs|versus)\b|,", text, re.IGNORECASE)) >= 1
+
+    if simple_requested or short_requested:
+        return (
+            "The user explicitly wants a short/simple answer.\n"
+            "- Keep it concise.\n"
+            "- Use simple language.\n"
+            "- Give only the core answer without extra expansion."
+        )
+
+    if detailed_requested:
+        return (
+            "The user explicitly wants more depth.\n"
+            "- Give a fuller explanation.\n"
+            "- Use clear structure with short sections or bullets.\n"
+            "- Include enough detail to feel complete, not minimal."
+        )
+
+    if explanation_requested or multi_topic:
+        return (
+            "This is an explanation-oriented or multi-concept question.\n"
+            "- Do not give a minimal answer.\n"
+            "- Explain each important concept clearly.\n"
+            "- If multiple concepts are involved, cover them separately and then connect them.\n"
+            "- Add one simple example or analogy when it helps understanding."
+        )
+
+    return None
+
+
 def build_messages(history: List[Dict[str, str]], mode: str) -> List[Dict[str, str]]:
     """Inject system prompt for the selected mode."""
     system_prompt = get_mode_prompt(mode)
@@ -153,6 +237,14 @@ def build_messages(history: List[Dict[str, str]], mode: str) -> List[Dict[str, s
     academic_instruction = _academic_answer_instruction(latest_user_message)
     if academic_instruction:
         messages.append({"role": "system", "content": academic_instruction})
+
+    exam_ready_instruction = _exam_ready_instruction(latest_user_message)
+    if exam_ready_instruction:
+        messages.append({"role": "system", "content": exam_ready_instruction})
+
+    general_instruction = _general_response_instruction(latest_user_message)
+    if general_instruction:
+        messages.append({"role": "system", "content": general_instruction})
 
     return [*messages, *history]
 

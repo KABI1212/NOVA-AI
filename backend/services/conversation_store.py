@@ -1,10 +1,11 @@
+from __future__ import annotations
+
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from sqlalchemy.orm import Session
-
-from models.conversation import Conversation
+from config.database import MongoSession
 from models.chat import ChatMessage
+from models.conversation import Conversation
 
 
 def _message_meta(payload: dict) -> Optional[dict]:
@@ -22,52 +23,63 @@ def _message_meta(payload: dict) -> Optional[dict]:
     return meta
 
 
-def ensure_conversation_messages(db: Session, conversation: Conversation) -> List[ChatMessage]:
-    if conversation.messages:
-        return conversation.messages
+def _message_query(db: MongoSession, conversation: Conversation):
+    return db.query(ChatMessage).filter(
+        ChatMessage.conversation_id == conversation.id
+    ).order_by(ChatMessage.created_at.asc())
+
+
+def ensure_conversation_messages(db: MongoSession, conversation: Conversation) -> List[ChatMessage]:
+    existing_messages = _message_query(db, conversation).all()
+    if existing_messages:
+        return existing_messages
 
     legacy_messages = list(conversation.legacy_messages or [])
     if not legacy_messages:
-        return conversation.messages
+        return []
 
     base_time = conversation.created_at or datetime.utcnow()
+    migrated_messages: list[ChatMessage] = []
     for index, payload in enumerate(legacy_messages):
-        db.add(
-            ChatMessage(
-                conversation_id=conversation.id,
-                role=payload.get("role") or "assistant",
-                content=payload.get("content") or "",
-                meta=_message_meta(payload),
-                created_at=base_time + timedelta(microseconds=index),
-            )
+        message = ChatMessage(
+            conversation_id=conversation.id,
+            role=payload.get("role") or "assistant",
+            content=payload.get("content") or "",
+            meta=_message_meta(payload),
+            created_at=base_time + timedelta(microseconds=index),
         )
+        db.add(message)
+        migrated_messages.append(message)
 
     conversation.legacy_messages = []
     conversation.updated_at = datetime.utcnow()
     db.add(conversation)
     db.commit()
+    for message in migrated_messages:
+        db.refresh(message)
     db.refresh(conversation)
-    return conversation.messages
+    return _message_query(db, conversation).all()
 
 
 def append_conversation_message(
-    db: Session,
+    db: MongoSession,
     conversation: Conversation,
     role: str,
     content: str,
     meta: Optional[dict] = None,
-):
+) -> ChatMessage:
     ensure_conversation_messages(db, conversation)
-    conversation.messages.append(
-        ChatMessage(
-            role=role,
-            content=content,
-            meta=meta,
-        )
+    message = ChatMessage(
+        conversation_id=conversation.id,
+        role=role,
+        content=content,
+        meta=meta,
     )
+    db.add(message)
+    return message
 
 
-def save_conversation(db: Session, conversation: Conversation) -> Conversation:
+def save_conversation(db: MongoSession, conversation: Conversation) -> Conversation:
     conversation.updated_at = datetime.utcnow()
     db.add(conversation)
     db.commit()
@@ -76,7 +88,7 @@ def save_conversation(db: Session, conversation: Conversation) -> Conversation:
 
 
 def history_from_conversation(
-    db: Session,
+    db: MongoSession,
     conversation: Conversation,
     limit: Optional[int] = None,
 ) -> List[dict]:
@@ -107,9 +119,9 @@ def serialize_message(message: ChatMessage) -> dict:
     }
 
 
-def serialize_conversation_messages(db: Session, conversation: Conversation) -> List[dict]:
+def serialize_conversation_messages(db: MongoSession, conversation: Conversation) -> List[dict]:
     return [serialize_message(message) for message in ensure_conversation_messages(db, conversation)]
 
 
-def conversation_message_count(db: Session, conversation: Conversation) -> int:
+def conversation_message_count(db: MongoSession, conversation: Conversation) -> int:
     return len(ensure_conversation_messages(db, conversation))

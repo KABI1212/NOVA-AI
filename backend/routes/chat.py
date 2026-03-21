@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -11,7 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from ai_engine import build_messages, response_envelope, select_model
-from config.database import get_db
+from config.database import get_db, get_db_optional
 from config.settings import settings
 from models.conversation import Conversation
 from models.document import Document
@@ -27,7 +28,7 @@ from services.conversation_store import (
 )
 from services.conversation_memory import add_message, get_history
 from services.instant_responses import instant_reply
-from services.search_service import fetch_page_content, format_results_for_ai, is_temporal_query, search_web
+from services.search_service import fetch_page_content, format_results_for_ai, is_temporal_query, search_web, search_web_images
 from services.vector_service import vector_service
 from utils.dependencies import get_current_user, get_current_user_optional
 
@@ -55,6 +56,23 @@ _SEARCHABLE_PROMPT_PREFIXES = (
     "explain",
     "define",
     "give me",
+    "Analyze",
+    "Suggest",
+    "Debug",
+    "Compare",
+    "Summarize",
+    "Guide me through",
+    "Summarize",
+    "Briefly",
+    "In detail",
+    "With examples",
+    "Step-by-step",
+    "With code",
+    "Help me",
+    "What's the best way to",
+    "How do I",
+    "Why does",
+    "What if",
 )
 _SPORTS_QUERY_REWRITES = (
     (re.compile(r"\bcaptions\b", re.IGNORECASE), "captains"),
@@ -69,6 +87,8 @@ class ChatRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     document_id: Optional[int] = None
+    generate_prompt_image: Optional[bool] = None
+    generate_answer_image: Optional[bool] = None
     stream: bool = True
 
     model_config = ConfigDict(extra="ignore")
@@ -80,6 +100,7 @@ class RegenerateRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     document_id: Optional[int] = None
+    generate_answer_image: Optional[bool] = None
     stream: bool = True
 
     model_config = ConfigDict(extra="ignore")
@@ -100,11 +121,16 @@ def _payload(
     message: str,
     conversation: Optional[Conversation] = None,
     images: Optional[List[str]] = None,
+    prompt_images: Optional[List[str]] = None,
+    answer_images: Optional[List[str]] = None,
 ) -> dict:
+    resolved_answer_images = answer_images if answer_images is not None else images
     payload = {
         "message": message,
         "answer": message,
-        "images": images or [],
+        "images": resolved_answer_images or [],
+        "answer_images": resolved_answer_images or [],
+        "prompt_images": prompt_images or [],
     }
     if conversation is not None:
         payload["conversation_id"] = conversation.id
@@ -116,12 +142,690 @@ def _final_payload(
     message: str,
     conversation: Optional[Conversation] = None,
     images: Optional[List[str]] = None,
+    prompt_images: Optional[List[str]] = None,
+    answer_images: Optional[List[str]] = None,
     interrupted: bool = False,
 ) -> dict:
-    payload = _payload(message, conversation, images) | {"type": "final"}
+    payload = _payload(
+        message,
+        conversation,
+        images,
+        prompt_images=prompt_images,
+        answer_images=answer_images,
+    ) | {"type": "final"}
     if interrupted:
         payload["error"] = "retry"
     return payload
+
+
+def _normalize_image_prompt_text(text: str, limit: int = 2600) -> str:
+    return " ".join((text or "").split())[:limit]
+
+
+def _image_preferences(
+    generate_prompt_image: bool = False,
+    generate_answer_image: bool = False,
+) -> Optional[dict]:
+    meta = {}
+    if generate_prompt_image:
+        meta["generate_prompt_image"] = True
+    if generate_answer_image:
+        meta["generate_answer_image"] = True
+    return meta or None
+
+
+def _merge_message_meta(
+    meta: Optional[dict],
+    *,
+    images: Optional[List[str]] = None,
+    **extra: object,
+) -> Optional[dict]:
+    merged = dict(meta) if isinstance(meta, dict) else {}
+    for key, value in extra.items():
+        if value is True:
+            merged[key] = True
+        elif value not in (None, False, "", [], {}):
+            merged[key] = value
+    if images:
+        merged["images"] = images
+    return merged or None
+
+
+def _apply_images_to_message(
+    message,
+    images: Optional[List[str]] = None,
+    **extra: object,
+) -> None:
+    if message is None:
+        return
+    message.meta = _merge_message_meta(getattr(message, "meta", None), images=images, **extra)
+
+
+def _message_images(message) -> List[str]:
+    meta = getattr(message, "meta", None)
+    if not isinstance(meta, dict):
+        return []
+    images = meta.get("images")
+    if not isinstance(images, list):
+        return []
+    return [str(image) for image in images if image]
+
+
+def _build_prompt_image_prompt(user_message: str) -> str:
+    cleaned = _normalize_image_prompt_text(user_message, 2400)
+    if not cleaned:
+        return ""
+    return (
+        "Create a single polished illustration for this user prompt. "
+        "Do not add text, captions, labels, or watermarks.\n"
+        f"User prompt: {cleaned}"
+    )
+
+
+def _extract_visual_keywords(text: str, limit: int = 8) -> List[str]:
+    stopwords = {
+        "about",
+        "after",
+        "answer",
+        "assistant",
+        "because",
+        "between",
+        "briefly",
+        "could",
+        "create",
+        "diagram",
+        "difference",
+        "explain",
+        "explains",
+        "explanation",
+        "from",
+        "give",
+        "given",
+        "help",
+        "helps",
+        "illustration",
+        "include",
+        "including",
+        "learn",
+        "make",
+        "more",
+        "question",
+        "relevant",
+        "show",
+        "simple",
+        "single",
+        "tell",
+        "than",
+        "that",
+        "their",
+        "them",
+        "these",
+        "this",
+        "topic",
+        "user",
+        "using",
+        "visual",
+        "what",
+        "when",
+        "where",
+        "which",
+        "with",
+        "would",
+    }
+    keywords: List[str] = []
+    seen: set[str] = set()
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9+/.-]*", text or ""):
+        candidate = token.strip(".,:;!?()[]{}")
+        lowered = candidate.lower()
+        if len(lowered) < 3 or lowered in stopwords or lowered in seen:
+            continue
+        seen.add(lowered)
+        keywords.append(candidate)
+        if len(keywords) >= limit:
+            break
+    return keywords
+
+
+def _split_visual_topics(text: str) -> List[str]:
+    cleaned = _normalize_image_prompt_text(text, 240)
+    if not cleaned:
+        return []
+    parts = re.split(r"\s*(?:,|/|\band\b|\bvs\.?\b|\bversus\b)\s*", cleaned, flags=re.IGNORECASE)
+    topics: List[str] = []
+    for part in parts:
+        candidate = re.sub(
+            r"\b(explain|what is|what are|how does|how do|how is|how are|tell me about|difference between|compare|show me|diagram of)\b",
+            "",
+            part,
+            flags=re.IGNORECASE,
+        )
+        candidate = re.sub(r"\b(work|works|working|function|functions|process|overview|basics)\b", "", candidate, flags=re.IGNORECASE)
+        candidate = " ".join(candidate.split()).strip(" ?!.,")
+        if candidate:
+            topics.append(candidate)
+    return topics[:4]
+
+
+def _answer_visual_strategy(user_message: str, answer: str) -> tuple[str, str, str]:
+    combined = f"{user_message} {answer}".lower()
+    topics = _split_visual_topics(user_message)
+    multi_topic = len(topics) >= 2
+
+    if re.search(r"\b(compare|comparison|difference|vs|versus|distinguish)\b", combined):
+        return (
+            "comparison diagram",
+            "Use aligned side-by-side sections so the same properties can be compared directly.",
+            "Keep the labels factual, symmetrical, and easy to scan.",
+        )
+    if re.search(r"\b(network|internet|client|server|router|request|response|api|database)\b", combined):
+        return (
+            "architecture diagram",
+            "Use labeled blocks and arrows to show components and data flow.",
+            "Prefer a technical schematic instead of decorative illustration.",
+        )
+    if re.search(r"\b(how|works|working|process|workflow|flow|pipeline|step|steps|procedure|timeline|history|historical|evolution|progression|chronology|cycle|life cycle|lifecycle|phase|phases|loop)\b", combined):
+        return (
+            "flow diagram",
+            "Show the sequence with arrows so the mechanism is easy to follow.",
+            "Use only the key stages from the answer and avoid adding extra steps.",
+        )
+    if re.search(r"\b(layer|layers|architecture|structure|components|parts|types|stack|memory|ram|rom|cache|storage|cpu|gpu|kernel|module)\b", combined):
+        return (
+            "architecture diagram",
+            "Use boxes, layers, and short labels to show the real parts and how they relate.",
+            "For technical topics, prefer a clean textbook schematic over character-style illustration.",
+        )
+    if multi_topic:
+        return (
+            "comparison diagram",
+            "Give each concept its own labeled section with one or two key points.",
+            "Make the similarities and differences visually obvious.",
+        )
+    return (
+        "block diagram",
+        "Place the main idea clearly and connect it to the most important supporting points.",
+        "Keep it educational and specific to the actual answer, not generic poster art.",
+    )
+
+
+def _diagram_topic_text(user_message: str, answer: str) -> str:
+    topics = _split_visual_topics(user_message)
+    combined = f"{user_message} {answer}".lower()
+    if len(topics) >= 2 and re.search(r"\b(compare|comparison|difference|vs|versus|distinguish)\b", combined):
+        return " vs ".join(topics[:3])
+
+    cleaned = _normalize_image_prompt_text(user_message, 200)
+    cleaned = re.sub(
+        r"\b(explain|create|generate|show me|tell me about|diagram of|what is|what are|how does|how do|how is|how are|compare|difference between)\b",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = " ".join(cleaned.split()).strip(" ?!.,:")
+    if cleaned:
+        return cleaned
+
+    fallback = " ".join(_extract_visual_keywords(answer, limit=4)).strip()
+    return fallback or "the topic"
+
+
+def _extract_diagram_labels(user_message: str, answer: str, limit: int = 6) -> List[str]:
+    labels: List[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        candidate = _normalize_image_prompt_text(str(value), 70).strip(" -|,.;:")
+        lowered = candidate.lower()
+        if not candidate or len(candidate) < 2 or lowered in seen:
+            return
+        seen.add(lowered)
+        labels.append(candidate)
+
+    for line in (answer or "").splitlines():
+        stripped = line.strip()
+        if stripped.count("|") >= 2:
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if cells and not all(re.fullmatch(r"[-: ]+", cell or "") for cell in cells):
+                for cell in cells[:3]:
+                    add(cell)
+        elif stripped.startswith(("-", "*")) or re.match(r"^\d+[.)]\s", stripped):
+            add(re.sub(r"^[-*0-9.\s]+", "", stripped))
+
+    if not labels:
+        for chunk in re.split(r"\s*(?:→|->|=>)\s*", answer or ""):
+            add(chunk)
+
+    for topic in _split_visual_topics(user_message):
+        add(topic)
+
+    for keyword in _extract_visual_keywords(f"{user_message} {answer}", limit=limit * 2):
+        add(keyword)
+
+    return labels[:limit]
+
+
+def _extract_protocol_labels(user_message: str, answer: str, limit: int = 6) -> List[str]:
+    protocol_map = {
+        "http/https": "HTTP/HTTPS",
+        "http": "HTTP",
+        "https": "HTTPS",
+        "smtp": "SMTP",
+        "imap": "IMAP",
+        "pop3": "POP3",
+        "tcp/ip": "TCP/IP",
+        "tcp": "TCP",
+        "udp": "UDP",
+        "tls/ssl": "TLS/SSL",
+        "tls": "TLS",
+        "ssl": "SSL",
+        "dns": "DNS",
+        "ftp": "FTP",
+        "ssh": "SSH",
+        "websocket": "WebSocket",
+        "rest api": "REST API",
+        "grpc": "gRPC",
+    }
+    text = f"{user_message} {answer}".lower()
+    found: List[str] = []
+    seen: set[str] = set()
+    for raw, label in protocol_map.items():
+        if raw in text and label.lower() not in seen:
+            seen.add(label.lower())
+            found.append(label)
+            if len(found) >= limit:
+                break
+    return found
+
+
+def _extract_component_labels(user_message: str, answer: str, limit: int = 8) -> List[str]:
+    component_map = {
+        "browser": "Browser",
+        "client": "Client",
+        "frontend ui": "Frontend UI",
+        "frontend": "Frontend UI",
+        "backend server": "Backend Server",
+        "backend": "Backend Server",
+        "application server": "Application Server",
+        "server": "Server",
+        "email client": "Email Client",
+        "email server": "Email Server",
+        "database": "Database",
+        "api gateway": "API Gateway",
+        "gateway": "Gateway",
+        "api": "API",
+        "cache": "Cache",
+        "router": "Router",
+        "switch": "Switch",
+        "firewall": "Firewall",
+        "internet": "Internet",
+        "ai model": "AI Model",
+        "model api": "AI Model API",
+        "load balancer": "Load Balancer",
+    }
+    text = f"{user_message} {answer}".lower()
+    found: List[str] = []
+    seen: set[str] = set()
+    for raw, label in component_map.items():
+        if raw in text and label.lower() not in seen:
+            seen.add(label.lower())
+            found.append(label)
+            if len(found) >= limit:
+                break
+    return found
+
+
+def _specific_diagram_requirements(user_message: str, answer: str, diagram_type: str) -> List[str]:
+    topics = _split_visual_topics(user_message)
+    labels = _extract_diagram_labels(user_message, answer)
+    protocols = _extract_protocol_labels(user_message, answer)
+    components = _extract_component_labels(user_message, answer)
+    normalized = (diagram_type or "").lower()
+
+    if "comparison" in normalized:
+        requirements = [
+            "Use two aligned comparison sections with consistent labels and matched rows.",
+            f'Include comparison points such as: {", ".join(labels[:6]) or "the main supported properties"}.',
+        ]
+        if len(topics) >= 2:
+            requirements.insert(
+                0,
+                f'Two side-by-side sections labeled "{topics[0]}" and "{topics[1]}".',
+            )
+        if components:
+            requirements.append(f'Use real components when applicable: {", ".join(components[:6])}.')
+        if protocols:
+            requirements.append(f'Use real protocols when applicable: {", ".join(protocols[:5])}.')
+        return requirements
+
+    if "flow" in normalized:
+        requirements = [
+            "Use a clear left-to-right or top-to-bottom sequence with arrows.",
+            f'Steps to include when supported: {" -> ".join(labels[:5]) or "the main supported steps"}.',
+            "Show the logical sequence and real data or control flow.",
+        ]
+        if components:
+            requirements.append(f'Include real components where relevant: {", ".join(components[:6])}.')
+        if protocols:
+            requirements.append(f'Label real protocols where relevant: {", ".join(protocols[:5])}.')
+        return requirements
+
+    if "architecture" in normalized:
+        requirements = [
+            "Use clearly separated rectangular components with arrows showing data flow or relationships.",
+            f'Components to include when supported: {", ".join(components[:6] or labels[:6]) or "the main supported components"}.',
+            "Show the logical direction of communication or data movement.",
+        ]
+        if protocols:
+            requirements.append(f'Label applicable protocols on the connecting arrows when supported: {", ".join(protocols[:5])}.')
+        return requirements
+
+    requirements = [
+        "Use a block diagram layout with labeled rectangular blocks and connecting arrows where needed.",
+        f'Include concepts or parts such as: {", ".join(labels[:6]) or "the main supported concepts"}.',
+    ]
+    if components:
+        requirements.append(f'Include real components where relevant: {", ".join(components[:6])}.')
+    if protocols:
+        requirements.append(f'Add real protocols only if they genuinely apply: {", ".join(protocols[:5])}.')
+    return requirements
+
+
+def _build_answer_image_prompt(user_message: str, answer: str) -> str:
+    cleaned_user = _normalize_image_prompt_text(user_message, 900)
+    cleaned_answer = _normalize_image_prompt_text(answer, 2400)
+    if not cleaned_answer:
+        return ""
+    diagram_type, layout_note, accuracy_note = _answer_visual_strategy(cleaned_user, cleaned_answer)
+    topic = _diagram_topic_text(cleaned_user, cleaned_answer)
+    specific_requirements = _specific_diagram_requirements(cleaned_user, cleaned_answer, diagram_type)
+    return (
+        f'Create a clean, minimal, textbook-style {diagram_type} explaining "{topic}".\n\n'
+        "Diagram rules:\n"
+        f"- Selected type: {diagram_type}\n"
+        "- Use real components and real protocols only when they genuinely apply to the topic\n"
+        "- Use proper data flow with arrows\n"
+        "- Use logical sequence from left to right or top to bottom\n\n"
+        "Style requirements:\n"
+        "- White background\n"
+        "- Flat 2D vector design (no 3D, no gradients, no shadows)\n"
+        "- Use simple geometric shapes, thin lines, and sharp edges\n"
+        "- Use a limited color palette (black, blue, grey)\n"
+        "- Clearly labeled components with readable sans-serif font\n"
+        "- Balanced spacing and alignment\n"
+        "- Arrows to show flow or relationships\n"
+        "- No decorative elements, no icons, no stock images, no UI cards\n"
+        "- Professional academic look (like engineering or CS textbooks)\n\n"
+        "Specific content requirements:\n"
+        f"- {layout_note}\n"
+        f"- {accuracy_note}\n"
+        + "".join(f"- {line}\n" for line in specific_requirements)
+        + "\nAccuracy requirements:\n"
+        "- Base the structure, labels, and relationships on the assistant answer below.\n"
+        "- If web grounding is provided, use it only to verify or refine the factual structure.\n"
+        "- Do not invent unsupported components, steps, or relationships.\n\n"
+        "Output:\n"
+        "- High resolution\n"
+        "- Centered layout\n"
+        "- Diagram only, no extra text outside the diagram\n\n"
+        f"User prompt: {cleaned_user}\n"
+        f"Assistant answer: {cleaned_answer}"
+    )[:3800]
+
+
+def _extract_answer_image_context_from_prompt(prompt: str) -> tuple[str, str]:
+    source = str(prompt or "").strip()
+    user_match = re.search(r"User prompt:\s*(.*?)(?:\nAssistant answer:|\Z)", source, re.S | re.I)
+    answer_match = re.search(r"Assistant answer:\s*(.*?)(?:\nWeb grounding for accuracy:|\Z)", source, re.S | re.I)
+    user_message = (user_match.group(1).strip() if user_match else "").strip()
+    answer = (answer_match.group(1).strip() if answer_match else "").strip()
+    return user_message, answer
+
+
+def _answer_image_search_suffix(diagram_type: str) -> str:
+    normalized = (diagram_type or "").lower()
+    if "comparison" in normalized:
+        return "comparison diagram"
+    if "process" in normalized:
+        return "process diagram"
+    if "flow" in normalized:
+        return "flow diagram"
+    if "architecture" in normalized or "system" in normalized or "network" in normalized:
+        return "architecture diagram"
+    if "block" in normalized or "concept" in normalized or "labeled" in normalized:
+        return "block diagram"
+    return "textbook diagram"
+
+
+def _build_answer_image_search_query(user_message: str, answer: str) -> str:
+    cleaned_user = _normalize_image_prompt_text(user_message, 240)
+    cleaned_answer = _normalize_image_prompt_text(answer, 320)
+    if not cleaned_user and not cleaned_answer:
+        return ""
+    diagram_type, _, _ = _answer_visual_strategy(cleaned_user, cleaned_answer)
+    topics = _split_visual_topics(cleaned_user)
+    keywords = _extract_visual_keywords(f"{cleaned_user} {cleaned_answer}", limit=6)
+    search_terms = " ".join(topics[:4] or keywords[:4] or [cleaned_user])
+    suffix = _answer_image_search_suffix(diagram_type)
+    return _normalize_image_prompt_text(f"{search_terms} {suffix}", 280)
+
+
+def _contains_search_term(haystack: str, term: str) -> bool:
+    normalized_haystack = (haystack or "").lower()
+    normalized_term = (term or "").strip().lower()
+    if not normalized_haystack or not normalized_term:
+        return False
+    compact = re.sub(r"[^a-z0-9]", "", normalized_term)
+    if compact and len(compact) <= 4:
+        return re.search(rf"(?<![a-z0-9]){re.escape(normalized_term)}(?![a-z0-9])", normalized_haystack) is not None
+    return normalized_term in normalized_haystack
+
+
+def _build_answer_image_search_queries(user_message: str, answer: str) -> List[str]:
+    cleaned_user = _normalize_image_prompt_text(user_message, 220)
+    cleaned_answer = _normalize_image_prompt_text(answer, 320)
+    if not cleaned_user and not cleaned_answer:
+        return []
+
+    diagram_type, _, _ = _answer_visual_strategy(cleaned_user, cleaned_answer)
+    suffix = _answer_image_search_suffix(diagram_type)
+    topics = _split_visual_topics(cleaned_user)
+    protocols = _extract_protocol_labels(cleaned_user, cleaned_answer, limit=4)
+    components = _extract_component_labels(cleaned_user, cleaned_answer, limit=4)
+    keywords = _extract_visual_keywords(f"{cleaned_user} {cleaned_answer}", limit=8)
+
+    queries = [
+        _build_answer_image_search_query(cleaned_user, cleaned_answer),
+        _normalize_image_prompt_text(f"{cleaned_user} {suffix}", 280),
+        _normalize_image_prompt_text(f"{' '.join(topics[:4])} {suffix}", 280) if topics else "",
+        _normalize_image_prompt_text(f"{' '.join(protocols[:4])} {suffix}", 280) if protocols else "",
+        _normalize_image_prompt_text(f"{' '.join(components[:4])} {suffix}", 280) if components else "",
+        _normalize_image_prompt_text(f"{' '.join(keywords[:5])} {suffix}", 280) if keywords else "",
+    ]
+
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for query in queries:
+        cleaned_query = " ".join((query or "").split()).strip()
+        if not cleaned_query:
+            continue
+        lowered = cleaned_query.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        deduped.append(cleaned_query)
+    return deduped[:4]
+
+
+def _score_answer_diagram_result(
+    result: dict,
+    *,
+    diagram_type: str,
+    required_terms: List[str],
+    query_index: int,
+) -> float:
+    haystack = " ".join(
+        str(result.get(field, "") or "").lower()
+        for field in ("title", "url", "source", "image_url", "thumbnail_url")
+    )
+    if not haystack:
+        return 0.0
+
+    match_count = 0
+    score = 0.0
+    for term in required_terms:
+        if _contains_search_term(haystack, term):
+            match_count += 1
+            score += 3.0
+
+    normalized_type = (diagram_type or "").lower()
+    for marker in {
+        "diagram",
+        "comparison",
+        "flow",
+        "architecture",
+        "block",
+        "protocol",
+        "system",
+        "network",
+        "chart",
+    }:
+        if marker in haystack:
+            score += 1.0
+
+    if normalized_type and normalized_type.split()[0] in haystack:
+        score += 2.0
+
+    width = result.get("width")
+    height = result.get("height")
+    if isinstance(width, int) and isinstance(height, int) and width > 0 and height > 0:
+        megapixels = (width * height) / 1_000_000
+        score += min(megapixels, 6.0)
+        if width >= 1200 or height >= 1200:
+            score += 1.5
+
+    if str(result.get("image_url") or "").strip():
+        score += 1.0
+
+    score += max(0, 2 - query_index) * 0.5
+    if match_count == 0:
+        score -= 2.5
+    return score
+
+
+async def _search_answer_diagrams(user_message: str, answer: str, limit: int = 2) -> List[str]:
+    cleaned_user = _normalize_image_prompt_text(user_message, 220)
+    cleaned_answer = _normalize_image_prompt_text(answer, 320)
+    if not cleaned_user and not cleaned_answer:
+        return []
+
+    diagram_type, _, _ = _answer_visual_strategy(cleaned_user, cleaned_answer)
+    required_terms = list(
+        dict.fromkeys(
+            _split_visual_topics(cleaned_user)
+            + _extract_protocol_labels(cleaned_user, cleaned_answer, limit=4)
+            + _extract_component_labels(cleaned_user, cleaned_answer, limit=4)
+            + _extract_visual_keywords(f"{cleaned_user} {cleaned_answer}", limit=6)
+        )
+    )[:8]
+
+    candidates: dict[str, float] = {}
+    for query_index, query in enumerate(_build_answer_image_search_queries(cleaned_user, cleaned_answer)):
+        results = await search_web_images(query, max_results=6)
+        for result in results:
+            image_url = str(result.get("image_url") or result.get("thumbnail_url") or "").strip()
+            if not image_url:
+                continue
+            score = _score_answer_diagram_result(
+                result,
+                diagram_type=diagram_type,
+                required_terms=required_terms,
+                query_index=query_index,
+            )
+            if score > 0:
+                candidates[image_url] = max(score, candidates.get(image_url, float("-inf")))
+
+    ranked = sorted(candidates.items(), key=lambda item: item[1], reverse=True)
+    return [image_url for image_url, _ in ranked[:limit]]
+
+
+async def _ground_answer_image_prompt(prompt: str) -> tuple[str, List[str]]:
+    user_message, answer = _extract_answer_image_context_from_prompt(prompt)
+    if not answer:
+        return prompt, []
+
+    web_images = await _search_answer_diagrams(user_message, answer, limit=2)
+    if web_images:
+        return prompt, web_images
+
+    grounding_lines = []
+    search_query = _build_answer_image_search_query(user_message, answer)
+    text_results = await search_web(search_query, max_results=3) if search_query else []
+    for index, result in enumerate(text_results[:3], start=1):
+        title = _normalize_image_prompt_text(str(result.get("title", "")), 120)
+        snippet = _normalize_image_prompt_text(str(result.get("snippet", "")), 220)
+        source = _normalize_image_prompt_text(str(result.get("source", "")), 60)
+        if not title and not snippet:
+            continue
+        grounding_lines.append(f"[{index}] {title} | {source} | {snippet}")
+
+    if not grounding_lines:
+        return prompt, []
+
+    grounded_prompt = (
+        f"{prompt}\n"
+        "Web grounding for accuracy:\n"
+        + "\n".join(grounding_lines)
+        + "\nUse the assistant answer plus this grounding. If they conflict, keep the visual conservative and do not add unsupported details."
+    )
+    return grounded_prompt[:4200], []
+
+
+async def _generate_images_best_effort(prompt: str) -> List[str]:
+    cleaned_prompt = (prompt or "").strip()
+    if not cleaned_prompt:
+        return []
+    grounded_prompt = cleaned_prompt
+    if "Assistant answer:" in cleaned_prompt:
+        grounded_prompt, web_images = await _ground_answer_image_prompt(cleaned_prompt)
+        if web_images:
+            return web_images
+        return []
+    try:
+        return await ai_service.generate_image(grounded_prompt)
+    except Exception as exc:
+        logger.warning(
+            "Image generation failed prompt=%s error=%s",
+            _preview_text(grounded_prompt),
+            exc,
+        )
+        return []
+
+
+def _start_prompt_image_task(enabled: bool, user_message: str):
+    if not enabled:
+        return None
+    prompt = _build_prompt_image_prompt(user_message)
+    if not prompt:
+        return None
+    return asyncio.create_task(_generate_images_best_effort(prompt))
+
+
+async def _await_image_task(task) -> List[str]:
+    if task is None:
+        return []
+    try:
+        return await task
+    except Exception as exc:
+        logger.warning("Image generation task failed error=%s", exc)
+        return []
+
+
+def _resolve_answer_image_request(requested: Optional[bool], meta: Optional[dict]) -> bool:
+    if requested is not None:
+        return bool(requested)
+    if isinstance(meta, dict):
+        return bool(meta.get("generate_answer_image"))
+    return False
 
 
 def _preview_text(text: str) -> str:
@@ -348,7 +1052,7 @@ def _append_message(
     content: str,
     meta: Optional[dict] = None,
 ):
-    append_conversation_message(db, conversation, role, content, meta)
+    return append_conversation_message(db, conversation, role, content, meta)
 
 
 def _save_conversation(db: Session, conversation: Conversation) -> Conversation:
@@ -441,12 +1145,14 @@ async def _maybe_enhance_temporal_message(message: str, force_search: bool = Fal
 async def chat(
     request: ChatRequest = Body(default=ChatRequest()),
     current_user: Optional[User] = Depends(get_current_user_optional),
-    db: Session = Depends(get_db),
+    db: Optional[Session] = Depends(get_db_optional),
 ):
     """Send a chat message and get AI response."""
     mode = (request.mode or "chat").lower()
     provider_key = (request.provider or "").strip().lower()
     fallback_message = FALLBACK_MESSAGE
+    generate_prompt_image = bool(request.generate_prompt_image)
+    generate_answer_image = bool(request.generate_answer_image)
 
     if not request.message or not request.message.strip():
         payload = response_envelope("Please enter a message.")
@@ -458,16 +1164,30 @@ async def chat(
             return StreamingResponse(generate_empty(), media_type="text/event-stream")
         return payload
 
-    if current_user is None:
+    if current_user is None or db is None:
         history = get_history(limit=20)
         instant = instant_reply(request.message)
         if instant:
+            prompt_images = []
+            answer_images = []
+            if generate_prompt_image and mode != "image":
+                prompt_images = await _generate_images_best_effort(_build_prompt_image_prompt(request.message))
+            if generate_answer_image and mode != "image":
+                answer_images = await _generate_images_best_effort(
+                    _build_answer_image_prompt(request.message, instant)
+                )
             add_message("user", request.message)
             add_message("assistant", instant)
-            payload = _payload(instant)
+            payload = _payload(instant, prompt_images=prompt_images, answer_images=answer_images)
             if request.stream:
                 async def generate_instant():
-                    yield _sse_event(_final_payload(instant))
+                    yield _sse_event(
+                        _final_payload(
+                            instant,
+                            prompt_images=prompt_images,
+                            answer_images=answer_images,
+                        )
+                    )
 
                 return StreamingResponse(generate_instant(), media_type="text/event-stream")
             return payload
@@ -496,6 +1216,8 @@ async def chat(
 
                     return StreamingResponse(generate_missing_key(), media_type="text/event-stream")
 
+                prompt_image_task = _start_prompt_image_task(generate_prompt_image, request.message)
+
                 async def generate_provider_stream():
                     full_response = ""
                     try:
@@ -505,8 +1227,20 @@ async def chat(
                         full_response = full_response.strip()
                         if not full_response:
                             raise RuntimeError("Provider returned an empty response")
+                        prompt_images = await _await_image_task(prompt_image_task)
+                        answer_images = []
+                        if generate_answer_image:
+                            answer_images = await _generate_images_best_effort(
+                                _build_answer_image_prompt(request.message, full_response)
+                            )
                         _log_chat_response(mode, provider_key, request.model, full_response)
-                        yield _sse_event(_final_payload(full_response))
+                        yield _sse_event(
+                            _final_payload(
+                                full_response,
+                                prompt_images=prompt_images,
+                                answer_images=answer_images,
+                            )
+                        )
                     except Exception as exc:
                         yield _sse_event(_final_payload(fallback_message, interrupted=True))
 
@@ -515,16 +1249,38 @@ async def chat(
             if not request.model:
                 return _payload(SETUP_RETRY_MESSAGE)
 
+            prompt_image_task = _start_prompt_image_task(generate_prompt_image, request.message)
+
             try:
                 answer = await generate_response(provider_key, request.model, public_messages)
                 text = (answer.get("response", "") if isinstance(answer, dict) else str(answer)).strip()
+                prompt_images = await _await_image_task(prompt_image_task)
+                answer_images = []
+                if text and generate_answer_image:
+                    answer_images = await _generate_images_best_effort(
+                        _build_answer_image_prompt(request.message, text)
+                    )
                 if text:
                     _log_chat_response(mode, provider_key, request.model, text)
-                return _payload(text or fallback_message)
+                return _payload(
+                    text or fallback_message,
+                    prompt_images=prompt_images,
+                    answer_images=answer_images,
+                )
             except Exception as exc:
                 logger.warning("Compatible provider public chat failed provider=%s model=%s error=%s", provider_key, request.model, exc)
                 answer = await _best_effort_answer(history, request.message, mode, None, None, force_search=force_search)
-                return _payload(answer)
+                prompt_images = await _await_image_task(prompt_image_task)
+                answer_images = []
+                if answer and generate_answer_image and answer != FALLBACK_MESSAGE:
+                    answer_images = await _generate_images_best_effort(
+                        _build_answer_image_prompt(request.message, answer)
+                    )
+                return _payload(
+                    answer,
+                    prompt_images=prompt_images,
+                    answer_images=answer_images,
+                )
 
         if mode == "documents":
             payload = response_envelope("Please log in to use document mode.")
@@ -537,6 +1293,7 @@ async def chat(
             return response_envelope("Please log in to use document mode.")
 
         if mode not in {"documents", "image"}:
+            prompt_image_task = _start_prompt_image_task(generate_prompt_image, request.message)
             add_message("user", request.message)
             answer = await _best_effort_answer(
                 history,
@@ -546,12 +1303,28 @@ async def chat(
                 model,
                 force_search=force_search,
             )
+            prompt_images = await _await_image_task(prompt_image_task)
+            answer_images = []
+            if answer and generate_answer_image and answer != FALLBACK_MESSAGE:
+                answer_images = await _generate_images_best_effort(
+                    _build_answer_image_prompt(request.message, answer)
+                )
             add_message("assistant", answer)
             _log_chat_response(mode, provider, model, answer)
-            payload = _payload(answer)
+            payload = _payload(
+                answer,
+                prompt_images=prompt_images,
+                answer_images=answer_images,
+            )
             if request.stream:
                 async def generate_fast():
-                    yield _sse_event(_final_payload(answer))
+                    yield _sse_event(
+                        _final_payload(
+                            answer,
+                            prompt_images=prompt_images,
+                            answer_images=answer_images,
+                        )
+                    )
 
                 return StreamingResponse(generate_fast(), media_type="text/event-stream")
             return payload
@@ -604,18 +1377,59 @@ async def chat(
         request.conversation_id,
         request.message,
     )
-    _append_message(db, conversation, "user", request.message)
+    user_message = _append_message(
+        db,
+        conversation,
+        "user",
+        request.message,
+        meta=_image_preferences(generate_prompt_image, generate_answer_image),
+    )
     conversation = _save_conversation(db, conversation)
+    prompt_image_task = _start_prompt_image_task(generate_prompt_image and mode != "image", request.message)
 
     instant = instant_reply(request.message)
     if instant:
-        _append_message(db, conversation, "assistant", instant)
+        prompt_images = await _await_image_task(prompt_image_task)
+        answer_images = []
+        if generate_answer_image and mode != "image":
+            answer_images = await _generate_images_best_effort(
+                _build_answer_image_prompt(request.message, instant)
+            )
+        _apply_images_to_message(
+            user_message,
+            images=prompt_images,
+            generate_prompt_image=generate_prompt_image,
+            generate_answer_image=generate_answer_image,
+        )
+        _append_message(
+            db,
+            conversation,
+            "assistant",
+            instant,
+            meta=_merge_message_meta(
+                {"mode": mode},
+                images=answer_images,
+                image_origin="answer" if answer_images else None,
+            ),
+        )
         conversation = _save_conversation(db, conversation)
         _log_chat_response(mode, request.provider, request.model, instant)
-        payload = _payload(instant, conversation)
+        payload = _payload(
+            instant,
+            conversation,
+            prompt_images=prompt_images,
+            answer_images=answer_images,
+        )
         if request.stream:
             async def generate_instant_auth():
-                yield _sse_event(_final_payload(instant, conversation))
+                yield _sse_event(
+                    _final_payload(
+                        instant,
+                        conversation,
+                        prompt_images=prompt_images,
+                        answer_images=answer_images,
+                    )
+                )
 
             return StreamingResponse(generate_instant_auth(), media_type="text/event-stream")
         return payload
@@ -660,10 +1474,39 @@ async def chat(
                     full_response = full_response.strip()
                     if not full_response:
                         raise RuntimeError("Provider returned an empty response")
-                    _append_message(db, conversation, "assistant", full_response)
+                    prompt_images = await _await_image_task(prompt_image_task)
+                    answer_images = []
+                    if generate_answer_image:
+                        answer_images = await _generate_images_best_effort(
+                            _build_answer_image_prompt(request.message, full_response)
+                        )
+                    _apply_images_to_message(
+                        user_message,
+                        images=prompt_images,
+                        generate_prompt_image=generate_prompt_image,
+                        generate_answer_image=generate_answer_image,
+                    )
+                    _append_message(
+                        db,
+                        conversation,
+                        "assistant",
+                        full_response,
+                        meta=_merge_message_meta(
+                            {"mode": mode},
+                            images=answer_images,
+                            image_origin="answer" if answer_images else None,
+                        ),
+                    )
                     saved_conversation = _save_conversation(db, conversation)
                     _log_chat_response(mode, provider_key, request.model, full_response)
-                    yield _sse_event(_final_payload(full_response, saved_conversation))
+                    yield _sse_event(
+                        _final_payload(
+                            full_response,
+                            saved_conversation,
+                            prompt_images=prompt_images,
+                            answer_images=answer_images,
+                        )
+                    )
                 except Exception as exc:
                     yield _sse_event(_final_payload(fallback_message, conversation, interrupted=True))
 
@@ -687,11 +1530,38 @@ async def chat(
                 force_search=force_search,
             )
 
-        _append_message(db, conversation, "assistant", text or fallback_message)
+        prompt_images = await _await_image_task(prompt_image_task)
+        answer_images = []
+        if text and generate_answer_image and text != FALLBACK_MESSAGE:
+            answer_images = await _generate_images_best_effort(
+                _build_answer_image_prompt(request.message, text)
+            )
+        _apply_images_to_message(
+            user_message,
+            images=prompt_images,
+            generate_prompt_image=generate_prompt_image,
+            generate_answer_image=generate_answer_image,
+        )
+        _append_message(
+            db,
+            conversation,
+            "assistant",
+            text or fallback_message,
+            meta=_merge_message_meta(
+                {"mode": mode},
+                images=answer_images,
+                image_origin="answer" if answer_images else None,
+            ),
+        )
         conversation = _save_conversation(db, conversation)
         if text:
             _log_chat_response(mode, provider_key, request.model, text)
-        return _payload(text or fallback_message, conversation)
+        return _payload(
+            text or fallback_message,
+            conversation,
+            prompt_images=prompt_images,
+            answer_images=answer_images,
+        )
 
     if mode not in {"documents", "image"}:
         history = _conversation_history(db, conversation, drop_last=True)
@@ -705,14 +1575,48 @@ async def chat(
             force_search=force_search,
         )
 
-        _append_message(db, conversation, "assistant", answer)
+        prompt_images = await _await_image_task(prompt_image_task)
+        answer_images = []
+        if answer and generate_answer_image and answer != FALLBACK_MESSAGE:
+            answer_images = await _generate_images_best_effort(
+                _build_answer_image_prompt(request.message, answer)
+            )
+        _apply_images_to_message(
+            user_message,
+            images=prompt_images,
+            generate_prompt_image=generate_prompt_image,
+            generate_answer_image=generate_answer_image,
+        )
+        _append_message(
+            db,
+            conversation,
+            "assistant",
+            answer,
+            meta=_merge_message_meta(
+                {"mode": mode},
+                images=answer_images,
+                image_origin="answer" if answer_images else None,
+            ),
+        )
         conversation = _save_conversation(db, conversation)
         _log_chat_response(mode, provider, model, answer)
-        payload = _payload(answer, conversation)
+        payload = _payload(
+            answer,
+            conversation,
+            prompt_images=prompt_images,
+            answer_images=answer_images,
+        )
 
         if request.stream:
             async def generate_fast_auth():
-                yield _sse_event(_final_payload(answer, conversation))
+                yield _sse_event(
+                    _final_payload(
+                        answer,
+                        conversation,
+                        prompt_images=prompt_images,
+                        answer_images=answer_images,
+                    )
+                )
 
             return StreamingResponse(generate_fast_auth(), media_type="text/event-stream")
         return payload
@@ -778,10 +1682,39 @@ async def chat(
                 full_response = full_response.strip()
                 if not full_response:
                     raise RuntimeError("AI provider returned an empty response")
-                _append_message(db, conversation, "assistant", full_response)
+                prompt_images = await _await_image_task(prompt_image_task)
+                answer_images = []
+                if generate_answer_image and mode != "image":
+                    answer_images = await _generate_images_best_effort(
+                        _build_answer_image_prompt(request.message, full_response)
+                    )
+                _apply_images_to_message(
+                    user_message,
+                    images=prompt_images,
+                    generate_prompt_image=generate_prompt_image,
+                    generate_answer_image=generate_answer_image,
+                )
+                _append_message(
+                    db,
+                    conversation,
+                    "assistant",
+                    full_response,
+                    meta=_merge_message_meta(
+                        {"mode": mode},
+                        images=answer_images,
+                        image_origin="answer" if answer_images else None,
+                    ),
+                )
                 saved_conversation = _save_conversation(db, conversation)
                 _log_chat_response(mode, provider, model, full_response)
-                yield _sse_event(_final_payload(full_response, saved_conversation))
+                yield _sse_event(
+                    _final_payload(
+                        full_response,
+                        saved_conversation,
+                        prompt_images=prompt_images,
+                        answer_images=answer_images,
+                    )
+                )
             except Exception as exc:
                 yield _sse_event(_final_payload(fallback_message, conversation, interrupted=True))
 
@@ -810,10 +1743,37 @@ async def chat(
         extra_instruction=REGENERATE_VARIATION_INSTRUCTION,
     )
 
-    _append_message(db, conversation, "assistant", response_text)
+    prompt_images = await _await_image_task(prompt_image_task)
+    answer_images = []
+    if response_text and generate_answer_image and mode != "image" and response_text != FALLBACK_MESSAGE:
+        answer_images = await _generate_images_best_effort(
+            _build_answer_image_prompt(request.message, response_text)
+        )
+    _apply_images_to_message(
+        user_message,
+        images=prompt_images,
+        generate_prompt_image=generate_prompt_image,
+        generate_answer_image=generate_answer_image,
+    )
+    _append_message(
+        db,
+        conversation,
+        "assistant",
+        response_text,
+        meta=_merge_message_meta(
+            {"mode": mode},
+            images=answer_images,
+            image_origin="answer" if answer_images else None,
+        ),
+    )
     conversation = _save_conversation(db, conversation)
     _log_chat_response(mode, provider, model, response_text)
-    return _payload(response_text, conversation)
+    return _payload(
+        response_text,
+        conversation,
+        prompt_images=prompt_images,
+        answer_images=answer_images,
+    )
 
 
 @router.post("/regenerate")
@@ -840,9 +1800,14 @@ async def regenerate(
     if not user_messages:
         raise HTTPException(status_code=400, detail="No user message to regenerate")
 
-    last_user_message_content = (user_messages[-1].content or "").strip()
+    last_user_message = user_messages[-1]
+    last_user_message_content = (last_user_message.content or "").strip()
     if not last_user_message_content:
         raise HTTPException(status_code=400, detail="Last user message is empty")
+    generate_answer_image = _resolve_answer_image_request(
+        request.generate_answer_image,
+        getattr(last_user_message, "meta", None),
+    )
 
     if message_records and message_records[-1].role == "assistant":
         db.delete(message_records[-1])
@@ -850,13 +1815,41 @@ async def regenerate(
 
     instant = instant_reply(last_user_message_content)
     if instant:
-        _append_message(db, conversation, "assistant", instant)
+        prompt_images = _message_images(last_user_message)
+        answer_images = []
+        if generate_answer_image and mode != "image":
+            answer_images = await _generate_images_best_effort(
+                _build_answer_image_prompt(last_user_message_content, instant)
+            )
+        _append_message(
+            db,
+            conversation,
+            "assistant",
+            instant,
+            meta=_merge_message_meta(
+                {"mode": mode},
+                images=answer_images,
+                image_origin="answer" if answer_images else None,
+            ),
+        )
         conversation = _save_conversation(db, conversation)
         _log_chat_response(mode, request.provider, request.model, instant)
-        payload = _payload(instant, conversation)
+        payload = _payload(
+            instant,
+            conversation,
+            prompt_images=prompt_images,
+            answer_images=answer_images,
+        )
         if request.stream:
             async def generate_instant():
-                yield _sse_event(_final_payload(instant, conversation))
+                yield _sse_event(
+                    _final_payload(
+                        instant,
+                        conversation,
+                        prompt_images=prompt_images,
+                        answer_images=answer_images,
+                    )
+                )
 
             return StreamingResponse(generate_instant(), media_type="text/event-stream")
         return payload
@@ -901,10 +1894,33 @@ async def regenerate(
                     full_response = full_response.strip()
                     if not full_response:
                         raise RuntimeError("Provider returned an empty response")
-                    _append_message(db, conversation, "assistant", full_response)
+                    prompt_images = _message_images(last_user_message)
+                    answer_images = []
+                    if generate_answer_image:
+                        answer_images = await _generate_images_best_effort(
+                            _build_answer_image_prompt(last_user_message_content, full_response)
+                        )
+                    _append_message(
+                        db,
+                        conversation,
+                        "assistant",
+                        full_response,
+                        meta=_merge_message_meta(
+                            {"mode": mode},
+                            images=answer_images,
+                            image_origin="answer" if answer_images else None,
+                        ),
+                    )
                     saved_conversation = _save_conversation(db, conversation)
                     _log_chat_response(mode, provider_key, request.model, full_response)
-                    yield _sse_event(_final_payload(full_response, saved_conversation))
+                    yield _sse_event(
+                        _final_payload(
+                            full_response,
+                            saved_conversation,
+                            prompt_images=prompt_images,
+                            answer_images=answer_images,
+                        )
+                    )
                 except Exception as exc:
                     yield _sse_event(_final_payload(fallback_message, conversation, interrupted=True))
 
@@ -933,11 +1949,32 @@ async def regenerate(
                 force_search=force_search,
             )
 
-        _append_message(db, conversation, "assistant", text or fallback_message)
+        prompt_images = _message_images(last_user_message)
+        answer_images = []
+        if text and generate_answer_image and text != FALLBACK_MESSAGE:
+            answer_images = await _generate_images_best_effort(
+                _build_answer_image_prompt(last_user_message_content, text)
+            )
+        _append_message(
+            db,
+            conversation,
+            "assistant",
+            text or fallback_message,
+            meta=_merge_message_meta(
+                {"mode": mode},
+                images=answer_images,
+                image_origin="answer" if answer_images else None,
+            ),
+        )
         conversation = _save_conversation(db, conversation)
         if text:
             _log_chat_response(mode, provider_key, request.model, text)
-        return _payload(text or fallback_message, conversation)
+        return _payload(
+            text or fallback_message,
+            conversation,
+            prompt_images=prompt_images,
+            answer_images=answer_images,
+        )
 
     if mode not in {"documents", "image"}:
         history = _conversation_history(db, conversation, drop_last=True)
@@ -951,14 +1988,42 @@ async def regenerate(
             force_search=force_search,
         )
 
-        _append_message(db, conversation, "assistant", answer)
+        prompt_images = _message_images(last_user_message)
+        answer_images = []
+        if answer and generate_answer_image and answer != FALLBACK_MESSAGE:
+            answer_images = await _generate_images_best_effort(
+                _build_answer_image_prompt(last_user_message_content, answer)
+            )
+        _append_message(
+            db,
+            conversation,
+            "assistant",
+            answer,
+            meta=_merge_message_meta(
+                {"mode": mode},
+                images=answer_images,
+                image_origin="answer" if answer_images else None,
+            ),
+        )
         conversation = _save_conversation(db, conversation)
         _log_chat_response(mode, provider, model, answer)
-        payload = _payload(answer, conversation)
+        payload = _payload(
+            answer,
+            conversation,
+            prompt_images=prompt_images,
+            answer_images=answer_images,
+        )
 
         if request.stream:
             async def generate_fast():
-                yield _sse_event(_final_payload(answer, conversation))
+                yield _sse_event(
+                    _final_payload(
+                        answer,
+                        conversation,
+                        prompt_images=prompt_images,
+                        answer_images=answer_images,
+                    )
+                )
 
             return StreamingResponse(generate_fast(), media_type="text/event-stream")
         return payload
@@ -1024,10 +2089,33 @@ async def regenerate(
                 full_response = full_response.strip()
                 if not full_response:
                     raise RuntimeError("AI provider returned an empty response")
-                _append_message(db, conversation, "assistant", full_response)
+                prompt_images = _message_images(last_user_message)
+                answer_images = []
+                if generate_answer_image and mode != "image":
+                    answer_images = await _generate_images_best_effort(
+                        _build_answer_image_prompt(last_user_message_content, full_response)
+                    )
+                _append_message(
+                    db,
+                    conversation,
+                    "assistant",
+                    full_response,
+                    meta=_merge_message_meta(
+                        {"mode": mode},
+                        images=answer_images,
+                        image_origin="answer" if answer_images else None,
+                    ),
+                )
                 saved_conversation = _save_conversation(db, conversation)
                 _log_chat_response(mode, provider, model, full_response)
-                yield _sse_event(_final_payload(full_response, saved_conversation))
+                yield _sse_event(
+                    _final_payload(
+                        full_response,
+                        saved_conversation,
+                        prompt_images=prompt_images,
+                        answer_images=answer_images,
+                    )
+                )
             except Exception as exc:
                 yield _sse_event(_final_payload(fallback_message, conversation, interrupted=True))
 
@@ -1055,10 +2143,31 @@ async def regenerate(
         doc_context=doc_context,
         extra_instruction=REGENERATE_VARIATION_INSTRUCTION,
     )
-    _append_message(db, conversation, "assistant", response_text)
+    prompt_images = _message_images(last_user_message)
+    answer_images = []
+    if response_text and generate_answer_image and mode != "image" and response_text != FALLBACK_MESSAGE:
+        answer_images = await _generate_images_best_effort(
+            _build_answer_image_prompt(last_user_message_content, response_text)
+        )
+    _append_message(
+        db,
+        conversation,
+        "assistant",
+        response_text,
+        meta=_merge_message_meta(
+            {"mode": mode},
+            images=answer_images,
+            image_origin="answer" if answer_images else None,
+        ),
+    )
     conversation = _save_conversation(db, conversation)
     _log_chat_response(mode, provider, model, response_text)
-    return _payload(response_text, conversation)
+    return _payload(
+        response_text,
+        conversation,
+        prompt_images=prompt_images,
+        answer_images=answer_images,
+    )
 
 
 @router.get("/providers")
@@ -1083,6 +2192,7 @@ async def get_conversations(
         {
             "id": conv.id,
             "title": conv.title,
+            "model": conv.model,
             "created_at": conv.created_at.isoformat(),
             "updated_at": conv.updated_at.isoformat() if conv.updated_at else (conv.created_at.isoformat() if conv.created_at else None),
         }

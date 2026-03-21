@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import AsyncGenerator, Dict, List, Optional
+from xml.sax.saxutils import escape
 
 import httpx
 
@@ -771,15 +773,30 @@ class AIService:
 
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI(api_key=openai_key, timeout=_request_timeout_seconds())
-        response = await client.images.generate(
-            model=getattr(settings, "OPENAI_IMAGE_MODEL", "dall-e-3"),
-            prompt=prompt,
-            size=size,
-            n=n,
-            response_format="b64_json",
-        )
-        return [item.b64_json for item in response.data]
+        try:
+            client = AsyncOpenAI(api_key=openai_key, timeout=_request_timeout_seconds())
+            model_name = getattr(settings, "OPENAI_IMAGE_MODEL", "dall-e-3")
+            request_args = {
+                "model": model_name,
+                "prompt": prompt,
+                "size": size,
+                "n": n,
+                "response_format": "b64_json",
+            }
+            if model_name == "dall-e-3":
+                request_args["quality"] = getattr(settings, "OPENAI_IMAGE_QUALITY", "hd") or "hd"
+            response = await client.images.generate(**request_args)
+            images = [
+                item.b64_json
+                if str(item.b64_json or "").startswith("data:")
+                else f"data:image/png;base64,{item.b64_json}"
+                for item in response.data
+                if getattr(item, "b64_json", None)
+            ]
+            return images or [generate_image_url(prompt)]
+        except Exception as exc:
+            logger.warning("Image API failed; using local visual fallback error=%s", exc)
+            return [generate_image_url(prompt)]
 
     async def get_available_providers(self) -> List[Dict]:
         providers = []
@@ -862,21 +879,445 @@ async def stream_chat(
 def generate_image_url(prompt: str) -> str:
     from urllib.parse import quote
 
-    safe_prompt = str(prompt or "NOVA AI").strip()[:60]
-    svg = (
-        "<svg xmlns='http://www.w3.org/2000/svg' width='1024' height='1024'>"
-        "<defs>"
-        "<linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
-        "<stop offset='0%' stop-color='#0f172a'/>"
-        "<stop offset='100%' stop-color='#111827'/>"
-        "</linearGradient>"
-        "</defs>"
-        "<rect width='100%' height='100%' fill='url(#g)'/>"
-        "<text x='50%' y='50%' font-size='42' fill='#f8fafc' "
-        "font-family='Times New Roman, Times, serif' "
-        "text-anchor='middle' dominant-baseline='middle'>"
-        f"{safe_prompt}"
-        "</text>"
-        "</svg>"
+    def extract_context(raw_prompt: str) -> tuple[str, str]:
+        source = str(raw_prompt or "").strip()
+        user_match = re.search(r"User prompt:\s*(.*?)(?:\nAssistant answer:|\Z)", source, re.S | re.I)
+        answer_match = re.search(r"Assistant answer:\s*(.*?)(?:\nWeb grounding for accuracy:|\Z)", source, re.S | re.I)
+        user_prompt = (user_match.group(1).strip() if user_match else "").strip()
+        answer = (answer_match.group(1).strip() if answer_match else "").strip()
+        if not user_prompt and not answer:
+            source = re.sub(r"Create .*?visual .*?(?:\n|$)", "", source, flags=re.I | re.S)
+            source = re.sub(r"Prefer .*?concept\.\s*", "", source, flags=re.I | re.S)
+            source = re.sub(r"Web grounding for accuracy:.*\Z", "", source, flags=re.I | re.S)
+            user_prompt = source.strip()
+        return user_prompt, answer
+
+    def short_text(value: str, limit: int) -> str:
+        cleaned = " ".join((value or "").split()).strip()
+        return cleaned[:limit].strip()
+
+    def wrap_text(value: str, max_chars: int, max_lines: int = 3) -> List[str]:
+        words = short_text(value, 240).split()
+        if not words:
+            return []
+
+        lines: List[str] = []
+        current = words[0]
+        for word in words[1:]:
+            if len(current) + 1 + len(word) <= max_chars:
+                current = f"{current} {word}"
+            else:
+                lines.append(current)
+                current = word
+                if len(lines) >= max_lines - 1:
+                    break
+        if current and len(lines) < max_lines:
+                lines.append(current)
+        return lines[:max_lines]
+
+    def extract_topics(question: str) -> List[str]:
+        cleaned = short_text(question, 180)
+        if not cleaned:
+            return []
+
+        cleaned = re.sub(
+            r"\b(explain|what is|what are|how does|how do|how is|how are|tell me about|difference between|compare|between|show me|diagram of)\b",
+            "",
+            cleaned,
+            flags=re.I,
+        )
+        cleaned = re.sub(r"\b(work|works|working|function|functions|overview|basics|concept)\b", "", cleaned, flags=re.I)
+        parts = re.split(r"\s*(?:,|/|\band\b|\bvs\.?\b|\bversus\b)\s*", cleaned, flags=re.I)
+        topics: List[str] = []
+        for part in parts:
+            candidate = short_text(re.sub(r"[?!.]", "", part), 30)
+            if len(candidate) < 2:
+                continue
+            if candidate.lower() in {"the", "a", "an", "of", "for"}:
+                continue
+            topics.append(candidate)
+        return list(dict.fromkeys(topics))[:4]
+
+    def extract_items(text: str) -> List[str]:
+        source = str(text or "").strip()
+        if not source:
+            return []
+
+        table_rows = []
+        for line in source.splitlines():
+            stripped = line.strip()
+            if stripped.count("|") < 2:
+                continue
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if not cells or all(re.fullmatch(r"[-: ]+", cell or "") for cell in cells):
+                continue
+            table_rows.append(cells)
+        if len(table_rows) >= 2:
+            headers = table_rows[0]
+            summaries: List[str] = []
+            for row in table_rows[1:6]:
+                pairs = [
+                    f"{headers[index]}: {row[index]}"
+                    for index in range(min(len(headers), len(row)))
+                    if headers[index] and row[index]
+                ]
+                candidate = short_text("; ".join(pairs[:3]), 96)
+                if candidate:
+                    summaries.append(candidate)
+            if summaries:
+                return summaries[:5]
+
+        bullet_items = [
+            short_text(re.sub(r"^[-*0-9.\s]+", "", line), 90)
+            for line in source.splitlines()
+            if line.strip().startswith(("-", "*")) or re.match(r"^\d+[.)]\s", line.strip())
+        ]
+        bullet_items = [item for item in bullet_items if item]
+        if bullet_items:
+            return bullet_items[:5]
+
+        sentence_items = []
+        for sentence in re.split(r"(?<=[.!?])\s+", source):
+            candidate = short_text(sentence, 90)
+            if len(candidate) < 14:
+                continue
+            sentence_items.append(candidate)
+        return sentence_items[:5]
+
+    def topic_points(topics: List[str], items: List[str]) -> List[str]:
+        if not topics:
+            return items[:4]
+
+        matched: List[str] = []
+        lowered_items = [item.lower() for item in items]
+        used_indexes: set[int] = set()
+        for topic in topics:
+            topic_key = topic.lower()
+            match_index = next(
+                (index for index, item in enumerate(lowered_items) if topic_key in item and index not in used_indexes),
+                None,
+            )
+            if match_index is None:
+                match_index = next((index for index in range(len(items)) if index not in used_indexes), None)
+            if match_index is not None:
+                used_indexes.add(match_index)
+                matched.append(items[match_index])
+        return matched[: max(1, min(len(topics), 4))]
+
+    def extract_dates(text: str) -> List[str]:
+        matches = re.findall(
+            r"\b(?:\d{4}|\d{3}s|\d{2}(?:st|nd|rd|th)\s+century|ancient|medieval|modern)\b",
+            text or "",
+            flags=re.I,
+        )
+        dates: List[str] = []
+        seen: set[str] = set()
+        for value in matches:
+            normalized = value.strip()
+            lowered = normalized.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            dates.append(normalized)
+        return dates[:4]
+
+    def detect_style(question: str, answer_text: str, topics: List[str], items: List[str]) -> str:
+        combined = f"{question} {answer_text}".lower()
+        if re.search(r"^\s*\|.+\|\s*$", answer_text or "", re.M):
+            return "comparison"
+        if re.search(r"\b(compare|comparison|difference|vs|versus|distinguish)\b", combined) and len(topics) >= 2:
+            return "comparison"
+        if len(topics) >= 2 and re.search(r"\b(and|vs|versus)\b", question.lower()) and not re.search(
+            r"\b(cycle|phase|timeline|history|process|workflow|steps?)\b",
+            combined,
+        ):
+            return "comparison"
+        if re.search(r"\b(timeline|history|historical|evolution|chronology|progression)\b", combined) or extract_dates(combined):
+            return "timeline"
+        if re.search(r"\b(cycle|life cycle|lifecycle|phase|stages?)\b", combined):
+            return "cycle"
+        if re.search(r"\b(network|internet|client|server|router|request|response|database|api)\b", combined):
+            return "network"
+        if re.search(r"\b(layer|layers|architecture|structure|components?|parts?|types?|stack)\b", combined):
+            return "hierarchy"
+        if re.search(r"\b(how|process|workflow|works|working|steps?|flow|pipeline)\b", combined) and len(items) >= 3:
+            return "process"
+        if len(topics) >= 3:
+            return "concept"
+        return "concept"
+
+    def detect_domain(question: str, answer_text: str) -> str:
+        combined = f"{question} {answer_text}".lower()
+        if re.search(
+            r"\b(ram|rom|cpu|gpu|cache|memory|storage|disk|kernel|database|server|client|network|api|http|tcp|udp|os|operating system|algorithm|compiler|pipeline|router)\b",
+            combined,
+        ):
+            return "technology"
+        if re.search(
+            r"\b(cell|heart|brain|photosynthesis|ecosystem|dna|protein|atom|molecule|respiration|blood|plant|animal|organ|nucleus)\b",
+            combined,
+        ):
+            return "science"
+        if re.search(r"\b(history|empire|war|revolution|century|medieval|ancient|modern|dynasty|timeline)\b", combined):
+            return "history"
+        if re.search(r"\b(market|business|finance|revenue|profit|supply|demand|inflation|economy|sales)\b", combined):
+            return "business"
+        return "general"
+
+    def build_theme(style: str, domain: str) -> Dict[str, object]:
+        return {
+            "bg_start": "#ffffff",
+            "bg_end": "#ffffff",
+            "glow": "#ffffff",
+            "label": "#1d4ed8",
+            "title": "#111827",
+            "subtitle": "#6b7280",
+            "body": "#374151",
+            "footer": "#6b7280",
+            "panel_fill": "#ffffff",
+            "panel_stroke": "#9ca3af",
+            "frame_stroke": "#d1d5db",
+            "connector": "#6b7280",
+            "pattern": "none",
+            "pattern_color": "#ffffff",
+            "colors": ["#1d4ed8", "#6b7280", "#111827", "#9ca3af"],
+        }
+
+    def multiline_text(
+        x: int,
+        y: int,
+        lines: List[str],
+        *,
+        font_size: int,
+        fill: str,
+        weight: str = "400",
+        anchor: str = "start",
+    ) -> str:
+        content = [escape(line) for line in lines if line]
+        if not content:
+            return ""
+        line_height = int(font_size * 1.32)
+        spans = "".join(
+            f"<tspan x='{x}' dy='{0 if index == 0 else line_height}'>{line}</tspan>"
+            for index, line in enumerate(content)
+        )
+        return (
+            f"<text x='{x}' y='{y}' font-size='{font_size}' fill='{fill}' text-anchor='{anchor}' "
+            f"font-weight='{weight}' font-family='Segoe UI, Arial, sans-serif'>{spans}</text>"
+        )
+
+    def background_pattern() -> str:
+        return ""
+
+    def background_overlay() -> str:
+        return ""
+
+    def render_header(title_lines: List[str], subtitle_lines: List[str], label: str) -> str:
+        return (
+            f"<text x='512' y='86' font-size='18' fill='{theme['label']}' text-anchor='middle' font-family='Arial, Helvetica, sans-serif'>"
+            f"{escape(label)}</text>"
+            + multiline_text(512, 132, title_lines[:2] or ["Diagram"], font_size=34, fill=str(theme["title"]), weight="600", anchor="middle")
+        )
+
+    def panel(x: int, y: int, width: int, height: int, title: str, body: str, accent: str) -> str:
+        title_lines = wrap_text(title, 18, 2)
+        body_lines = wrap_text(body, 24, 4)
+        return (
+            "<g>"
+            f"<rect x='{x}' y='{y}' width='{width}' height='{height}' rx='2' fill='{theme['panel_fill']}' stroke='{accent}' stroke-width='1.8'/>"
+            + multiline_text(x + 22, y + 42, title_lines, font_size=22, fill=str(theme["title"]), weight="600")
+            + multiline_text(x + 22, y + 90, body_lines, font_size=18, fill=str(theme["body"]))
+            + "</g>"
+        )
+
+    def render_comparison(topics: List[str], mapped_points: List[str]) -> str:
+        colors = list(theme["colors"])
+        cards = []
+        count = max(2, min(len(topics), 4))
+        gap = 22
+        total_width = 884
+        column_width = int((total_width - ((count - 1) * gap)) / count)
+        start_x = int((1024 - ((count * column_width) + ((count - 1) * gap))) / 2)
+        for index, topic in enumerate(topics[:count]):
+            cards.append(
+                panel(
+                    start_x + index * (column_width + gap),
+                    306,
+                    column_width,
+                    430,
+                    topic,
+                    mapped_points[index] if index < len(mapped_points) else "Key traits from the answer.",
+                    colors[index % len(colors)],
+                )
+            )
+        return "".join(cards)
+
+    def render_process(items: List[str]) -> str:
+        colors = list(theme["colors"])
+        count = max(3, min(len(items), 4))
+        gap = 24
+        node_width = 180
+        total_width = (count * node_width) + ((count - 1) * gap)
+        start_x = int((1024 - total_width) / 2)
+        node_positions = [(start_x + index * (node_width + gap), 404) for index in range(count)]
+        nodes = []
+        arrows = []
+        for index, (x, y) in enumerate(node_positions):
+            body = items[index] if index < len(items) else "Key step"
+            nodes.append(panel(x, y, node_width, 210, f"Step {index + 1}", body, colors[index % len(colors)]))
+            if index < len(node_positions) - 1:
+                arrows.append(
+                    f"<line x1='{x + node_width}' y1='{y + 105}' x2='{node_positions[index + 1][0] - 18}' y2='{y + 105}' "
+                    f"stroke='{theme['connector']}' stroke-width='2' stroke-linecap='round'/>"
+                    f"<polygon points='{node_positions[index + 1][0] - 18},{y + 92} {node_positions[index + 1][0] - 18},{y + 118} {node_positions[index + 1][0] + 6},{y + 105}' "
+                    f"fill='{theme['label']}'/>"
+                )
+        return "".join(arrows + nodes)
+
+    def render_hierarchy(items: List[str]) -> str:
+        widths = [660, 570, 480, 390]
+        y_positions = [302, 434, 566, 698]
+        colors = list(theme["colors"])
+        blocks = []
+        for index, y in enumerate(y_positions):
+            width = widths[index]
+            x = int((1024 - width) / 2)
+            body = items[index] if index < len(items) else "Layer summary"
+            blocks.append(panel(x, y, width, 96, f"Layer {index + 1}", body, colors[index % len(colors)]))
+        connectors = "".join(
+            f"<line x1='512' y1='{396 + (index * 132)}' x2='512' y2='{428 + (index * 132)}' stroke='{theme['connector']}' stroke-width='2' stroke-linecap='round'/>"
+            for index in range(3)
+        )
+        return connectors + "".join(blocks)
+
+    def render_cycle(items: List[str]) -> str:
+        positions = [(512, 332), (760, 512), (512, 712), (264, 512)]
+        colors = list(theme["colors"])
+        nodes = []
+        arrows = [
+            f"<path d='M 585 356 C 660 392 704 432 734 478' fill='none' stroke='{theme['connector']}' stroke-width='2' stroke-linecap='round'/>",
+            f"<path d='M 736 584 C 702 652 650 694 582 724' fill='none' stroke='{theme['connector']}' stroke-width='2' stroke-linecap='round'/>",
+            f"<path d='M 438 724 C 370 694 318 652 286 584' fill='none' stroke='{theme['connector']}' stroke-width='2' stroke-linecap='round'/>",
+            f"<path d='M 288 478 C 320 412 370 370 438 340' fill='none' stroke='{theme['connector']}' stroke-width='2' stroke-linecap='round'/>",
+        ]
+        for index, (x, y) in enumerate(positions):
+            title = f"Stage {index + 1}"
+            body_lines = wrap_text(items[index] if index < len(items) else "Cycle point", 16, 3)
+            nodes.append(
+                "<g>"
+                f"<rect x='{x - 104}' y='{y - 74}' width='208' height='148' rx='2' fill='{theme['panel_fill']}' stroke='{colors[index % len(colors)]}' stroke-width='1.8'/>"
+                + multiline_text(x, y - 24, [title], font_size=22, fill=str(theme["title"]), weight="600", anchor="middle")
+                + multiline_text(x, y + 12, body_lines, font_size=18, fill=str(theme["body"]), anchor="middle")
+                + "</g>"
+            )
+        return "".join(arrows + nodes)
+
+    def render_timeline(items: List[str], dates: List[str]) -> str:
+        colors = list(theme["colors"])
+        count = max(3, min(len(items), 4))
+        centers = [152, 392, 632, 872][:count]
+        cards = []
+        connectors = [
+            f"<line x1='{centers[0]}' y1='520' x2='{centers[-1]}' y2='520' stroke='{theme['connector']}' stroke-width='2' stroke-linecap='round'/>"
+        ]
+        for index, center_x in enumerate(centers):
+            top = index % 2 == 0
+            card_y = 304 if top else 566
+            marker_y = 520
+            cards.append(
+                f"<line x1='{center_x}' y1='{marker_y}' x2='{center_x}' y2='{card_y + (210 if top else 0)}' stroke='{theme['connector']}' stroke-width='2' stroke-linecap='round'/>"
+                f"<circle cx='{center_x}' cy='{marker_y}' r='9' fill='{colors[index % len(colors)]}'/>"
+            )
+            label = dates[index] if index < len(dates) else f"Stage {index + 1}"
+            cards.append(panel(center_x - 92, card_y, 184, 210, label, items[index], colors[index % len(colors)]))
+        return "".join(connectors + cards)
+
+    def render_network(topics: List[str], mapped_points: List[str], title_text: str) -> str:
+        colors = list(theme["colors"])
+        center_title = short_text(title_text, 34) or "System"
+        nodes = [
+            "<g>"
+            f"<rect x='372' y='420' width='280' height='188' rx='2' fill='{theme['panel_fill']}' stroke='{theme['label']}' stroke-width='1.8'/>"
+            + multiline_text(512, 488, wrap_text(center_title, 18, 2), font_size=26, fill=str(theme["title"]), weight="600", anchor="middle")
+            + multiline_text(512, 544, ["Main system"], font_size=18, fill=str(theme["subtitle"]), anchor="middle")
+            + "</g>"
+        ]
+        positions = [(100, 278), (744, 278), (100, 650), (744, 650)]
+        for index, (x, y) in enumerate(positions[: max(2, min(len(topics) or 3, 4))]):
+            topic = topics[index] if index < len(topics) else f"Node {index + 1}"
+            body = mapped_points[index] if index < len(mapped_points) else "Connected concept"
+            nodes.append(
+                f"<line x1='512' y1='514' x2='{x + 140}' y2='{y + 88}' stroke='{theme['connector']}' stroke-width='2' stroke-linecap='round'/>"
+            )
+            nodes.append(panel(x, y, 280, 176, topic, body, colors[index % len(colors)]))
+        return "".join(nodes)
+
+    def render_concept(topics: List[str], mapped_points: List[str], title_text: str) -> str:
+        positions = [(236, 356), (788, 356), (236, 676), (788, 676)]
+        colors = list(theme["colors"])
+        nodes = [
+            "<g>"
+            f"<rect x='362' y='432' width='300' height='164' rx='2' fill='{theme['panel_fill']}' stroke='{theme['label']}' stroke-width='1.8'/>"
+            + multiline_text(512, 492, wrap_text(title_text, 18, 3), font_size=26, fill=str(theme["title"]), weight="600", anchor="middle")
+            + "</g>"
+        ]
+        connectors = []
+        for index, (x, y) in enumerate(positions[: max(2, min(len(topics) or 3, 4))]):
+            topic = topics[index] if index < len(topics) else f"Concept {index + 1}"
+            body = mapped_points[index] if index < len(mapped_points) else "Key point"
+            connectors.append(
+                f"<line x1='512' y1='514' x2='{x}' y2='{y}' stroke='{theme['connector']}' stroke-width='2' stroke-linecap='round'/>"
+            )
+            nodes.append(
+                "<g>"
+                f"<rect x='{x - 118}' y='{y - 74}' width='236' height='148' rx='2' fill='{theme['panel_fill']}' stroke='{colors[index % len(colors)]}' stroke-width='1.8'/>"
+                + multiline_text(x, y - 18, wrap_text(topic, 14, 2), font_size=22, fill=str(theme["title"]), weight="600", anchor="middle")
+                + multiline_text(x, y + 18, wrap_text(body, 16, 3), font_size=18, fill=str(theme["body"]), anchor="middle")
+                + "</g>"
+            )
+        return "".join(connectors + nodes)
+
+    user_prompt, answer = extract_context(prompt)
+    title_source = user_prompt or answer or "NOVA AI"
+    title = short_text(title_source, 52) or "NOVA AI"
+    topics = extract_topics(user_prompt or title_source)
+    items = extract_items(answer or user_prompt)
+    mapped_points = topic_points(topics, items)
+    style = detect_style(user_prompt, answer, topics, items)
+    dates = extract_dates(f"{user_prompt} {answer}")
+    theme = build_theme(style, "general")
+    header = render_header(
+        wrap_text(title, 22, 2),
+        wrap_text(short_text(user_prompt or answer, 120), 42, 2),
+        f"{style.title()}",
+    )
+
+    if style == "comparison" and len(topics) >= 2:
+        body = render_comparison(topics[:4], mapped_points)
+    elif style == "timeline" and items:
+        body = render_timeline(items[:4], dates)
+    elif style == "process" and items:
+        body = render_process(items[:4])
+    elif style == "hierarchy" and items:
+        body = render_hierarchy(items[:4])
+    elif style == "cycle" and items:
+        body = render_cycle((items + items)[:4])
+    elif style == "network":
+        body = render_network(topics[:4], mapped_points[:4] or items[:4], title)
+    else:
+        body = render_concept(topics[:4], mapped_points[:4] or items[:4], title)
+
+    footer = ""
+
+    svg = "".join(
+        [
+            "<svg xmlns='http://www.w3.org/2000/svg' width='1024' height='1024'>",
+            "<rect width='100%' height='100%' fill='#ffffff'/>",
+            f"<rect x='42' y='42' width='940' height='940' rx='2' fill='none' stroke='{theme['frame_stroke']}' stroke-width='1.5'/>",
+            header,
+            body,
+            footer,
+            "</svg>",
+        ]
     )
     return f"data:image/svg+xml;utf8,{quote(svg)}"

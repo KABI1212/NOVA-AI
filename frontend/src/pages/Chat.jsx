@@ -82,6 +82,46 @@ const markdownToSpeechText = (value) =>
     .replace(/\s+/g, " ")
     .trim();
 
+const getResponseImages = (payload) => ({
+  promptImages: Array.isArray(payload?.prompt_images) ? payload.prompt_images : [],
+  answerImages: Array.isArray(payload?.answer_images)
+    ? payload.answer_images
+    : Array.isArray(payload?.images)
+      ? payload.images
+      : [],
+});
+
+const buildProgressStatus = ({
+  text,
+  isSearch = false,
+  generatePromptImage = false,
+  generateAnswerImage = false,
+  regenerate = false,
+}) => {
+  const withImages = generatePromptImage || generateAnswerImage;
+
+  if (regenerate) {
+    if (withImages) {
+      return isSearch
+        ? "NOVA AI is re-checking the answer and refreshing the image..."
+        : "NOVA AI is refining the answer and refreshing the image...";
+    }
+    return isSearch
+      ? "NOVA AI is re-checking the latest information..."
+      : "NOVA AI is refining the latest answer...";
+  }
+
+  if (withImages) {
+    return isSearch || TEMPORAL_QUERY_PATTERN.test(text)
+      ? "NOVA AI is searching and generating images..."
+      : "NOVA AI is preparing the answer and images...";
+  }
+
+  return isSearch || TEMPORAL_QUERY_PATTERN.test(text)
+    ? "NOVA AI is searching recent information..."
+    : "Nova AI is thinking...";
+};
+
 function Chat() {
   const navigate = useNavigate();
   const logout = useAuthStore((state) => state.logout);
@@ -97,6 +137,8 @@ function Chat() {
   const [currentConversationId, setCurrentConversationId] = useState(null);
   const [speechSupported, setSpeechSupported] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState(null);
+  const [generatePromptImage, setGeneratePromptImage] = useState(false);
+  const [generateAnswerImage, setGenerateAnswerImage] = useState(true);
 
   const toolPrefix = useMemo(
     () => (NAV_TO_INSTRUCTION[activeNav] || []).join("\n"),
@@ -316,13 +358,22 @@ function Chat() {
       }
 
       stopSpeaking();
-      const optimisticUserMessage = createMessage("user", trimmed, currentConversationId);
+      const optimisticUserMessage = createMessage("user", trimmed, currentConversationId, {
+        images: [],
+        meta: {
+          generate_prompt_image: generatePromptImage,
+          generate_answer_image: generateAnswerImage,
+        },
+      });
       setMessages((previous) => [...previous, optimisticUserMessage]);
       setIsTyping(true);
       setStatus(
-        activeNav === "Search" || TEMPORAL_QUERY_PATTERN.test(trimmed)
-          ? "NOVA AI is searching recent information..."
-          : "Nova AI is thinking..."
+        buildProgressStatus({
+          text: trimmed,
+          isSearch: activeNav === "Search",
+          generatePromptImage,
+          generateAnswerImage,
+        })
       );
 
       const prompt = toolPrefix ? `${toolPrefix}\n${trimmed}` : trimmed;
@@ -342,6 +393,8 @@ function Chat() {
             stream: false,
             mode: resolvedMode,
             conversation_id: currentConversationId,
+            generate_prompt_image: generatePromptImage,
+            generate_answer_image: generateAnswerImage,
           }),
           signal: controller.signal,
         });
@@ -366,15 +419,33 @@ function Chat() {
 
         const nextConversationId = data?.conversation_id || currentConversationId;
         const reply = data?.answer || data?.message || data?.response || "NOVA AI: ...";
+        const { promptImages, answerImages } = getResponseImages(data);
 
         if (nextConversationId) {
           setCurrentConversationId(nextConversationId);
         }
 
-        setMessages((previous) => [
-          ...previous,
-          createMessage("assistant", reply, nextConversationId),
-        ]);
+        setMessages((previous) => {
+          const updated = previous.map((message) =>
+            message.id === optimisticUserMessage.id
+              ? {
+                  ...message,
+                  conversation_id: nextConversationId,
+                  images: promptImages,
+                }
+              : message
+          );
+
+          if (reply || answerImages.length) {
+            updated.push(
+              createMessage("assistant", reply, nextConversationId, {
+                images: answerImages,
+              })
+            );
+          }
+
+          return updated;
+        });
 
         await loadConversations(nextConversationId);
       } catch (error) {
@@ -403,6 +474,8 @@ function Chat() {
       resolvedMode,
       stopSpeaking,
       toolPrefix,
+      generateAnswerImage,
+      generatePromptImage,
     ]
   );
 
@@ -421,9 +494,11 @@ function Chat() {
       stopSpeaking();
       setIsTyping(true);
       setStatus(
-        resolvedMode === "search"
-          ? "NOVA AI is re-checking the latest information..."
-          : "NOVA AI is refining the latest answer..."
+        buildProgressStatus({
+          isSearch: resolvedMode === "search",
+          generateAnswerImage,
+          regenerate: true,
+        })
       );
 
       try {
@@ -431,10 +506,12 @@ function Chat() {
           conversation_id: currentConversationId,
           mode: resolvedMode,
           stream: false,
+          generate_answer_image: generateAnswerImage,
         });
         const data = response?.data || {};
         const nextConversationId = data?.conversation_id || currentConversationId;
         const reply = data?.answer || data?.message || data?.response || "";
+        const { promptImages, answerImages } = getResponseImages(data);
 
         if (nextConversationId) {
           setCurrentConversationId(nextConversationId);
@@ -450,8 +527,23 @@ function Chat() {
               }
             }
 
-            if (reply) {
-              updated.push(createMessage("assistant", reply, nextConversationId));
+            for (let index = updated.length - 1; index >= 0; index -= 1) {
+              if (updated[index]?.role === "user") {
+                updated[index] = {
+                  ...updated[index],
+                  conversation_id: nextConversationId,
+                  images: promptImages.length ? promptImages : updated[index]?.images || [],
+                };
+                break;
+              }
+            }
+
+            if (reply || answerImages.length) {
+              updated.push(
+                createMessage("assistant", reply, nextConversationId, {
+                  images: answerImages,
+                })
+              );
             }
 
             return updated;
@@ -484,6 +576,7 @@ function Chat() {
       regeneratableMessageId,
       resolvedMode,
       stopSpeaking,
+      generateAnswerImage,
     ]
   );
 
@@ -523,6 +616,10 @@ function Chat() {
             onChange={setInput}
             onSend={handleSend}
             disabled={isTyping || isConversationLoading}
+            generatePromptImage={generatePromptImage}
+            generateAnswerImage={generateAnswerImage}
+            onTogglePromptImage={() => setGeneratePromptImage((previous) => !previous)}
+            onToggleAnswerImage={() => setGenerateAnswerImage((previous) => !previous)}
           />
           <FeatureCards visible={!messages.length} onSelect={handleSuggestion} />
         </main>
