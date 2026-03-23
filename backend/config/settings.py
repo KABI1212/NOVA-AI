@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE_MB: int = 10
     UPLOAD_DIR: str = "./uploads"
     REDIS_URL: str = "redis://localhost:6379"
+    RATE_LIMIT_ENABLED: bool = True
+    CHAT_RATE_LIMIT_REQUESTS: int = 20
+    CHAT_RATE_LIMIT_WINDOW_SECONDS: int = 60
+    IMAGE_RATE_LIMIT_REQUESTS: int = 10
+    IMAGE_RATE_LIMIT_WINDOW_SECONDS: int = 3600
+    CONVERSATION_SUMMARY_MIN_MESSAGES: int = 8
+    CONVERSATION_SUMMARY_REFRESH_INTERVAL: int = 4
+    CONVERSATION_SUMMARY_RECENT_MESSAGES: int = 18
 
     VECTOR_DB_TYPE: str = "faiss"
     PINECONE_API_KEY: str = ""

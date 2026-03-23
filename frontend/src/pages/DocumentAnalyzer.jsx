@@ -9,6 +9,7 @@ import { useDocumentStore } from '../utils/store';
 function DocumentAnalyzer() {
   const { documents, currentDocument, setDocuments, setCurrentDocument, addDocument } = useDocumentStore();
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState('');
   const [loading, setLoading] = useState(false);
@@ -34,14 +35,24 @@ function DocumentAnalyzer() {
     formData.append('file', file);
 
     setUploading(true);
+    setUploadProgress(0);
     try {
-      const response = await documentAPI.upload(formData);
+      const response = await documentAPI.upload(formData, {
+        onUploadProgress: (event) => {
+          const total = event.total || file.size || 0;
+          if (!total) {
+            return;
+          }
+          setUploadProgress(Math.min(100, Math.round((event.loaded / total) * 100)));
+        },
+      });
       addDocument(response.data);
       toast.success('Document uploaded successfully!');
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Upload failed');
     } finally {
       setUploading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -94,6 +105,21 @@ function DocumentAnalyzer() {
               disabled={uploading}
             />
           </label>
+
+          {uploading ? (
+            <div className="mb-4">
+              <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
+                <span>Uploading and processing</span>
+                <span>{uploadProgress}%</span>
+              </div>
+              <div className="w-full h-2 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                <div
+                  className="h-full bg-primary-500 transition-all duration-200"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+            </div>
+          ) : null}
 
           <div className="space-y-2 overflow-y-auto max-h-[calc(100vh-16rem)]">
             {documents.map((doc) => (

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import List
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from models.base import Field, MongoModel
 
@@ -23,6 +23,9 @@ class Conversation(MongoModel):
     share_title = Field(default=None)
     shared_at = Field(default=None)
     view_count = Field(default="0")
+    context_summary = Field(default="")
+    context_summary_message_count = Field(default=0)
+    context_summary_updated_at = Field(default=None)
     created_at = Field(default_factory=datetime.utcnow)
     updated_at = Field(default_factory=datetime.utcnow)
 
@@ -44,5 +47,4 @@ class ConversationResponse(BaseModel):
     messages: List[dict] = []
     created_at: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

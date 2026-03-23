@@ -767,9 +767,14 @@ class AIService:
         size: str = "1024x1024",
         n: int = 1,
     ) -> List[str]:
+        cleaned_prompt = " ".join((prompt or "").split()).strip()[:4000]
+        if not cleaned_prompt:
+            return []
+
         openai_key = getattr(settings, "OPENAI_API_KEY", "")
         if not openai_key:
-            return [generate_image_url(prompt)]
+            logger.warning("Image generation skipped because OPENAI_API_KEY is not configured")
+            return []
 
         from openai import AsyncOpenAI
 
@@ -778,7 +783,7 @@ class AIService:
             model_name = getattr(settings, "OPENAI_IMAGE_MODEL", "dall-e-3")
             request_args = {
                 "model": model_name,
-                "prompt": prompt,
+                "prompt": cleaned_prompt,
                 "size": size,
                 "n": n,
                 "response_format": "b64_json",
@@ -793,10 +798,15 @@ class AIService:
                 for item in response.data
                 if getattr(item, "b64_json", None)
             ]
-            return images or [generate_image_url(prompt)]
+            if not images:
+                logger.warning(
+                    "Image API returned no image data prompt=%s",
+                    cleaned_prompt[:180],
+                )
+            return images
         except Exception as exc:
-            logger.warning("Image API failed; using local visual fallback error=%s", exc)
-            return [generate_image_url(prompt)]
+            logger.warning("Image API failed prompt=%s error=%s", cleaned_prompt[:180], exc)
+            return []
 
     async def get_available_providers(self) -> List[Dict]:
         providers = []

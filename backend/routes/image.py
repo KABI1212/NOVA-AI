@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 from models.user import User
 from services.ai_service import ai_service
 from utils.dependencies import get_current_user
+from utils.rate_limit import enforce_image_rate_limit
 from config.settings import settings
 import base64
 import httpx
@@ -41,23 +42,35 @@ def _openai_client() -> AsyncOpenAI:
 
 @router.post("/")
 async def generate_image(
+    http_request: Request,
     request: ImageRequest,
     current_user: User = Depends(get_current_user)
 ):
     """Generate images from a text prompt"""
+    prompt = " ".join((request.prompt or "").split()).strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
+    if len(prompt) > 4000:
+        raise HTTPException(status_code=400, detail="Prompt too long. Max 4000 chars.")
     if not settings.OPENAI_API_KEY:
         return {"error": "OpenAI API key not configured. Image generation unavailable."}
     if request.n < 1 or request.n > 4:
         raise HTTPException(status_code=400, detail="n must be between 1 and 4")
+    await enforce_image_rate_limit(http_request, current_user, cost=request.n)
 
     images = await ai_service.generate_image(
-        request.prompt,
+        prompt,
         request.size,
         request.n
     )
+    if not images:
+        raise HTTPException(
+            status_code=502,
+            detail="Image generation failed for that prompt. Please try again with a clearer prompt.",
+        )
 
     return {
-        "prompt": request.prompt,
+        "prompt": prompt,
         "size": request.size,
         "images": images
     }
@@ -65,6 +78,7 @@ async def generate_image(
 
 @router.post("/generate")
 async def generate_image_v3(
+    http_request: Request,
     request: ImageGenerateRequest,
     current_user: User = Depends(get_current_user)
 ):
@@ -86,6 +100,7 @@ async def generate_image_v3(
         if request.style not in {"vivid", "natural"}:
             raise HTTPException(status_code=400, detail="Invalid style.")
 
+        await enforce_image_rate_limit(http_request, current_user)
         client = _openai_client()
         response = await client.images.generate(
             model="dall-e-3",
@@ -147,12 +162,14 @@ async def proxy_image(
 
 @router.post("/variations")
 async def image_variations(
+    http_request: Request,
     request: EditRequest,
     current_user: User = Depends(get_current_user)
 ):
     try:
         if not request.image_b64:
             raise HTTPException(status_code=400, detail="Missing image data.")
+        await enforce_image_rate_limit(http_request, current_user)
         image_bytes = base64.b64decode(request.image_b64)
         image_file = io.BytesIO(image_bytes)
         image_file.name = "image.png"

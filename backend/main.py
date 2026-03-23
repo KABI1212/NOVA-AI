@@ -22,6 +22,7 @@ from routes import (
     share_router,
     voice_router,
 )
+from services.rate_limit_service import rate_limit_service
 
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Database unavailable during startup: %s", get_database_status())
     logger.info("CORS enabled for: %s", settings.cors_origins_list)
     yield
+    await rate_limit_service.close()
     logger.info("%s shutting down", settings.APP_NAME)
 
 

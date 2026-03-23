@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
@@ -19,6 +19,10 @@ from models.document import Document
 from models.user import User
 from services.ai_provider import PROVIDERS, generate_response, stream_response
 from services.ai_service import ai_service
+from services.conversation_summary import (
+    build_summary_history_message,
+    refresh_conversation_summary,
+)
 from services.conversation_store import (
     append_conversation_message,
     ensure_conversation_messages,
@@ -31,6 +35,7 @@ from services.instant_responses import instant_reply
 from services.search_service import fetch_page_content, format_results_for_ai, is_temporal_query, search_web, search_web_images
 from services.vector_service import vector_service
 from utils.dependencies import get_current_user, get_current_user_optional
+from utils.rate_limit import enforce_chat_rate_limit, enforce_image_rate_limit
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 MAX_HISTORY_MESSAGES = 12
@@ -100,6 +105,7 @@ class RegenerateRequest(BaseModel):
     mode: str = "chat"
     provider: Optional[str] = None
     model: Optional[str] = None
+    previous_answer: Optional[str] = None
     document_id: Optional[int] = None
     generate_answer_image: Optional[bool] = None
     stream: bool = True
@@ -163,6 +169,34 @@ def _normalize_image_prompt_text(text: str, limit: int = 2600) -> str:
     return " ".join((text or "").split())[:limit]
 
 
+_IMAGE_INTENT_PATTERNS = (
+    re.compile(
+        r"\b(?:generate|create|make|draw|design|illustrate|paint|render)\b.{0,80}\b(?:image|picture|photo|art|artwork|illustration|poster|logo|portrait|wallpaper|banner|thumbnail|cover art|sticker|icon|mascot|avatar)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:need|want)\b.{0,24}\b(?:an?|some)\b.{0,12}\b(?:image|picture|photo|art|artwork|illustration|poster|logo|portrait|wallpaper|banner|thumbnail|cover art|sticker|icon|mascot|avatar)\b(?:.{0,24}\b(?:of|for|showing|with)\b|[.!?]?$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:image|picture|photo|art|artwork|illustration|poster|logo|portrait|wallpaper|banner|thumbnail|sticker|icon|mascot|avatar)\b.{0,40}\b(?:of|for|showing|with)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:show me|give me|make me)\b.{0,60}\b(?:image|picture|photo|art|artwork|illustration|poster|logo|portrait|wallpaper|banner|thumbnail|sticker|icon|mascot|avatar)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:can you|could you|please)\b.{0,40}\b(?:generate|create|make|draw|design|illustrate|paint|render|show|give|send)\b.{0,90}\b(?:image|picture|photo|art|artwork|illustration|poster|logo|portrait|wallpaper|banner|thumbnail|cover art|sticker|icon|mascot|avatar)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:paint|illustrate|sketch)\b.{0,220}$",
+        re.IGNORECASE,
+    ),
+)
+
+
 def _image_preferences(
     generate_prompt_image: bool = False,
     generate_answer_image: bool = False,
@@ -213,6 +247,17 @@ def _message_images(message) -> List[str]:
     if not isinstance(images, list):
         return []
     return [str(image) for image in images if image]
+
+
+def _chat_image_generation_cost(
+    mode: str,
+    *,
+    generate_prompt_image: bool = False,
+    generate_answer_image: bool = False,
+) -> int:
+    if mode == "image":
+        return 1
+    return int(bool(generate_prompt_image)) + int(bool(generate_answer_image))
 
 
 def _build_prompt_image_prompt(user_message: str) -> str:
@@ -784,6 +829,20 @@ async def _ground_answer_image_prompt(prompt: str) -> tuple[str, List[str]]:
     return grounded_prompt[:4200], []
 
 
+def _dedupe_image_assets(images: List[str], limit: int = 3) -> List[str]:
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for image in images:
+        candidate = str(image or "").strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        deduped.append(candidate)
+        if len(deduped) >= limit:
+            break
+    return deduped
+
+
 async def _generate_images_best_effort(prompt: str) -> List[str]:
     cleaned_prompt = (prompt or "").strip()
     if not cleaned_prompt:
@@ -792,10 +851,22 @@ async def _generate_images_best_effort(prompt: str) -> List[str]:
     if "Assistant answer:" in cleaned_prompt:
         grounded_prompt, web_images = await _ground_answer_image_prompt(cleaned_prompt)
         if web_images:
-            return web_images
-        return []
+            return _dedupe_image_assets(web_images, limit=3)
+        try:
+            return _dedupe_image_assets(
+                await _generate_images_for_prompt(grounded_prompt),
+                limit=3,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Answer image generation failed prompt=%s error=%s",
+                _preview_text(grounded_prompt),
+                exc,
+            )
+            return []
+
     try:
-        return await ai_service.generate_image(grounded_prompt)
+        return _dedupe_image_assets(await _generate_images_for_prompt(grounded_prompt), limit=3)
     except Exception as exc:
         logger.warning(
             "Image generation failed prompt=%s error=%s",
@@ -803,6 +874,13 @@ async def _generate_images_best_effort(prompt: str) -> List[str]:
             exc,
         )
         return []
+
+
+async def _generate_images_for_prompt(prompt: str) -> List[str]:
+    images = await ai_service.generate_image(prompt)
+    if images:
+        return images
+    raise RuntimeError("Image generation returned no image data")
 
 
 def _start_prompt_image_task(enabled: bool, user_message: str):
@@ -827,13 +905,34 @@ async def _await_image_task(task) -> List[str]:
 def _resolve_answer_image_request(requested: Optional[bool], meta: Optional[dict]) -> bool:
     if requested is not None:
         return bool(requested)
-    if isinstance(meta, dict):
+    if isinstance(meta, dict) and "generate_answer_image" in meta:
         return bool(meta.get("generate_answer_image"))
     return False
 
 
 def _strip_inline_file_tags(text: str) -> str:
     return " ".join(_FILE_TAG_PATTERN.sub(" ", text or "").split()).strip()
+
+
+def _strip_tool_directives(text: str) -> str:
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    cleaned = [line for line in lines if not (line.startswith("[") and line.endswith("]"))]
+    return " ".join(cleaned).strip()
+
+
+def _looks_like_image_request(message: str) -> bool:
+    cleaned = _strip_tool_directives(_strip_inline_file_tags(message or ""))
+    normalized = " ".join(cleaned.split()).strip()
+    if not normalized:
+        return False
+    return any(pattern.search(normalized) for pattern in _IMAGE_INTENT_PATTERNS)
+
+
+def _resolve_effective_mode(requested_mode: Optional[str], message: str) -> str:
+    normalized_mode = (requested_mode or "chat").lower()
+    if normalized_mode == "chat" and _looks_like_image_request(message):
+        return "image"
+    return normalized_mode
 
 
 def _normalize_user_message(text: str) -> str:
@@ -874,6 +973,40 @@ def _resolve_document_id(requested_document_id: Optional[int], *metas: Optional[
 def _preview_text(text: str) -> str:
     limit = int(getattr(settings, "AI_LOG_PREVIEW_CHARS", 400) or 400)
     return " ".join((text or "").split())[:limit]
+
+
+def _normalize_regenerate_answer(text: Optional[str], limit: int = 3200) -> str:
+    return " ".join((text or "").split())[:limit].strip()
+
+
+def _build_regenerate_instruction(previous_answer: Optional[str]) -> str:
+    cleaned_answer = _normalize_regenerate_answer(previous_answer)
+    if not cleaned_answer:
+        return REGENERATE_VARIATION_INSTRUCTION
+
+    return (
+        f"{REGENERATE_VARIATION_INSTRUCTION} "
+        "Treat the previous assistant answer as a draft to improve. "
+        "Preserve the same user intent, keep any correct parts, and rewrite weak or unclear sections. "
+        "If the previous answer was an error, apology, fallback notice, or refusal, do not repeat that wording. "
+        "Answer the user's original request directly instead.\n\n"
+        f"Previous assistant answer draft:\n{cleaned_answer}"
+    )
+
+
+def _resolve_regenerated_text(candidate_text: Optional[str], previous_answer: Optional[str]) -> str:
+    cleaned_candidate = str(candidate_text or "").strip()
+    cleaned_previous = _normalize_regenerate_answer(previous_answer)
+
+    if cleaned_candidate and cleaned_candidate != FALLBACK_MESSAGE:
+        return cleaned_candidate
+    if cleaned_previous and cleaned_previous != FALLBACK_MESSAGE:
+        return cleaned_previous
+    if cleaned_candidate:
+        return cleaned_candidate
+    if cleaned_previous:
+        return cleaned_previous
+    return FALLBACK_MESSAGE
 
 
 def _resolve_provider_and_model(
@@ -1102,6 +1235,18 @@ def _save_conversation(db: Session, conversation: Conversation) -> Conversation:
     return save_conversation(db, conversation)
 
 
+async def _save_conversation_with_summary(
+    db: Session,
+    conversation: Conversation,
+    *,
+    refresh_summary: bool = False,
+) -> Conversation:
+    conversation = _save_conversation(db, conversation)
+    if not refresh_summary:
+        return conversation
+    return await refresh_conversation_summary(db, conversation)
+
+
 def _get_or_create_conversation(
     db: Session,
     current_user: User,
@@ -1138,7 +1283,20 @@ def _conversation_history(
     history = history_from_conversation(db, conversation)
     if drop_last:
         history = history[:-1]
-    return history[-limit:] if limit else history
+
+    summary_message = build_summary_history_message(conversation)
+    if limit:
+        recent_limit = limit
+        if summary_message:
+            recent_limit = max(6, limit // 2)
+        history = history[-recent_limit:]
+
+    return [summary_message, *history] if summary_message else history
+
+
+def _session_id_from_request(http_request: Request) -> str:
+    header_value = (http_request.headers.get("x-session-id") or "").strip()
+    return header_value[:120] if header_value else "anonymous"
 
 
 async def _maybe_enhance_temporal_message(message: str, force_search: bool = False) -> str:
@@ -1186,16 +1344,17 @@ async def _maybe_enhance_temporal_message(message: str, force_search: bool = Fal
 @router.post("")
 @router.post("/")
 async def chat(
+    http_request: Request,
     request: ChatRequest = Body(default=ChatRequest()),
     current_user: Optional[User] = Depends(get_current_user_optional),
     db: Optional[Session] = Depends(get_db_optional),
 ):
     """Send a chat message and get AI response."""
-    mode = (request.mode or "chat").lower()
+    mode = _resolve_effective_mode(request.mode, request.message)
     provider_key = (request.provider or "").strip().lower()
     fallback_message = FALLBACK_MESSAGE
     generate_prompt_image = bool(request.generate_prompt_image)
-    generate_answer_image = bool(request.generate_answer_image)
+    generate_answer_image = mode != "image" and bool(request.generate_answer_image)
     message_text = _normalize_user_message(request.message)
 
     if not message_text:
@@ -1208,8 +1367,22 @@ async def chat(
             return StreamingResponse(generate_empty(), media_type="text/event-stream")
         return payload
 
+    await enforce_chat_rate_limit(http_request, current_user)
+    image_generation_cost = _chat_image_generation_cost(
+        mode,
+        generate_prompt_image=generate_prompt_image,
+        generate_answer_image=generate_answer_image,
+    )
+    if image_generation_cost:
+        await enforce_image_rate_limit(
+            http_request,
+            current_user,
+            cost=image_generation_cost,
+        )
+
     if current_user is None or db is None:
-        history = get_history(limit=20)
+        session_id = _session_id_from_request(http_request)
+        history = get_history(limit=20, session_id=session_id)
         instant = instant_reply(message_text)
         if instant:
             prompt_images = []
@@ -1220,8 +1393,8 @@ async def chat(
                 answer_images = await _generate_images_best_effort(
                     _build_answer_image_prompt(message_text, instant)
                 )
-            add_message("user", message_text)
-            add_message("assistant", instant)
+            add_message("user", message_text, session_id=session_id)
+            add_message("assistant", instant, session_id=session_id)
             payload = _payload(instant, prompt_images=prompt_images, answer_images=answer_images)
             if request.stream:
                 async def generate_instant():
@@ -1338,7 +1511,7 @@ async def chat(
 
         if mode not in {"documents", "image"}:
             prompt_image_task = _start_prompt_image_task(generate_prompt_image, message_text)
-            add_message("user", message_text)
+            add_message("user", message_text, session_id=session_id)
             answer = await _best_effort_answer(
                 history,
                 message_text,
@@ -1353,7 +1526,7 @@ async def chat(
                 answer_images = await _generate_images_best_effort(
                     _build_answer_image_prompt(message_text, answer)
                 )
-            add_message("assistant", answer)
+            add_message("assistant", answer, session_id=session_id)
             _log_chat_response(mode, provider, model, answer)
             payload = _payload(
                 answer,
@@ -1380,7 +1553,7 @@ async def chat(
                 try:
                     if mode == "image":
                         yield _sse_event({"type": "delta", "content": "Generating image..."})
-                        images = await ai_service.generate_image(message_text)
+                        images = await _generate_images_for_prompt(message_text)
                         yield _sse_event(_final_payload("Here are your images.", images=images))
                         return
 
@@ -1404,7 +1577,7 @@ async def chat(
             return StreamingResponse(generate_public(), media_type="text/event-stream")
 
         if mode == "image":
-            images = await ai_service.generate_image(message_text)
+            images = await _generate_images_for_prompt(message_text)
             return _payload("Here are your images.", images=images)
 
         try:
@@ -1483,7 +1656,11 @@ async def chat(
                 image_origin="answer" if answer_images else None,
             ),
         )
-        conversation = _save_conversation(db, conversation)
+        conversation = await _save_conversation_with_summary(
+            db,
+            conversation,
+            refresh_summary=True,
+        )
         _log_chat_response(mode, request.provider, request.model, instant)
         payload = _payload(
             instant,
@@ -1518,7 +1695,6 @@ async def chat(
             history,
             enhanced_message,
             mode,
-            extra_instruction=REGENERATE_VARIATION_INSTRUCTION,
         )
 
         if request.stream:
@@ -1568,7 +1744,11 @@ async def chat(
                             image_origin="answer" if answer_images else None,
                         ),
                     )
-                    saved_conversation = _save_conversation(db, conversation)
+                    saved_conversation = await _save_conversation_with_summary(
+                        db,
+                        conversation,
+                        refresh_summary=True,
+                    )
                     _log_chat_response(mode, provider_key, request.model, full_response)
                     yield _sse_event(
                         _final_payload(
@@ -1597,7 +1777,6 @@ async def chat(
                 mode,
                 None,
                 None,
-                extra_instruction=REGENERATE_VARIATION_INSTRUCTION,
                 force_search=force_search,
             )
 
@@ -1624,7 +1803,11 @@ async def chat(
                 image_origin="answer" if answer_images else None,
             ),
         )
-        conversation = _save_conversation(db, conversation)
+        conversation = await _save_conversation_with_summary(
+            db,
+            conversation,
+            refresh_summary=True,
+        )
         if text:
             _log_chat_response(mode, provider_key, request.model, text)
         return _payload(
@@ -1642,7 +1825,6 @@ async def chat(
             mode,
             provider,
             model,
-            extra_instruction=REGENERATE_VARIATION_INSTRUCTION,
             force_search=force_search,
         )
 
@@ -1669,7 +1851,11 @@ async def chat(
                 image_origin="answer" if answer_images else None,
             ),
         )
-        conversation = _save_conversation(db, conversation)
+        conversation = await _save_conversation_with_summary(
+            db,
+            conversation,
+            refresh_summary=True,
+        )
         _log_chat_response(mode, provider, model, answer)
         payload = _payload(
             answer,
@@ -1695,20 +1881,20 @@ async def chat(
     history = _conversation_history(db, conversation)
     doc_context = None
     if mode == "documents":
+        await vector_service.ensure_document(document.text_content or "", document.id)
         search_results = await vector_service.search(message_text, k=3, doc_id=document.id)
         doc_context = "\n\n".join([result[0] for result in search_results]) or document.text_content
 
     ai_messages = build_messages(history, mode)
-    ai_messages.insert(1, {"role": "system", "content": REGENERATE_VARIATION_INSTRUCTION})
     if doc_context:
-        ai_messages.insert(2, {"role": "system", "content": f"Document context:\n{doc_context[:8000]}"})
+        ai_messages.insert(1, {"role": "system", "content": f"Document context:\n{doc_context[:8000]}"})
 
     if request.stream:
         async def generate():
             try:
                 if mode == "image":
                     yield _sse_event({"type": "delta", "content": "Generating image..."})
-                    images = await ai_service.generate_image(message_text)
+                    images = await _generate_images_for_prompt(message_text)
                     _append_message(
                         db,
                         conversation,
@@ -1716,7 +1902,11 @@ async def chat(
                         "Here are your images.",
                         meta={"mode": mode, "images": images},
                     )
-                    saved_conversation = _save_conversation(db, conversation)
+                    saved_conversation = await _save_conversation_with_summary(
+                        db,
+                        conversation,
+                        refresh_summary=True,
+                    )
                     _log_chat_response(mode, provider, model, "Here are your images.")
                     yield _sse_event(_final_payload("Here are your images.", saved_conversation, images=images))
                     return
@@ -1760,7 +1950,11 @@ async def chat(
                         document_name=document.filename if document else None,
                     ),
                 )
-                saved_conversation = _save_conversation(db, conversation)
+                saved_conversation = await _save_conversation_with_summary(
+                    db,
+                    conversation,
+                    refresh_summary=True,
+                )
                 _log_chat_response(mode, provider, model, full_response)
                 yield _sse_event(
                     _final_payload(
@@ -1776,7 +1970,7 @@ async def chat(
         return StreamingResponse(generate(), media_type="text/event-stream")
 
     if mode == "image":
-        images = await ai_service.generate_image(message_text)
+        images = await _generate_images_for_prompt(message_text)
         _append_message(
             db,
             conversation,
@@ -1784,7 +1978,11 @@ async def chat(
             "Here are your images.",
             meta={"mode": mode, "images": images},
         )
-        conversation = _save_conversation(db, conversation)
+        conversation = await _save_conversation_with_summary(
+            db,
+            conversation,
+            refresh_summary=True,
+        )
         _log_chat_response(mode, provider, model, "Here are your images.")
         return _payload("Here are your images.", conversation, images=images)
 
@@ -1795,7 +1993,6 @@ async def chat(
         provider,
         model,
         doc_context=doc_context,
-        extra_instruction=REGENERATE_VARIATION_INSTRUCTION,
     )
 
     prompt_images = await _await_image_task(prompt_image_task)
@@ -1825,7 +2022,11 @@ async def chat(
             document_name=document.filename if document else None,
         ),
     )
-    conversation = _save_conversation(db, conversation)
+    conversation = await _save_conversation_with_summary(
+        db,
+        conversation,
+        refresh_summary=True,
+    )
     _log_chat_response(mode, provider, model, response_text)
     return _payload(
         response_text,
@@ -1837,6 +2038,7 @@ async def chat(
 
 @router.post("/regenerate")
 async def regenerate(
+    http_request: Request,
     request: RegenerateRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -1860,17 +2062,36 @@ async def regenerate(
         raise HTTPException(status_code=400, detail="No user message to regenerate")
 
     last_user_message = user_messages[-1]
+    last_assistant_message = next(
+        (message for message in reversed(message_records) if message.role == "assistant"),
+        None,
+    )
     last_user_message_content = _normalize_user_message(last_user_message.content or "")
+    mode = _resolve_effective_mode(request.mode, last_user_message_content)
     if not last_user_message_content:
         raise HTTPException(status_code=400, detail="Last user message is empty")
     last_user_message_meta = getattr(last_user_message, "meta", None)
-    last_assistant_meta = None
-    if message_records and message_records[-1].role == "assistant":
-        last_assistant_meta = getattr(message_records[-1], "meta", None)
+    last_assistant_meta = getattr(last_assistant_message, "meta", None) if last_assistant_message else None
+    previous_answer = _normalize_regenerate_answer(
+        request.previous_answer or (last_assistant_message.content if last_assistant_message else "")
+    )
+    regenerate_instruction = _build_regenerate_instruction(previous_answer)
     generate_answer_image = _resolve_answer_image_request(
         request.generate_answer_image,
         last_user_message_meta,
+    ) and mode != "image"
+
+    await enforce_chat_rate_limit(http_request, current_user)
+    image_generation_cost = _chat_image_generation_cost(
+        mode,
+        generate_answer_image=generate_answer_image,
     )
+    if image_generation_cost:
+        await enforce_image_rate_limit(
+            http_request,
+            current_user,
+            cost=image_generation_cost,
+        )
 
     if message_records and message_records[-1].role == "assistant":
         db.delete(message_records[-1])
@@ -1895,7 +2116,11 @@ async def regenerate(
                 image_origin="answer" if answer_images else None,
             ),
         )
-        conversation = _save_conversation(db, conversation)
+        conversation = await _save_conversation_with_summary(
+            db,
+            conversation,
+            refresh_summary=True,
+        )
         _log_chat_response(mode, request.provider, request.model, instant)
         payload = _payload(
             instant,
@@ -1930,7 +2155,7 @@ async def regenerate(
             history,
             enhanced_message,
             mode,
-            extra_instruction=REGENERATE_VARIATION_INSTRUCTION,
+            extra_instruction=regenerate_instruction,
         )
 
         if request.stream:
@@ -1974,7 +2199,11 @@ async def regenerate(
                             image_origin="answer" if answer_images else None,
                         ),
                     )
-                    saved_conversation = _save_conversation(db, conversation)
+                    saved_conversation = await _save_conversation_with_summary(
+                        db,
+                        conversation,
+                        refresh_summary=True,
+                    )
                     _log_chat_response(mode, provider_key, request.model, full_response)
                     yield _sse_event(
                         _final_payload(
@@ -2008,9 +2237,10 @@ async def regenerate(
                 mode,
                 None,
                 None,
-                extra_instruction=REGENERATE_VARIATION_INSTRUCTION,
+                extra_instruction=regenerate_instruction,
                 force_search=force_search,
             )
+        text = _resolve_regenerated_text(text, previous_answer)
 
         prompt_images = _message_images(last_user_message)
         answer_images = []
@@ -2029,7 +2259,11 @@ async def regenerate(
                 image_origin="answer" if answer_images else None,
             ),
         )
-        conversation = _save_conversation(db, conversation)
+        conversation = await _save_conversation_with_summary(
+            db,
+            conversation,
+            refresh_summary=True,
+        )
         if text:
             _log_chat_response(mode, provider_key, request.model, text)
         return _payload(
@@ -2047,9 +2281,10 @@ async def regenerate(
             mode,
             provider,
             model,
-            extra_instruction=REGENERATE_VARIATION_INSTRUCTION,
+            extra_instruction=regenerate_instruction,
             force_search=force_search,
         )
+        answer = _resolve_regenerated_text(answer, previous_answer)
 
         prompt_images = _message_images(last_user_message)
         answer_images = []
@@ -2068,7 +2303,11 @@ async def regenerate(
                 image_origin="answer" if answer_images else None,
             ),
         )
-        conversation = _save_conversation(db, conversation)
+        conversation = await _save_conversation_with_summary(
+            db,
+            conversation,
+            refresh_summary=True,
+        )
         _log_chat_response(mode, provider, model, answer)
         payload = _payload(
             answer,
@@ -2120,11 +2359,16 @@ async def regenerate(
         if not document.is_processed:
             raise HTTPException(status_code=400, detail="Document is still being processed")
 
-        search_results = await vector_service.search(last_user_message_content, k=3, doc_id=document.id)
+        await vector_service.ensure_document(document.text_content or "", document.id)
+        search_results = await vector_service.search(
+            last_user_message_content,
+            k=3,
+            doc_id=document.id,
+        )
         doc_context = "\n\n".join([result[0] for result in search_results]) or document.text_content
 
     ai_messages = build_messages(history, mode)
-    ai_messages.insert(1, {"role": "system", "content": REGENERATE_VARIATION_INSTRUCTION})
+    ai_messages.insert(1, {"role": "system", "content": regenerate_instruction})
     if doc_context:
         ai_messages.insert(2, {"role": "system", "content": f"Document context:\n{doc_context[:8000]}"})
 
@@ -2133,7 +2377,7 @@ async def regenerate(
             try:
                 if mode == "image":
                     yield _sse_event({"type": "delta", "content": "Generating image..."})
-                    images = await ai_service.generate_image(last_user_message_content)
+                    images = await _generate_images_for_prompt(last_user_message_content)
                     _append_message(
                         db,
                         conversation,
@@ -2141,7 +2385,11 @@ async def regenerate(
                         "Here are your images.",
                         meta={"mode": mode, "images": images},
                     )
-                    saved_conversation = _save_conversation(db, conversation)
+                    saved_conversation = await _save_conversation_with_summary(
+                        db,
+                        conversation,
+                        refresh_summary=True,
+                    )
                     _log_chat_response(mode, provider, model, "Here are your images.")
                     yield _sse_event(_final_payload("Here are your images.", saved_conversation, images=images))
                     return
@@ -2177,7 +2425,11 @@ async def regenerate(
                             document_name=document.filename if document else None,
                         ),
                     )
-                saved_conversation = _save_conversation(db, conversation)
+                saved_conversation = await _save_conversation_with_summary(
+                    db,
+                    conversation,
+                    refresh_summary=True,
+                )
                 _log_chat_response(mode, provider, model, full_response)
                 yield _sse_event(
                     _final_payload(
@@ -2193,7 +2445,7 @@ async def regenerate(
         return StreamingResponse(generate(), media_type="text/event-stream")
 
     if mode == "image":
-        images = await ai_service.generate_image(last_user_message_content)
+        images = await _generate_images_for_prompt(last_user_message_content)
         _append_message(
             db,
             conversation,
@@ -2201,7 +2453,11 @@ async def regenerate(
             "Here are your images.",
             meta={"mode": mode, "images": images},
         )
-        conversation = _save_conversation(db, conversation)
+        conversation = await _save_conversation_with_summary(
+            db,
+            conversation,
+            refresh_summary=True,
+        )
         _log_chat_response(mode, provider, model, "Here are your images.")
         return _payload("Here are your images.", conversation, images=images)
 
@@ -2212,8 +2468,9 @@ async def regenerate(
         provider,
         model,
         doc_context=doc_context,
-        extra_instruction=REGENERATE_VARIATION_INSTRUCTION,
+        extra_instruction=regenerate_instruction,
     )
+    response_text = _resolve_regenerated_text(response_text, previous_answer)
     prompt_images = _message_images(last_user_message)
     answer_images = []
     if response_text and generate_answer_image and mode != "image" and response_text != FALLBACK_MESSAGE:
@@ -2233,7 +2490,11 @@ async def regenerate(
             document_name=document.filename if document else None,
         ),
     )
-    conversation = _save_conversation(db, conversation)
+    conversation = await _save_conversation_with_summary(
+        db,
+        conversation,
+        refresh_summary=True,
+    )
     _log_chat_response(mode, provider, model, response_text)
     return _payload(
         response_text,

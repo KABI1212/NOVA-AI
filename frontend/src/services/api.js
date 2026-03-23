@@ -76,13 +76,14 @@ export const codeAPI = {
 
 // Document API
 export const documentAPI = {
-  upload: (formData) => {
+  upload: (formData, options = {}) => {
     const token = localStorage.getItem('token');
     return axios.post(`${API_URL}/api/document/upload`, formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
         Authorization: `Bearer ${token}`,
       },
+      onUploadProgress: options.onUploadProgress,
     });
   },
   getDocuments: () => api.get('/api/document'),

@@ -11,6 +11,7 @@
     ],
     "no-inline-styles": "off",
     "axe/forms": "off",
-    "compat-api/css": "off"
+    "compat-api/css": "off",
+    "css-prefix-order": "off"
   }
 }

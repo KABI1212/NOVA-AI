@@ -217,10 +217,26 @@ def _general_response_instruction(message: str) -> str | None:
             "- Do not give a minimal answer.\n"
             "- Explain each important concept clearly.\n"
             "- If multiple concepts are involved, cover them separately and then connect them.\n"
-            "- Add one simple example or analogy when it helps understanding."
+            "- Add one short example or analogy only when it genuinely helps understanding."
         )
 
     return None
+
+
+def _clarity_first_instruction(mode: str, message: str) -> str | None:
+    text = " ".join((message or "").split())
+    normalized_mode = (mode or "chat").lower()
+    if not text or normalized_mode == "image":
+        return None
+
+    return (
+        "The user wants clear, easy-to-understand answers.\n"
+        "- Use simple, direct language.\n"
+        "- Do not force fixed sections like Answer, Step by step, or Example.\n"
+        "- Use numbered steps only for instructions, processes, or when the user explicitly asks.\n"
+        "- Give an example only when it materially improves understanding or the user asks for one.\n"
+        "- Keep the answer natural, compact, and free of extra filler."
+    )
 
 
 def build_messages(history: List[Dict[str, str]], mode: str) -> List[Dict[str, str]]:
@@ -229,6 +245,10 @@ def build_messages(history: List[Dict[str, str]], mode: str) -> List[Dict[str, s
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
 
     latest_user_message = _latest_user_message(history)
+
+    clarity_instruction = _clarity_first_instruction(mode, latest_user_message)
+    if clarity_instruction:
+        messages.append({"role": "system", "content": clarity_instruction})
 
     comparison_instruction = _comparison_answer_instruction(latest_user_message)
     if comparison_instruction:

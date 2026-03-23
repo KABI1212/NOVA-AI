@@ -108,7 +108,7 @@ async def upload_document(
         document.summary = summary
 
         # Add to vector database for semantic search
-        await vector_service.add_document(text_content, document.id)
+        await vector_service.upsert_document(text_content, document.id)
 
         db.commit()
         db.refresh(document)
@@ -199,6 +199,7 @@ async def ask_question(
         raise HTTPException(status_code=400, detail="Document is still being processed")
 
     # Use vector search to find relevant context
+    await vector_service.ensure_document(document.text_content or "", document.id)
     search_results = await vector_service.search(request.question, k=3, doc_id=document.id)
 
     # Combine relevant chunks
@@ -233,6 +234,7 @@ async def delete_document(
 
     # Delete file from disk
     document_service.delete_file(document.file_path)
+    vector_service.remove_document(document.id)
 
     # Delete from database
     db.delete(document)

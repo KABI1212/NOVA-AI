@@ -5,8 +5,12 @@ function ChatInput({
   onChange,
   onSend,
   disabled,
+  modelOptions = [],
+  selectedModelKey = "auto",
+  onSelectModel,
   generatePromptImage = false,
   generateAnswerImage = false,
+  answerImageLocked = false,
   onTogglePromptImage,
   onToggleAnswerImage,
 }) {
@@ -328,12 +332,22 @@ function ChatInput({
         <button
           className={`input-chip${generateAnswerImage ? " on" : ""}`}
           type="button"
-          disabled={disabled}
-          onClick={onToggleAnswerImage}
+          disabled={disabled || answerImageLocked}
+          onClick={() => {
+            if (!answerImageLocked) {
+              onToggleAnswerImage?.();
+            }
+          }}
         >
-          Answer image
+          {answerImageLocked ? "Answer visual on" : "Answer image"}
         </button>
-        <div className="input-tools-hint">Generated visuals appear inline in the chat.</div>
+        <div className="input-tools-hint">
+          {answerImageLocked
+            ? "Every answer tries to include a real web or generated visual when available."
+            : generateAnswerImage
+              ? "Answer visuals are on. Turn them off for faster text replies."
+              : "Answer visuals are off for faster replies. Turn them on when you want inline images."}
+        </div>
       </div>
 
       {attachedFile ? (
@@ -368,12 +382,24 @@ function ChatInput({
         />
 
         <div className="input-actions">
-          <button className="input-model" type="button">
-            Nova Fast
+          <div className="input-model input-model-wrap">
+            <select
+              className="input-model-select"
+              value={selectedModelKey}
+              onChange={(event) => onSelectModel?.(event.target.value)}
+              disabled={disabled || modelOptions.length <= 1}
+              title="Choose model"
+            >
+              {modelOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <polyline points="6 9 12 15 18 9" />
             </svg>
-          </button>
+          </div>
           <button
             className={`input-btn ghost${isListening ? " listening" : ""}`}
             type="button"
