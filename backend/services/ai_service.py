@@ -6,15 +6,19 @@ provider fallback, and safer empty-response handling.
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import logging
 import re
-from typing import AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 from xml.sax.saxutils import escape
 
 import httpx
 
+from ai_engine import contextual_system_instructions
 from config.settings import settings
+from prompts import get_presentation_style_prompt
 
 
 logger = logging.getLogger(__name__)
@@ -27,6 +31,7 @@ _OFFLINE_TEXT = (
 )
 
 _DEFAULT_GEMINI_MODEL = "gemini-1.5-flash"
+_DEFAULT_GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image"
 _DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 _DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 _DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-5"
@@ -34,6 +39,27 @@ _DEFAULT_OLLAMA_MODEL = "llama3"
 
 _FALLBACK_CHAIN = ["openai", "deepseek", "google", "groq", "anthropic", "ollama"]
 _VALID_ROLES = {"system", "user", "assistant"}
+_DOCUMENT_MARKS_PATTERN = re.compile(
+    r"\b(?P<marks>2|3|4|5|8|10|12|15|16)\s*(?:-)?\s*(?:mark|marks)\b",
+    re.IGNORECASE,
+)
+_DOCUMENT_MULTI_QUESTION_PATTERN = re.compile(
+    r"\b(?:answer|solve|write|give|provide|return|generate)\s+(?:all|every)\s+(?:the\s+)?(?:questions?|answers?)\b"
+    r"|\ball questions?\b"
+    r"|\ball question answers?\b"
+    r"|\bquestion paper\b"
+    r"|\bsub-?questions?\b",
+    re.IGNORECASE,
+)
+_DOCUMENT_ASSIGNMENT_PATTERN = re.compile(r"\b(?:assignment|assignments)\b", re.IGNORECASE)
+
+
+def _with_presentation_style(base_prompt: str) -> str:
+    prompt = str(base_prompt or "").strip()
+    extra = get_presentation_style_prompt().strip()
+    if not extra or extra in prompt:
+        return prompt
+    return f"{prompt}\n\n{extra}".strip()
 
 
 def _should_log_debug() -> bool:
@@ -42,6 +68,13 @@ def _should_log_debug() -> bool:
 
 def _request_timeout_seconds() -> int:
     return max(10, int(getattr(settings, "AI_REQUEST_TIMEOUT_SECONDS", 60) or 60))
+
+
+def _image_request_timeout_seconds() -> int:
+    return max(
+        _request_timeout_seconds(),
+        int(getattr(settings, "AI_IMAGE_REQUEST_TIMEOUT_SECONDS", 180) or 180),
+    )
 
 
 def _default_temperature() -> float:
@@ -58,6 +91,26 @@ def _preview_text(text: str) -> str:
     limit = int(getattr(settings, "AI_LOG_PREVIEW_CHARS", 400) or 400)
     cleaned = " ".join((text or "").split())
     return cleaned[:limit]
+
+
+def _document_answer_max_tokens(question: str) -> int:
+    base = _default_max_tokens()
+    text = " ".join((question or "").split())
+    if not text:
+        return base
+
+    marks = [int(match.group("marks")) for match in _DOCUMENT_MARKS_PATTERN.finditer(text)]
+    if _DOCUMENT_MULTI_QUESTION_PATTERN.search(text) or len(marks) > 1:
+        return max(base, 12288)
+    if any(mark >= 15 for mark in marks):
+        return max(base, 8192)
+    if any(mark >= 10 for mark in marks):
+        return max(base, 6144)
+    if any(mark >= 8 for mark in marks):
+        return max(base, 5120)
+    if _DOCUMENT_ASSIGNMENT_PATTERN.search(text):
+        return max(base, 4096)
+    return base
 
 
 def _normalize_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -135,6 +188,8 @@ def _log_failure(provider: str, model: Optional[str], exc: Exception):
 
 def _resolve_provider() -> str:
     configured = (getattr(settings, "AI_PROVIDER", "") or "").lower().strip()
+    if configured == "auto":
+        configured = ""
     if configured:
         return configured
     if _openai_api_key():
@@ -174,6 +229,455 @@ def _provider_default_model(provider: str) -> str:
     if provider == "anthropic":
         return _DEFAULT_ANTHROPIC_MODEL
     return _DEFAULT_OLLAMA_MODEL
+
+
+def _resolve_image_provider() -> Optional[str]:
+    configured = (getattr(settings, "AI_PROVIDER", "") or "").lower().strip()
+    if configured == "auto":
+        configured = ""
+    if configured in {"google", "gemini"} and _google_api_key():
+        return "google"
+    if configured == "openai" and _openai_api_key():
+        return "openai"
+    if _google_api_key():
+        return "google"
+    if _openai_api_key():
+        return "openai"
+    return None
+
+
+def _image_size_to_aspect_ratio(size: str) -> str:
+    normalized = str(size or "").strip().lower()
+    if normalized == "1792x1024":
+        return "16:9"
+    if normalized == "1024x1792":
+        return "9:16"
+    return "1:1"
+
+
+def _google_image_models() -> List[str]:
+    configured_model = str(getattr(settings, "GEMINI_IMAGE_MODEL", "") or "").strip()
+    models: List[str] = []
+    for candidate in (configured_model, _DEFAULT_GEMINI_IMAGE_MODEL):
+        if candidate and candidate not in models:
+            models.append(candidate)
+    return models
+
+
+def _google_image_generation_config(size: str) -> Dict[str, object]:
+    config: Dict[str, object] = {
+        "responseModalities": ["TEXT", "IMAGE"],
+    }
+    aspect_ratio = _image_size_to_aspect_ratio(size)
+    if aspect_ratio:
+        config["imageConfig"] = {"aspectRatio": aspect_ratio}
+    return config
+
+
+def _google_image_error(payload: Any, status_code: int, model_name: str) -> RuntimeError:
+    message = ""
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            message = str(error.get("message") or "").strip()
+            status = str(error.get("status") or "").strip()
+            if status and status not in message:
+                message = f"{status}: {message}" if message else status
+    if not message:
+        message = f"Gemini image request failed with HTTP {status_code}"
+    return RuntimeError(f"{message} (model={model_name})")
+
+
+def _inline_data_to_data_url(inline_data) -> Optional[str]:
+    if inline_data is None:
+        return None
+
+    if isinstance(inline_data, dict):
+        data = inline_data.get("data")
+        mime_type = inline_data.get("mimeType") or inline_data.get("mime_type") or "image/png"
+    else:
+        data = getattr(inline_data, "data", None)
+        mime_type = getattr(inline_data, "mime_type", None) or getattr(inline_data, "mimeType", None) or "image/png"
+
+    if not data:
+        return None
+
+    if isinstance(data, str):
+        encoded = data if not data.startswith("data:") else data.split(",", 1)[-1]
+        return data if data.startswith("data:") else f"data:{mime_type};base64,{encoded}"
+
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def _google_response_to_images(payload: Any) -> List[str]:
+    if not isinstance(payload, dict):
+        return []
+
+    images: List[str] = []
+    for candidate in payload.get("candidates") or []:
+        if not isinstance(candidate, dict):
+            continue
+        content = candidate.get("content") or {}
+        if not isinstance(content, dict):
+            continue
+        for part in content.get("parts") or []:
+            if not isinstance(part, dict):
+                continue
+            data_url = _inline_data_to_data_url(part.get("inlineData") or part.get("inline_data"))
+            if data_url:
+                images.append(data_url)
+    return images
+
+
+def _normalize_image_mime_type(mime_type: Optional[str]) -> str:
+    normalized = str(mime_type or "").strip().lower()
+    if normalized.startswith("image/"):
+        return normalized
+    return "image/png"
+
+
+def _image_bytes_to_data_url(image_bytes: bytes, mime_type: Optional[str] = None) -> str:
+    normalized_mime_type = _normalize_image_mime_type(mime_type)
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    return f"data:{normalized_mime_type};base64,{encoded}"
+
+
+def _extract_openai_message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, str):
+                if item.strip():
+                    parts.append(item.strip())
+                continue
+            if isinstance(item, dict):
+                if item.get("type") == "text":
+                    text = str(item.get("text") or "").strip()
+                    if text:
+                        parts.append(text)
+        return "\n".join(parts).strip()
+
+    return str(content or "").strip()
+
+
+def _google_response_to_text(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+
+    parts: List[str] = []
+    for candidate in payload.get("candidates") or []:
+        if not isinstance(candidate, dict):
+            continue
+        content = candidate.get("content") or {}
+        if not isinstance(content, dict):
+            continue
+        for part in content.get("parts") or []:
+            if not isinstance(part, dict):
+                continue
+            text = str(part.get("text") or "").strip()
+            if text:
+                parts.append(text)
+    return "\n".join(parts).strip()
+
+
+async def _request_google_image_generation(
+    client: httpx.AsyncClient,
+    api_key: str,
+    model_name: str,
+    parts: List[Dict[str, object]],
+    size: str = "1024x1024",
+) -> List[str]:
+    response = await client.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        },
+        json={
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": parts,
+                }
+            ],
+            "generationConfig": _google_image_generation_config(size),
+        },
+    )
+
+    try:
+        payload: Any = response.json()
+    except ValueError:
+        payload = {"error": {"message": response.text}}
+
+    if response.status_code >= 400:
+        raise _google_image_error(payload, response.status_code, model_name)
+
+    return _google_response_to_images(payload)
+
+
+async def _generate_image_with_openai(
+    cleaned_prompt: str,
+    size: str = "1024x1024",
+    n: int = 1,
+) -> List[str]:
+    openai_key = _openai_api_key()
+    if not openai_key:
+        return []
+
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=openai_key, timeout=_image_request_timeout_seconds())
+    model_name = getattr(settings, "OPENAI_IMAGE_MODEL", "dall-e-3")
+    request_args = {
+        "model": model_name,
+        "prompt": cleaned_prompt,
+        "size": size,
+        "n": n,
+        "response_format": "b64_json",
+    }
+    if model_name == "dall-e-3":
+        request_args["quality"] = getattr(settings, "OPENAI_IMAGE_QUALITY", "hd") or "hd"
+    response = await client.images.generate(**request_args)
+    return [
+        item.b64_json
+        if str(item.b64_json or "").startswith("data:")
+        else f"data:image/png;base64,{item.b64_json}"
+        for item in response.data
+        if getattr(item, "b64_json", None)
+    ]
+
+
+async def _generate_image_with_google(
+    cleaned_prompt: str,
+    size: str = "1024x1024",
+    n: int = 1,
+) -> List[str]:
+    api_key = _google_api_key()
+    if not api_key:
+        return []
+
+    requested_images = max(1, min(int(n or 1), 4))
+    last_error: Optional[Exception] = None
+
+    async with httpx.AsyncClient(timeout=_image_request_timeout_seconds()) as client:
+        for model_name in _google_image_models():
+            images: List[str] = []
+            try:
+                for _ in range(requested_images):
+                    generated = await _request_google_image_generation(
+                        client,
+                        api_key,
+                        model_name,
+                        [{"text": cleaned_prompt}],
+                        size=size,
+                    )
+                    if not generated:
+                        break
+                    images.extend(generated)
+                    if len(images) >= requested_images:
+                        return images[:requested_images]
+                if images:
+                    return images[:requested_images]
+            except Exception as exc:
+                last_error = exc
+
+    if last_error is not None:
+        raise last_error
+    return []
+
+
+async def _edit_image_with_google(
+    prompt: str,
+    image_bytes: bytes,
+    mime_type: str = "image/png",
+) -> List[str]:
+    api_key = _google_api_key()
+    if not api_key:
+        return []
+
+    encoded_image = base64.b64encode(image_bytes).decode("ascii")
+    parts = [
+        {"text": prompt},
+        {
+            "inline_data": {
+                "mime_type": _normalize_image_mime_type(mime_type),
+                "data": encoded_image,
+            }
+        },
+    ]
+    last_error: Optional[Exception] = None
+
+    async with httpx.AsyncClient(timeout=_image_request_timeout_seconds()) as client:
+        for model_name in _google_image_models():
+            try:
+                images = await _request_google_image_generation(
+                    client,
+                    api_key,
+                    model_name,
+                    parts,
+                )
+                if images:
+                    return images
+            except Exception as exc:
+                last_error = exc
+
+    if last_error is not None:
+        raise last_error
+    return []
+
+
+async def _edit_image_with_openai(
+    prompt: str,
+    image_bytes: bytes,
+) -> List[str]:
+    openai_key = _openai_api_key()
+    if not openai_key:
+        return []
+
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=openai_key, timeout=_image_request_timeout_seconds())
+    image_file = io.BytesIO(image_bytes)
+    image_file.name = "image.png"
+
+    try:
+        response = await client.images.edit(
+            model="gpt-image-1.5",
+            image=image_file,
+            prompt=prompt,
+        )
+    except (AttributeError, TypeError):
+        image_file.seek(0)
+        response = await client.images.create_variation(
+            model="dall-e-2",
+            image=image_file,
+            n=1,
+            size="1024x1024",
+            response_format="url",
+        )
+
+    images: List[str] = []
+    for item in getattr(response, "data", []) or []:
+        url = getattr(item, "url", None)
+        if url:
+            images.append(url)
+            continue
+
+        b64_json = getattr(item, "b64_json", None)
+        if b64_json:
+            images.append(f"data:image/png;base64,{b64_json}")
+
+    return images
+
+
+async def _analyze_image_with_openai(
+    prompt: str,
+    image_bytes: bytes,
+    mime_type: str = "image/png",
+    model: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+) -> str:
+    openai_key = _openai_api_key()
+    if not openai_key:
+        return ""
+
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=openai_key, timeout=_request_timeout_seconds())
+    model_name = (
+        str(model or "").strip()
+        or str(getattr(settings, "OPENAI_VISION_MODEL", "") or "").strip()
+        or str(getattr(settings, "OPENAI_CHAT_MODEL", "") or "").strip()
+        or "gpt-4o-mini"
+    )
+    data_url = _image_bytes_to_data_url(image_bytes, mime_type)
+
+    response = await client.chat.completions.create(
+        model=model_name,
+        messages=[
+            {
+                "role": "system",
+                "content": _with_presentation_style(
+                    "Analyze the uploaded image carefully and answer the user's request accurately. "
+                    "Describe only what is actually visible and say when something is uncertain."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            },
+        ],
+        temperature=_default_temperature(),
+        max_tokens=max_tokens or _default_max_tokens(),
+    )
+    content = ((response.choices or [None])[0].message.content if getattr(response, "choices", None) else "")
+    return _extract_openai_message_text(content)
+
+
+async def _analyze_image_with_google(
+    prompt: str,
+    image_bytes: bytes,
+    mime_type: str = "image/png",
+    model: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+) -> str:
+    api_key = _google_api_key()
+    if not api_key:
+        return ""
+
+    model_name = (
+        str(model or "").strip()
+        or str(getattr(settings, "GEMINI_VISION_MODEL", "") or "").strip()
+        or _DEFAULT_GEMINI_MODEL
+    )
+    normalized_mime_type = _normalize_image_mime_type(mime_type)
+    encoded_image = base64.b64encode(image_bytes).decode("ascii")
+
+    async with httpx.AsyncClient(timeout=_request_timeout_seconds()) as client:
+        response = await client.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+            },
+            json={
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"text": prompt},
+                            {
+                                "inline_data": {
+                                    "mime_type": normalized_mime_type,
+                                    "data": encoded_image,
+                                }
+                            },
+                        ],
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": _default_temperature(),
+                    "maxOutputTokens": max_tokens or _default_max_tokens(),
+                },
+            },
+        )
+
+    try:
+        payload: Any = response.json()
+    except ValueError:
+        payload = {"error": {"message": response.text}}
+
+    if response.status_code >= 400:
+        raise _google_image_error(payload, response.status_code, model_name)
+
+    return _google_response_to_text(payload)
 
 
 def _messages_to_gemini(messages: List[Dict[str, str]]):
@@ -575,8 +1079,15 @@ async def _stream_with_fallback(
             if chunks:
                 partial = "".join(chunks).strip()
                 if partial:
-                    _log_response(current_provider, model_for_provider, partial)
-                    return
+                    logger.warning(
+                        "Discarding partial AI response after provider failure provider=%s model=%s chars=%s",
+                        current_provider,
+                        model_for_provider,
+                        len(partial),
+                    )
+                    raise RuntimeError(
+                        f"Provider '{current_provider}' failed after a partial response; refusing to return an incomplete answer"
+                    ) from exc
 
         if provider:
             break
@@ -645,7 +1156,7 @@ class AIService:
         messages = [
             {
                 "role": "system",
-                "content": (
+                "content": _with_presentation_style(
                     "You are an expert programming instructor. Explain the code clearly, "
                     "step by step, and say when any behavior depends on external context."
                 ),
@@ -661,7 +1172,7 @@ class AIService:
         messages = [
             {
                 "role": "system",
-                "content": (
+                "content": _with_presentation_style(
                     "You are an expert debugger. Identify the real issue, avoid guessing, "
                     "and provide a corrected solution with a concise explanation."
                 ),
@@ -674,7 +1185,7 @@ class AIService:
         messages = [
             {
                 "role": "system",
-                "content": (
+                "content": _with_presentation_style(
                     f"You are an expert in {language} optimization. Suggest accurate, justified "
                     "performance improvements and avoid speculative claims."
                 ),
@@ -695,21 +1206,23 @@ class AIService:
         detail = (detail or "detailed").lower()
 
         if mode == "safe":
-            system = (
+            system = _with_presentation_style(
                 "You are NOVA AI's Safe Reasoning assistant. Provide a structured answer with the sections "
-                "Answer, Safety Notes, and Next Steps. If you are unsure, say so."
+                "Answer, Safety Notes, and Next Steps. If you are unsure, say so. Be calm, supportive, and friendly."
             )
         elif mode == "knowledge":
-            system = (
+            system = _with_presentation_style(
                 "You are NOVA AI's Knowledge Assistant. Provide a concise, factual answer and distinguish "
-                "clearly between facts and uncertainty."
+                "clearly between facts and uncertainty. Keep the tone warm and approachable."
             )
         elif mode == "summary":
-            system = "You are NOVA AI's Summarizer. Provide a clear summary with key points only."
+            system = _with_presentation_style(
+                "You are NOVA AI's Summarizer. Provide a clear summary with key points only, using a warm and friendly tone."
+            )
         else:
-            system = (
+            system = _with_presentation_style(
                 "You are NOVA AI's Deep Explanation Engine. Explain step by step with clear logic, "
-                "but do not invent missing facts."
+                "but do not invent missing facts. Be warm and friendly, like a supportive friend."
             )
 
         messages = [
@@ -725,7 +1238,7 @@ class AIService:
         messages = [
             {
                 "role": "system",
-                "content": (
+                "content": _with_presentation_style(
                     "You are an expert at summarizing documents. Summarize only what is supported by the text "
                     "and do not add unsupported claims."
                 ),
@@ -734,24 +1247,118 @@ class AIService:
         ]
         return await _complete_non_stream(messages)
 
-    async def answer_question_from_document(self, question: str, context: str) -> str:
+    async def answer_question_from_document(
+        self,
+        question: str,
+        context: str,
+        max_context_chars: int = 20000,
+    ) -> str:
+        question_text = " ".join((question or "").split())
+        contextual_instructions = contextual_system_instructions("documents", question_text)
+
         messages = [
             {
                 "role": "system",
-                "content": (
+                "content": _with_presentation_style(
                     "Answer questions only from the provided context. If the answer is not in the context, say "
                     "\"I don't know based on the provided document.\""
                 ),
             },
-            {"role": "user", "content": f"Context:\n{str(context)[:8000]}\n\nQuestion: {question}"},
+            *[
+                {"role": "system", "content": instruction}
+                for instruction in contextual_instructions
+            ],
+            {"role": "user", "content": f"Context:\n{str(context)[:max_context_chars]}\n\nQuestion: {question}"},
         ]
-        return await _complete_non_stream(messages)
+        return await _complete_non_stream(
+            messages,
+            max_tokens=_document_answer_max_tokens(question_text),
+        )
+
+    async def rewrite_document_question(self, question: str) -> str:
+        question_text = " ".join((question or "").split()).strip()
+        if not question_text:
+            return ""
+
+        messages = [
+            {
+                "role": "system",
+                "content": _with_presentation_style(
+                    "Rewrite the user's academic or document question into one clearer, more polished question. "
+                    "Preserve the original meaning, technical terms, marks, and any instructions about tables, "
+                    "diagrams, simplicity, or comparison format. Return only the rewritten question with no intro, "
+                    "no bullets, and no extra explanation."
+                ),
+            },
+            {"role": "user", "content": question_text},
+        ]
+        rewritten = await _complete_non_stream(
+            messages,
+            max_tokens=max(256, min(_default_max_tokens(), 512)),
+        )
+        return " ".join((rewritten or "").split()).strip(" '\"")
+
+    async def analyze_image(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str = "image/png",
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        if not image_bytes:
+            return ""
+
+        cleaned_prompt = " ".join((prompt or "").split()).strip()
+        effective_prompt = cleaned_prompt or "Describe this image clearly and answer the user's request."
+        requested_provider = (provider or _resolve_provider()).lower().strip()
+        candidate_providers = [requested_provider] + [
+            item for item in ("openai", "google") if item != requested_provider
+        ]
+
+        last_error: Optional[Exception] = None
+        for candidate_provider in candidate_providers:
+            try:
+                if candidate_provider == "openai":
+                    answer = await _analyze_image_with_openai(
+                        effective_prompt,
+                        image_bytes,
+                        mime_type=mime_type,
+                        model=model if candidate_provider == requested_provider else None,
+                        max_tokens=max_tokens,
+                    )
+                elif candidate_provider == "google":
+                    answer = await _analyze_image_with_google(
+                        effective_prompt,
+                        image_bytes,
+                        mime_type=mime_type,
+                        model=model if candidate_provider == requested_provider else None,
+                        max_tokens=max_tokens,
+                    )
+                else:
+                    continue
+
+                answer_text = str(answer or "").strip()
+                if answer_text:
+                    return answer_text
+            except Exception as exc:
+                last_error = exc
+                _log_failure(candidate_provider, model, exc)
+
+        if last_error is not None:
+            raise RuntimeError(f"Image analysis failed: {last_error}") from last_error
+
+        if provider:
+            raise RuntimeError(f"Provider not configured for image analysis: {provider}")
+
+        return _OFFLINE_TEXT
 
     async def generate_learning_roadmap(self, topic: str, level: str = "beginner") -> Dict:
         messages = [
             {
                 "role": "system",
-                "content": (
+                "content": _with_presentation_style(
                     "You are an expert learning advisor. Create a structured roadmap with realistic milestones "
                     "and avoid unsupported claims about external resources."
                 ),
@@ -771,41 +1378,66 @@ class AIService:
         if not cleaned_prompt:
             return []
 
-        openai_key = getattr(settings, "OPENAI_API_KEY", "")
-        if not openai_key:
-            logger.warning("Image generation skipped because OPENAI_API_KEY is not configured")
+        provider = _resolve_image_provider()
+        if not provider:
+            logger.warning("Image generation skipped because no supported image provider is configured")
             return []
 
-        from openai import AsyncOpenAI
-
         try:
-            client = AsyncOpenAI(api_key=openai_key, timeout=_request_timeout_seconds())
-            model_name = getattr(settings, "OPENAI_IMAGE_MODEL", "dall-e-3")
-            request_args = {
-                "model": model_name,
-                "prompt": cleaned_prompt,
-                "size": size,
-                "n": n,
-                "response_format": "b64_json",
-            }
-            if model_name == "dall-e-3":
-                request_args["quality"] = getattr(settings, "OPENAI_IMAGE_QUALITY", "hd") or "hd"
-            response = await client.images.generate(**request_args)
-            images = [
-                item.b64_json
-                if str(item.b64_json or "").startswith("data:")
-                else f"data:image/png;base64,{item.b64_json}"
-                for item in response.data
-                if getattr(item, "b64_json", None)
-            ]
+            if provider == "google":
+                images = await _generate_image_with_google(cleaned_prompt, size=size, n=n)
+            else:
+                images = await _generate_image_with_openai(cleaned_prompt, size=size, n=n)
+
             if not images:
                 logger.warning(
-                    "Image API returned no image data prompt=%s",
+                    "Image API returned no image data provider=%s prompt=%s",
+                    provider,
                     cleaned_prompt[:180],
                 )
             return images
         except Exception as exc:
-            logger.warning("Image API failed prompt=%s error=%s", cleaned_prompt[:180], exc)
+            logger.warning(
+                "Image API failed provider=%s prompt=%s error=%s",
+                provider,
+                cleaned_prompt[:180],
+                exc,
+            )
+            return []
+
+    async def edit_image(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str = "image/png",
+    ) -> List[str]:
+        cleaned_prompt = " ".join((prompt or "").split()).strip()[:4000]
+        if not image_bytes:
+            return []
+
+        provider = _resolve_image_provider()
+        if not provider:
+            logger.warning("Image editing skipped because no supported image provider is configured")
+            return []
+
+        edit_prompt = cleaned_prompt or "Create a polished new image inspired by this upload."
+
+        try:
+            if provider == "google":
+                images = await _edit_image_with_google(edit_prompt, image_bytes, mime_type=mime_type)
+            else:
+                images = await _edit_image_with_openai(edit_prompt, image_bytes)
+
+            if not images:
+                logger.warning("Image edit returned no data provider=%s prompt=%s", provider, edit_prompt[:180])
+            return images
+        except Exception as exc:
+            logger.warning(
+                "Image edit failed provider=%s prompt=%s error=%s",
+                provider,
+                edit_prompt[:180],
+                exc,
+            )
             return []
 
     async def get_available_providers(self) -> List[Dict]:

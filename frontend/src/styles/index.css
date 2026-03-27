@@ -139,6 +139,162 @@
   @apply border-l-4 border-gray-300 dark:border-gray-600 pl-4 italic my-4;
 }
 
+.nova-markdown {
+  color: inherit;
+}
+
+.nova-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.nova-h1,
+.nova-h2,
+.nova-h3,
+.nova-h4 {
+  color: inherit;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.nova-h1 {
+  font-size: 1.55rem;
+  margin: 0 0 0.9rem;
+}
+
+.nova-h2 {
+  font-size: 1.3rem;
+  margin: 0 0 0.8rem;
+}
+
+.nova-h3 {
+  font-size: 1.12rem;
+  margin: 0 0 0.7rem;
+}
+
+.nova-h4 {
+  font-size: 1rem;
+  margin: 0 0 0.65rem;
+}
+
+.nova-p {
+  margin: 0 0 0.95rem;
+  line-height: 1.75;
+}
+
+.nova-list {
+  margin: 0 0 0.95rem 1.35rem;
+  padding-left: 0.25rem;
+}
+
+.nova-list-item {
+  margin: 0.35rem 0;
+}
+
+.nova-strong {
+  font-weight: 700;
+  color: inherit;
+}
+
+.nova-em {
+  font-style: italic;
+}
+
+.nova-blockquote {
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem;
+  border-left: 4px solid #2563eb;
+  border-radius: 0 14px 14px 0;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.dark .nova-blockquote {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.nova-link {
+  color: #2563eb;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dark .nova-link {
+  color: #7dd3fc;
+}
+
+.nova-hr {
+  margin: 1rem 0;
+  border: none;
+  border-top: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.nova-table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.04);
+}
+
+.dark .nova-table-wrap {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.nova-table {
+  width: 100%;
+  min-width: 420px;
+  border-collapse: collapse;
+}
+
+.nova-th,
+.nova-td {
+  padding: 0.75rem 0.85rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.nova-th {
+  font-weight: 700;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.dark .nova-th {
+  background: rgba(59, 130, 246, 0.14);
+}
+
+.nova-tr:last-child .nova-td {
+  border-bottom: none;
+}
+
+.nova-inline-code {
+  padding: 0.12rem 0.42rem;
+  border-radius: 0.45rem;
+  background: rgba(15, 23, 42, 0.08);
+  color: #1d4ed8;
+  font-size: 0.92em;
+}
+
+.dark .nova-inline-code {
+  background: rgba(15, 23, 42, 0.6);
+  color: #93c5fd;
+}
+
+.nova-checkbox {
+  margin-right: 0.5rem;
+  accent-color: #2563eb;
+  transform: translateY(1px);
+}
+
+.nova-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.5rem 0;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+
 /* Smooth streaming text appearance */
 .prose p {
   animation: fadeIn 0.1s ease-in;

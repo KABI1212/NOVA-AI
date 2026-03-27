@@ -1,12 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from openai import AsyncOpenAI
 from models.user import User
 from services.ai_service import ai_service
 from utils.dependencies import get_current_user
 from utils.rate_limit import enforce_image_rate_limit
-from config.settings import settings
 import base64
 import httpx
 import io
@@ -29,15 +27,9 @@ class ImageGenerateRequest(BaseModel):
 
 
 class EditRequest(BaseModel):
-    prompt: str
+    prompt: str = ""
     image_b64: str
-
-
-def _openai_client() -> AsyncOpenAI:
-    api_key = getattr(settings, "OPENAI_API_KEY", "")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="OpenAI API key not configured.")
-    return AsyncOpenAI(api_key=api_key)
+    mime_type: str = "image/png"
 
 
 @router.post("/")
@@ -52,8 +44,6 @@ async def generate_image(
         raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
     if len(prompt) > 4000:
         raise HTTPException(status_code=400, detail="Prompt too long. Max 4000 chars.")
-    if not settings.OPENAI_API_KEY:
-        return {"error": "OpenAI API key not configured. Image generation unavailable."}
     if request.n < 1 or request.n > 4:
         raise HTTPException(status_code=400, detail="n must be between 1 and 4")
     await enforce_image_rate_limit(http_request, current_user, cost=request.n)
@@ -101,23 +91,15 @@ async def generate_image_v3(
             raise HTTPException(status_code=400, detail="Invalid style.")
 
         await enforce_image_rate_limit(http_request, current_user)
-        client = _openai_client()
-        response = await client.images.generate(
-            model="dall-e-3",
-            prompt=prompt,
-            size=request.size,
-            quality=request.quality,
-            style=request.style,
-            n=1,
-            response_format="url",
-        )
-
-        image_url = response.data[0].url
-        revised_prompt = getattr(response.data[0], "revised_prompt", None)
+        images = await ai_service.generate_image(prompt, size=request.size, n=1)
+        if not images:
+            raise HTTPException(
+                status_code=502,
+                detail="Image generation failed for that prompt. Please try again with a clearer prompt.",
+            )
 
         return {
-            "url": image_url,
-            "revised_prompt": revised_prompt,
+            "url": images[0],
             "size": request.size,
             "quality": request.quality,
             "style": request.style,
@@ -170,19 +152,26 @@ async def image_variations(
         if not request.image_b64:
             raise HTTPException(status_code=400, detail="Missing image data.")
         await enforce_image_rate_limit(http_request, current_user)
+        prompt = (request.prompt or "").strip() or "Create a polished new image inspired by this upload."
+        if len(prompt) > 4000:
+            raise HTTPException(status_code=400, detail="Prompt too long. Max 4000 chars.")
         image_bytes = base64.b64decode(request.image_b64)
-        image_file = io.BytesIO(image_bytes)
-        image_file.name = "image.png"
-
-        client = _openai_client()
-        response = await client.images.create_variation(
-            model="dall-e-2",
-            image=image_file,
-            n=1,
-            size="1024x1024",
-            response_format="url",
+        images = await ai_service.edit_image(
+            prompt,
+            image_bytes,
+            mime_type=request.mime_type,
         )
-        return {"url": response.data[0].url}
+
+        if not images:
+            raise HTTPException(
+                status_code=502,
+                detail="Image editing returned no image data. Please try again with a clearer prompt.",
+            )
+
+        return {
+            "prompt": prompt,
+            "images": images,
+        }
     except HTTPException:
         raise
     except Exception as exc:

@@ -1,15 +1,19 @@
 import asyncio
+import base64
 import json
 import logging
 import os
 import re
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy.orm import Session
+try:
+    from sqlalchemy.orm import Session
+except ImportError:
+    Session = Any
 
 from ai_engine import build_messages, response_envelope, select_model
 from config.database import get_db, get_db_optional
@@ -41,8 +45,9 @@ router = APIRouter(prefix="/api/chat", tags=["Chat"])
 MAX_HISTORY_MESSAGES = 12
 logger = logging.getLogger(__name__)
 FALLBACK_MESSAGE = (
-    "I couldn't produce a reliable answer because every configured AI provider failed "
-    "and no fresh supporting web results were available."
+    "I couldn't produce a reliable answer because the available AI providers did not respond. "
+    "Please check that the backend is running and that at least one provider key is configured, "
+    "then try again."
 )
 SETUP_RETRY_MESSAGE = "That option isn't ready just yet. Want me to try again?"
 REGENERATE_VARIATION_INSTRUCTION = (
@@ -84,6 +89,35 @@ _SPORTS_QUERY_REWRITES = (
     (re.compile(r"\bcaption\b", re.IGNORECASE), "captain"),
 )
 _FILE_TAG_PATTERN = re.compile(r"(?:\s*\+\s*)?\[File:\s*([^\]]+)\]\s*", re.IGNORECASE)
+_ALL_QUESTIONS_PATTERN = re.compile(
+    r"\b(?:answer|solve|write|give|provide|return|generate)\s+(?:all|every)\s+(?:the\s+)?(?:questions?|answers?)\b"
+    r"|\ball questions?\b"
+    r"|\ball question answers?\b"
+    r"|\bquestion paper\b"
+    r"|\bsub-?questions?\b",
+    re.IGNORECASE,
+)
+_MULTI_MARK_REQUEST_PATTERN = re.compile(
+    r"\b\d+\s+(?:x\s*)?(?:2|3|4|5|8|10|12|15|16)\s*(?:-)?\s*(?:mark|marks)\b",
+    re.IGNORECASE,
+)
+_MARKS_PATTERN = re.compile(
+    r"\b(?P<marks>2|3|4|5|8|10|12|15|16)\s*(?:-)?\s*(?:mark|marks)\b",
+    re.IGNORECASE,
+)
+_QUESTION_LINE_PATTERN = re.compile(
+    r"(?m)^\s*(?:q(?:uestion)?\s*)?(?:\d+|[ivxlcdm]+|[a-z])[\).:-]\s+",
+    re.IGNORECASE,
+)
+_DIAGRAM_REQUEST_PATTERN = re.compile(
+    r"\b(diagram|flow\s?chart|flowchart|block diagram|architecture diagram|network diagram|sequence diagram|topology|stack diagram|layered diagram|with diagram|draw .*diagram|neat diagram)\b",
+    re.IGNORECASE,
+)
+_DEFAULT_DOCUMENT_CONTEXT_CHARS = 8000
+_EXPANDED_DOCUMENT_CONTEXT_CHARS = 120000
+_DEFAULT_DOCUMENT_SEARCH_K = 3
+_EXPANDED_RESPONSE_MAX_TOKENS = 16384
+_ASSIGNMENT_REQUEST_PATTERN = re.compile(r"\b(?:assignment|assignments)\b", re.IGNORECASE)
 
 
 class ChatRequest(BaseModel):
@@ -93,6 +127,8 @@ class ChatRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     document_id: Optional[int] = None
+    image_b64: Optional[str] = None
+    image_mime_type: Optional[str] = None
     generate_prompt_image: Optional[bool] = None
     generate_answer_image: Optional[bool] = None
     stream: bool = True
@@ -194,6 +230,14 @@ _IMAGE_INTENT_PATTERNS = (
         r"^(?:paint|illustrate|sketch)\b.{0,220}$",
         re.IGNORECASE,
     ),
+)
+_IMAGE_PROMPT_DETAIL_PATTERN = re.compile(
+    r"\b(?:cinematic|photorealistic|hyperrealistic|realistic(?: style)?|highly detailed|ultra detailed|4k(?: quality)?|8k(?: quality)?|shallow depth of field|depth of field|soft natural lighting|natural lighting|studio lighting|golden hour|bokeh|concept art|watercolor|oil painting|digital art|render|matte painting|volumetric lighting|dramatic lighting)\b",
+    re.IGNORECASE,
+)
+_NON_IMAGE_HELP_PATTERN = re.compile(
+    r"\b(?:explain|compare|difference|what|why|how|when|where|who|rewrite|improve|analyze|analysis|summarize)\b",
+    re.IGNORECASE,
 )
 
 
@@ -579,6 +623,46 @@ def _specific_diagram_requirements(user_message: str, answer: str, diagram_type:
     return requirements
 
 
+def _diagram_style_requirements(user_message: str, answer: str, diagram_type: str) -> List[str]:
+    combined = f"{user_message} {answer}".lower()
+    normalized = (diagram_type or "").lower()
+    style_requirements = [
+        "Create one complete integrated figure, not multiple disconnected mini-diagrams.",
+        "Use larger readable labels with enough spacing so the text stays clear.",
+        "Keep the layout clean, balanced, and easy to follow at a glance.",
+        "Use a polished academic textbook style, not rough ASCII or terminal-style boxes.",
+        "Use any familiar textbook diagram style only as inspiration; do not copy an existing example exactly.",
+    ]
+
+    if "flow" in normalized or re.search(r"\b(handshake|process|workflow|steps?|procedure|ssl|tls|https)\b", combined):
+        style_requirements.extend(
+            [
+                "Use one directional sequence with arrows and clear numbered stages when helpful.",
+                "Place the labels close to the relevant arrows or stages so the flow is easy to follow.",
+            ]
+        )
+
+    if "architecture" in normalized or re.search(r"\b(layer|layers|stack|ssh|osi|tcp/?ip)\b", combined):
+        style_requirements.extend(
+            [
+                "If the topic is a stack or layered protocol, use one stacked-layer figure with clearly separated boxes.",
+                "Keep the layers aligned and ordered top-to-bottom or bottom-to-top in a textbook style.",
+            ]
+        )
+
+    if re.search(r"\b(header|encapsulation|packet|ipsec|ah|esp)\b", combined):
+        style_requirements.append(
+            "If the topic is packet or header structure, show the packet layout as one composed labeled figure instead of separate floating blocks."
+        )
+
+    if re.search(r"\b(ssl record|fragmentation|compression|mac|encryption)\b", combined):
+        style_requirements.append(
+            "If the topic is a stage-by-stage transformation, use a single vertical or horizontal flow like a clean textbook flowchart."
+        )
+
+    return style_requirements
+
+
 def _build_answer_image_prompt(user_message: str, answer: str) -> str:
     cleaned_user = _normalize_image_prompt_text(user_message, 900)
     cleaned_answer = _normalize_image_prompt_text(answer, 2400)
@@ -587,38 +671,49 @@ def _build_answer_image_prompt(user_message: str, answer: str) -> str:
     diagram_type, layout_note, accuracy_note = _answer_visual_strategy(cleaned_user, cleaned_answer)
     topic = _diagram_topic_text(cleaned_user, cleaned_answer)
     specific_requirements = _specific_diagram_requirements(cleaned_user, cleaned_answer, diagram_type)
-    return (
-        f'Create a clean, minimal, textbook-style {diagram_type} explaining "{topic}".\n\n'
-        "Diagram rules:\n"
-        f"- Selected type: {diagram_type}\n"
-        "- Use real components and real protocols only when they genuinely apply to the topic\n"
-        "- Use proper data flow with arrows\n"
-        "- Use logical sequence from left to right or top to bottom\n\n"
-        "Style requirements:\n"
-        "- White background\n"
-        "- Flat 2D vector design (no 3D, no gradients, no shadows)\n"
-        "- Use simple geometric shapes, thin lines, and sharp edges\n"
-        "- Use a limited color palette (black, blue, grey)\n"
-        "- Clearly labeled components with readable sans-serif font\n"
-        "- Balanced spacing and alignment\n"
-        "- Arrows to show flow or relationships\n"
-        "- No decorative elements, no icons, no stock images, no UI cards\n"
-        "- Professional academic look (like engineering or CS textbooks)\n\n"
-        "Specific content requirements:\n"
-        f"- {layout_note}\n"
-        f"- {accuracy_note}\n"
-        + "".join(f"- {line}\n" for line in specific_requirements)
-        + "\nAccuracy requirements:\n"
-        "- Base the structure, labels, and relationships on the assistant answer below.\n"
-        "- If web grounding is provided, use it only to verify or refine the factual structure.\n"
-        "- Do not invent unsupported components, steps, or relationships.\n\n"
-        "Output:\n"
-        "- High resolution\n"
-        "- Centered layout\n"
-        "- Diagram only, no extra text outside the diagram\n\n"
-        f"User prompt: {cleaned_user}\n"
-        f"Assistant answer: {cleaned_answer}"
-    )[:3800]
+    style_requirements = _diagram_style_requirements(cleaned_user, cleaned_answer, diagram_type)
+    prompt_lines = [
+        f'Create a clean, minimal, textbook-style {diagram_type} explaining "{topic}".',
+        "",
+        "Diagram rules:",
+        f"- Selected type: {diagram_type}",
+        "- Include the whole concept in one coherent diagram, not separate detached fragments.",
+        "- Keep every main label, step, or layer inside the same integrated figure.",
+        "- Use real components and real protocols only when they genuinely apply to the topic.",
+        "- Use proper data flow with arrows.",
+        "- Use logical sequence from left to right or top to bottom.",
+        "",
+        "Style requirements:",
+        "- White background.",
+        "- Flat 2D vector design with no 3D effects, gradients, or shadows.",
+        "- Use simple geometric shapes, thin lines, and sharp edges.",
+        "- Use a limited academic color palette such as black, blue, and grey.",
+        "- Clearly labeled components with readable sans-serif font.",
+        "- Balanced spacing and alignment.",
+        "- Arrows to show flow or relationships.",
+        "- No decorative elements, no icons, no stock images, and no UI cards.",
+        "- Professional academic look similar to engineering or CS textbooks.",
+        *[f"- {line}" for line in style_requirements],
+        "",
+        "Specific content requirements:",
+        f"- {layout_note}",
+        f"- {accuracy_note}",
+        *[f"- {line}" for line in specific_requirements],
+        "",
+        "Accuracy requirements:",
+        "- Base the structure, labels, and relationships on the assistant answer below.",
+        "- If web grounding is provided, use it only to verify or refine the factual structure.",
+        "- Do not invent unsupported components, steps, or relationships.",
+        "",
+        "Output:",
+        "- High resolution.",
+        "- Centered layout.",
+        "- Diagram only, with no extra text outside the figure.",
+        "",
+        f"User prompt: {cleaned_user}",
+        f"Assistant answer: {cleaned_answer}",
+    ]
+    return "\n".join(prompt_lines)[:3800]
 
 
 def _extract_answer_image_context_from_prompt(prompt: str) -> tuple[str, str]:
@@ -851,19 +946,21 @@ async def _generate_images_best_effort(prompt: str) -> List[str]:
     if "Assistant answer:" in cleaned_prompt:
         grounded_prompt, web_images = await _ground_answer_image_prompt(cleaned_prompt)
         if web_images:
-            return _dedupe_image_assets(web_images, limit=3)
+            web_images = _dedupe_image_assets(web_images, limit=3)
         try:
-            return _dedupe_image_assets(
+            generated_images = _dedupe_image_assets(
                 await _generate_images_for_prompt(grounded_prompt),
                 limit=3,
             )
+            if generated_images:
+                return generated_images
         except Exception as exc:
             logger.warning(
                 "Answer image generation failed prompt=%s error=%s",
                 _preview_text(grounded_prompt),
                 exc,
             )
-            return []
+        return web_images if web_images else []
 
     try:
         return _dedupe_image_assets(await _generate_images_for_prompt(grounded_prompt), limit=3)
@@ -902,12 +999,16 @@ async def _await_image_task(task) -> List[str]:
         return []
 
 
-def _resolve_answer_image_request(requested: Optional[bool], meta: Optional[dict]) -> bool:
+def _resolve_answer_image_request(
+    requested: Optional[bool],
+    meta: Optional[dict],
+    message: Optional[str] = None,
+) -> bool:
     if requested is not None:
         return bool(requested)
     if isinstance(meta, dict) and "generate_answer_image" in meta:
         return bool(meta.get("generate_answer_image"))
-    return False
+    return _looks_like_diagram_request(message)
 
 
 def _strip_inline_file_tags(text: str) -> str:
@@ -925,7 +1026,15 @@ def _looks_like_image_request(message: str) -> bool:
     normalized = " ".join(cleaned.split()).strip()
     if not normalized:
         return False
-    return any(pattern.search(normalized) for pattern in _IMAGE_INTENT_PATTERNS)
+    if any(pattern.search(normalized) for pattern in _IMAGE_INTENT_PATTERNS):
+        return True
+    if _NON_IMAGE_HELP_PATTERN.search(normalized):
+        return False
+
+    detail_matches = _IMAGE_PROMPT_DETAIL_PATTERN.findall(normalized)
+    comma_count = normalized.count(",")
+    word_count = len(normalized.split())
+    return word_count >= 8 and comma_count >= 2 and len(detail_matches) >= 2
 
 
 def _resolve_effective_mode(requested_mode: Optional[str], message: str) -> str:
@@ -943,6 +1052,25 @@ def _normalize_user_message(text: str) -> str:
     if _FILE_TAG_PATTERN.search(raw_text):
         return "Summarize this document."
     return raw_text
+
+
+def _decode_image_b64(image_b64: Optional[str]) -> bytes:
+    raw_value = str(image_b64 or "").strip()
+    if not raw_value:
+        return b""
+    if "," in raw_value and raw_value.startswith("data:"):
+        raw_value = raw_value.split(",", 1)[-1]
+    return base64.b64decode(raw_value)
+
+
+def _image_data_url(image_b64: Optional[str], mime_type: Optional[str]) -> Optional[str]:
+    raw_value = str(image_b64 or "").strip()
+    if not raw_value:
+        return None
+    if raw_value.startswith("data:"):
+        return raw_value
+    normalized_mime_type = str(mime_type or "").strip() or "image/png"
+    return f"data:{normalized_mime_type};base64,{raw_value}"
 
 
 def _document_reference_from_meta(meta: Optional[dict]) -> tuple[Optional[int], Optional[str]]:
@@ -977,6 +1105,78 @@ def _preview_text(text: str) -> str:
 
 def _normalize_regenerate_answer(text: Optional[str], limit: int = 3200) -> str:
     return " ".join((text or "").split())[:limit].strip()
+
+
+def _looks_like_diagram_request(message: Optional[str]) -> bool:
+    return bool(_DIAGRAM_REQUEST_PATTERN.search(str(message or "")))
+
+
+def _needs_full_document_context(message: Optional[str]) -> bool:
+    raw_text = str(message or "")
+    cleaned_text = " ".join(raw_text.split())
+    if not cleaned_text:
+        return False
+
+    if _ALL_QUESTIONS_PATTERN.search(cleaned_text):
+        return True
+
+    if len(_MULTI_MARK_REQUEST_PATTERN.findall(cleaned_text)) >= 2:
+        return True
+
+    if len(_QUESTION_LINE_PATTERN.findall(raw_text)) >= 2:
+        return True
+
+    return False
+
+
+def _response_max_tokens(message: Optional[str], mode: str, doc_context: Optional[str] = None) -> int:
+    base = int(getattr(settings, "AI_MAX_TOKENS", 2048) or 2048)
+    cleaned_message = " ".join(str(message or "").split())
+    if (mode or "").lower() == "image":
+        return base
+
+    marks = [int(match.group("marks")) for match in _MARKS_PATTERN.finditer(cleaned_message)]
+
+    if _needs_full_document_context(message):
+        return max(base, _EXPANDED_RESPONSE_MAX_TOKENS)
+
+    if any(mark >= 15 for mark in marks):
+        return max(base, 8192)
+
+    if any(mark >= 10 for mark in marks):
+        return max(base, 6144)
+
+    if any(mark >= 8 for mark in marks):
+        return max(base, 5120)
+
+    if _ASSIGNMENT_REQUEST_PATTERN.search(cleaned_message):
+        return max(base, 4096)
+
+    if doc_context and len(doc_context) > _DEFAULT_DOCUMENT_CONTEXT_CHARS:
+        return max(base, 8192)
+
+    return base
+
+
+async def _resolve_document_context(message: Optional[str], document: Document) -> Optional[str]:
+    document_text = str(getattr(document, "text_content", "") or "").strip()
+    if not document_text:
+        return None
+
+    if _needs_full_document_context(message):
+        return document_text[:_EXPANDED_DOCUMENT_CONTEXT_CHARS]
+
+    search_results = await vector_service.search(
+        str(message or ""),
+        k=_DEFAULT_DOCUMENT_SEARCH_K,
+        doc_id=document.id,
+    )
+    if search_results:
+        combined = "\n\n".join(result[0] for result in search_results if result and result[0])
+        if combined.strip():
+            return combined[:_DEFAULT_DOCUMENT_CONTEXT_CHARS]
+
+    return document_text[:_DEFAULT_DOCUMENT_CONTEXT_CHARS]
 
 
 def _build_regenerate_instruction(previous_answer: Optional[str]) -> str:
@@ -1046,12 +1246,14 @@ async def _collect_ai_response(
     ai_messages: List[dict],
     provider: Optional[str],
     model: Optional[str],
+    max_tokens: Optional[int] = None,
 ) -> str:
     response_text = ""
     async for chunk in ai_service.chat_stream(
         ai_messages,
         provider=provider,
         model=model,
+        max_tokens=max_tokens,
     ):
         response_text += chunk
 
@@ -1139,8 +1341,10 @@ async def _best_effort_answer(
     doc_context: Optional[str] = None,
     extra_instruction: Optional[str] = None,
     force_search: bool = False,
+    max_tokens: Optional[int] = None,
 ) -> str:
     primary_message = await _maybe_enhance_temporal_message(user_message, force_search=force_search)
+    resolved_max_tokens = max_tokens or _response_max_tokens(user_message, mode, doc_context)
 
     try:
         primary_messages = _build_ai_messages(
@@ -1150,7 +1354,7 @@ async def _best_effort_answer(
             doc_context=doc_context,
             extra_instruction=extra_instruction,
         )
-        return await _collect_ai_response(primary_messages, provider, model)
+        return await _collect_ai_response(primary_messages, provider, model, max_tokens=resolved_max_tokens)
     except Exception as exc:
         logger.warning(
             "Primary AI answer failed mode=%s provider=%s model=%s error=%s",
@@ -1171,7 +1375,7 @@ async def _best_effort_answer(
                     doc_context=doc_context,
                     extra_instruction=extra_instruction,
                 )
-                return await _collect_ai_response(retry_messages, provider, model)
+                return await _collect_ai_response(retry_messages, provider, model, max_tokens=resolved_max_tokens)
             except Exception as exc:
                 logger.warning(
                     "Search-backed AI retry failed mode=%s provider=%s model=%s error=%s",
@@ -1354,10 +1558,19 @@ async def chat(
     provider_key = (request.provider or "").strip().lower()
     fallback_message = FALLBACK_MESSAGE
     generate_prompt_image = bool(request.generate_prompt_image)
-    generate_answer_image = mode != "image" and bool(request.generate_answer_image)
     message_text = _normalize_user_message(request.message)
+    image_bytes = _decode_image_b64(request.image_b64)
+    has_uploaded_image = bool(image_bytes)
+    uploaded_image_preview = _image_data_url(request.image_b64, request.image_mime_type)
+    if has_uploaded_image and not message_text:
+        message_text = "Describe this image clearly."
+    generate_answer_image = mode != "image" and _resolve_answer_image_request(
+        request.generate_answer_image,
+        None,
+        message_text,
+    )
 
-    if not message_text:
+    if not message_text and not has_uploaded_image:
         payload = response_envelope("Please enter a message.")
         payload["type"] = "final"
         if request.stream:
@@ -1383,6 +1596,27 @@ async def chat(
     if current_user is None or db is None:
         session_id = _session_id_from_request(http_request)
         history = get_history(limit=20, session_id=session_id)
+        if has_uploaded_image and mode != "image":
+            analysis_prompt = message_text or "Describe this image clearly."
+            answer = await ai_service.analyze_image(
+                analysis_prompt,
+                image_bytes,
+                mime_type=request.image_mime_type or "image/png",
+                provider=request.provider,
+                model=request.model,
+                max_tokens=_response_max_tokens(analysis_prompt, mode),
+            )
+            add_message("user", analysis_prompt, session_id=session_id)
+            add_message("assistant", answer, session_id=session_id)
+            payload = _payload(answer)
+            if request.stream:
+                async def generate_public_image_analysis():
+                    yield _sse_event({"type": "delta", "content": "Analyzing image..."})
+                    yield _sse_event(_final_payload(answer))
+
+                return StreamingResponse(generate_public_image_analysis(), media_type="text/event-stream")
+            return payload
+
         instant = instant_reply(message_text)
         if instant:
             prompt_images = []
@@ -1546,6 +1780,7 @@ async def chat(
                 return StreamingResponse(generate_fast(), media_type="text/event-stream")
             return payload
 
+        response_max_tokens = _response_max_tokens(message_text, mode)
         ai_messages = _build_ai_messages([], message_text, mode)
 
         if request.stream:
@@ -1562,6 +1797,7 @@ async def chat(
                         ai_messages,
                         provider=provider,
                         model=model,
+                        max_tokens=response_max_tokens,
                     ):
                         full_response += chunk
                         yield _sse_event({"type": "delta", "content": chunk})
@@ -1624,12 +1860,46 @@ async def chat(
         message_text,
         meta=_merge_message_meta(
             _image_preferences(generate_prompt_image, generate_answer_image),
+            images=[uploaded_image_preview] if uploaded_image_preview else None,
+            attachment_kind="image" if has_uploaded_image else None,
+            image_origin="upload" if has_uploaded_image else None,
             document_id=document.id if document else None,
             document_name=document.filename if document else None,
         ),
     )
     conversation = _save_conversation(db, conversation)
     prompt_image_task = _start_prompt_image_task(generate_prompt_image and mode != "image", message_text)
+
+    if has_uploaded_image and mode != "image":
+        answer = await ai_service.analyze_image(
+            message_text or "Describe this image clearly.",
+            image_bytes,
+            mime_type=request.image_mime_type or "image/png",
+            provider=request.provider,
+            model=request.model,
+            max_tokens=_response_max_tokens(message_text, mode),
+        )
+        _append_message(
+            db,
+            conversation,
+            "assistant",
+            answer,
+            meta=_merge_message_meta({"mode": mode}),
+        )
+        conversation = await _save_conversation_with_summary(
+            db,
+            conversation,
+            refresh_summary=True,
+        )
+        _log_chat_response(mode, request.provider, request.model, answer)
+        payload = _payload(answer, conversation)
+        if request.stream:
+            async def generate_auth_image_analysis():
+                yield _sse_event({"type": "delta", "content": "Analyzing image..."})
+                yield _sse_event(_final_payload(answer, conversation))
+
+            return StreamingResponse(generate_auth_image_analysis(), media_type="text/event-stream")
+        return payload
 
     instant = instant_reply(message_text)
     if instant:
@@ -1882,12 +2152,12 @@ async def chat(
     doc_context = None
     if mode == "documents":
         await vector_service.ensure_document(document.text_content or "", document.id)
-        search_results = await vector_service.search(message_text, k=3, doc_id=document.id)
-        doc_context = "\n\n".join([result[0] for result in search_results]) or document.text_content
+        doc_context = await _resolve_document_context(message_text, document)
 
+    response_max_tokens = _response_max_tokens(message_text, mode, doc_context)
     ai_messages = build_messages(history, mode)
     if doc_context:
-        ai_messages.insert(1, {"role": "system", "content": f"Document context:\n{doc_context[:8000]}"})
+        ai_messages.insert(1, {"role": "system", "content": f"Document context:\n{doc_context}"})
 
     if request.stream:
         async def generate():
@@ -1916,6 +2186,7 @@ async def chat(
                     ai_messages,
                     provider=provider,
                     model=model,
+                    max_tokens=response_max_tokens,
                 ):
                     full_response += chunk
                     yield _sse_event({"type": "delta", "content": chunk})
@@ -1993,6 +2264,7 @@ async def chat(
         provider,
         model,
         doc_context=doc_context,
+        max_tokens=response_max_tokens,
     )
 
     prompt_images = await _await_image_task(prompt_image_task)
@@ -2079,6 +2351,7 @@ async def regenerate(
     generate_answer_image = _resolve_answer_image_request(
         request.generate_answer_image,
         last_user_message_meta,
+        last_user_message_content,
     ) and mode != "image"
 
     await enforce_chat_rate_limit(http_request, current_user)
@@ -2360,17 +2633,13 @@ async def regenerate(
             raise HTTPException(status_code=400, detail="Document is still being processed")
 
         await vector_service.ensure_document(document.text_content or "", document.id)
-        search_results = await vector_service.search(
-            last_user_message_content,
-            k=3,
-            doc_id=document.id,
-        )
-        doc_context = "\n\n".join([result[0] for result in search_results]) or document.text_content
+        doc_context = await _resolve_document_context(last_user_message_content, document)
 
+    response_max_tokens = _response_max_tokens(last_user_message_content, mode, doc_context)
     ai_messages = build_messages(history, mode)
     ai_messages.insert(1, {"role": "system", "content": regenerate_instruction})
     if doc_context:
-        ai_messages.insert(2, {"role": "system", "content": f"Document context:\n{doc_context[:8000]}"})
+        ai_messages.insert(2, {"role": "system", "content": f"Document context:\n{doc_context}"})
 
     if request.stream:
         async def generate():
@@ -2399,6 +2668,7 @@ async def regenerate(
                     ai_messages,
                     provider=provider,
                     model=model,
+                    max_tokens=response_max_tokens,
                 ):
                     full_response += chunk
                     yield _sse_event({"type": "delta", "content": chunk})
@@ -2469,6 +2739,7 @@ async def regenerate(
         model,
         doc_context=doc_context,
         extra_instruction=regenerate_instruction,
+        max_tokens=response_max_tokens,
     )
     response_text = _resolve_regenerated_text(response_text, previous_answer)
     prompt_images = _message_images(last_user_message)

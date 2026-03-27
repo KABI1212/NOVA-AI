@@ -35,7 +35,17 @@ services:
       MONGODB_REQUIRED: "true"
       REDIS_URL: redis://redis:6379
       SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      AI_PROVIDER: ${AI_PROVIDER:-auto}
+      AI_MODEL: ${AI_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-2.5-flash-image}
+      AI_IMAGE_REQUEST_TIMEOUT_SECONDS: ${AI_IMAGE_REQUEST_TIMEOUT_SECONDS:-180}
       CORS_ORIGINS: http://localhost:3000,http://localhost
     depends_on:
       mongo:
@@ -48,13 +58,16 @@ services:
       - ./backend/uploads:/app/uploads
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/api}
     ports:
       - "80:80"
     depends_on:
       - backend
     environment:
-      VITE_API_URL: http://localhost:8000
+      VITE_API_URL: ${VITE_API_URL:-/api}
 
 volumes:
   mongo_data:

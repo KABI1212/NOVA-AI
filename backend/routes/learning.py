@@ -1,7 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Any, List, Optional
+try:
+    from sqlalchemy.orm import Session
+except ImportError:
+    Session = Any
 from config.database import get_db
 from models.user import User
 from models.learning import LearningProgress

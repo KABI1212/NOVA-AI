@@ -1,13 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { Check, Copy, RotateCcw, Volume2, VolumeX } from "lucide-react";
 import { motion } from "framer-motion";
-import ReactMarkdown from "react-markdown";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
-import remarkBreaks from "remark-breaks";
-import remarkGfm from "remark-gfm";
 
 import BrandLogo from "./BrandLogo";
+import MarkdownAnswer from "../common/MarkdownAnswer";
 
 type Message = {
   id: string;
@@ -49,60 +45,7 @@ function TypingDots() {
 }
 
 function MarkdownContent({ content }: { content: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkBreaks]}
-      components={{
-        h1: ({ children }) => <h1 className="mb-2.5 font-display text-lg font-semibold text-white">{children}</h1>,
-        h2: ({ children }) => <h2 className="mb-2.5 font-display text-base font-semibold text-white">{children}</h2>,
-        h3: ({ children }) => <h3 className="mb-2 font-display text-[15px] font-semibold text-white">{children}</h3>,
-        p: ({ children }) => <p className="mb-2.5 text-[14px] leading-6 text-[#e6edf1] last:mb-0">{children}</p>,
-        ul: ({ children }) => <ul className="mb-2.5 list-disc space-y-1.5 pl-5 text-[14px] leading-6 text-[#e6edf1]">{children}</ul>,
-        ol: ({ children }) => <ol className="mb-2.5 list-decimal space-y-1.5 pl-5 text-[14px] leading-6 text-[#e6edf1]">{children}</ol>,
-        li: ({ children }) => <li>{children}</li>,
-        blockquote: ({ children }) => (
-          <blockquote className="mb-2.5 rounded-2xl border border-white/10 bg-black/15 px-3.5 py-3 text-[14px] text-[#d9e4ea]">
-            {children}
-          </blockquote>
-        ),
-        code({ inline, className, children, ...props }) {
-          const match = /language-(\w+)/.exec(className || "");
-          const code = String(children).replace(/\n$/, "");
-
-          if (inline) {
-            return (
-              <code
-                className="rounded-md bg-black/25 px-1.5 py-0.5 font-mono text-[0.84em] text-[#b9fff0]"
-                {...props}
-              >
-                {children}
-              </code>
-            );
-          }
-
-          return (
-            <SyntaxHighlighter
-              style={oneDark}
-              language={match?.[1] || "text"}
-              PreTag="div"
-              customStyle={{
-                margin: 0,
-                padding: "0.85rem",
-                background: "rgba(0, 0, 0, 0.24)",
-                borderRadius: "16px",
-                border: "1px solid rgba(255,255,255,0.08)",
-                fontSize: "0.82rem",
-              }}
-            >
-              {code}
-            </SyntaxHighlighter>
-          );
-        },
-      }}
-    >
-      {content}
-    </ReactMarkdown>
-  );
+  return <MarkdownAnswer content={content} />;
 }
 
 async function copyTextToClipboard(value: string) {

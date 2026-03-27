@@ -7,7 +7,11 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import HTTPException, status
-from sqlalchemy.exc import IntegrityError
+try:
+    from sqlalchemy.exc import IntegrityError
+except ImportError:
+    class IntegrityError(Exception):
+        """Fallback when SQLAlchemy is not installed."""
 
 from config.settings import settings
 from models.base import Expression, MongoModel, QueryField, SortSpec

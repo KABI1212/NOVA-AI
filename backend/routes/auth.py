@@ -1,9 +1,18 @@
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
+try:
+    from sqlalchemy.exc import IntegrityError
+except ImportError:
+    class IntegrityError(Exception):
+        """Fallback when SQLAlchemy is not installed."""
+
+try:
+    from sqlalchemy.orm import Session
+except ImportError:
+    Session = Any
 
 from config.database import get_db
 from models.conversation import Conversation

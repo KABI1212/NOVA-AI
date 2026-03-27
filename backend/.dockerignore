@@ -1,0 +1,15 @@
+.env
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.tmp
+alembic
+data
+logs
+uploads
+venv
+venv313
+venv313c
+venv314

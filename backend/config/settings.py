@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     OPENAI_EXPLAIN_MODEL: str = "gpt-4-turbo-preview"
     OPENAI_IMAGE_MODEL: str = "dall-e-3"
     OPENAI_IMAGE_QUALITY: str = "hd"
+    GEMINI_IMAGE_MODEL: str = "gemini-2.5-flash-image"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-ada-002"
     OPENAI_EMBEDDING_DIM: int = 1536
 
@@ -55,11 +56,12 @@ class Settings(BaseSettings):
     OLLAMA_NUM_PREDICT: int = 512
     OLLAMA_NUM_CTX: int = 2048
 
-    AI_PROVIDER: str = "openai"
-    AI_MODEL: str = "gpt-4"
+    AI_PROVIDER: str = ""
+    AI_MODEL: str = ""
     AI_TEMPERATURE: float = 0.3
     AI_MAX_TOKENS: int = 2048
     AI_REQUEST_TIMEOUT_SECONDS: int = 60
+    AI_IMAGE_REQUEST_TIMEOUT_SECONDS: int = 180
     AI_DEBUG_LOGGING: bool = True
     AI_LOG_PREVIEW_CHARS: int = 400
 
@@ -81,7 +83,7 @@ class Settings(BaseSettings):
     CONVERSATION_SUMMARY_REFRESH_INTERVAL: int = 4
     CONVERSATION_SUMMARY_RECENT_MESSAGES: int = 18
 
-    VECTOR_DB_TYPE: str = "faiss"
+    VECTOR_DB_TYPE: str = "lexical"
     PINECONE_API_KEY: str = ""
     PINECONE_ENVIRONMENT: str = ""
 

@@ -1,4 +1,42 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+
+import {
+  CHAT_COMPOSER_MENU,
+  CHAT_COMPOSER_PRESETS,
+  DEFAULT_CHAT_PLACEHOLDER,
+} from "../constants/chatExperience";
+
+const PRESET_MAP = Object.fromEntries(CHAT_COMPOSER_PRESETS.map((preset) => [preset.id, preset]));
+const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"];
+const FILE_INPUT_ACCEPT =
+  ".pdf,.txt,.docx,.md,.csv,.json,.py,.js,.jsx,.ts,.tsx,.html,.htm,.css,.xml,.yml,.yaml,.png,.jpg,.jpeg,.webp,.gif,.bmp";
+
+const isImageFile = (file) => {
+  if (!file) {
+    return false;
+  }
+
+  const fileType = String(file.type || "").toLowerCase();
+  if (fileType.startsWith("image/")) {
+    return true;
+  }
+
+  const name = String(file.name || "").toLowerCase();
+  return IMAGE_EXTENSIONS.some((extension) => name.endsWith(extension));
+};
+
+const formatFileSize = (size) => {
+  const numericSize = Number(size || 0);
+  if (!Number.isFinite(numericSize) || numericSize <= 0) {
+    return "0 KB";
+  }
+
+  if (numericSize < 1024 * 1024) {
+    return `${(numericSize / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(numericSize / (1024 * 1024)).toFixed(2)} MB`;
+};
 
 function ChatInput({
   value,
@@ -19,9 +57,12 @@ function ChatInput({
   const [isListening, setIsListening] = useState(false);
   const [heardText, setHeardText] = useState("");
   const [showVoiceDraft, setShowVoiceDraft] = useState(false);
+  const [launcherView, setLauncherView] = useState("closed");
+  const [selectedPresetId, setSelectedPresetId] = useState(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const recognitionRef = useRef(null);
+  const composerRef = useRef(null);
   const valueRef = useRef(value);
   const attachedFileRef = useRef(attachedFile);
   const disabledRef = useRef(disabled);
@@ -30,6 +71,20 @@ function ChatInput({
   const voiceBaseValueRef = useRef("");
   const capturedSpeechRef = useRef("");
   const previewSpeechRef = useRef("");
+
+  const selectedPreset = useMemo(
+    () => (selectedPresetId ? PRESET_MAP[selectedPresetId] || null : null),
+    [selectedPresetId]
+  );
+  const attachedImage = isImageFile(attachedFile);
+  const placeholder = selectedPreset?.placeholder || DEFAULT_CHAT_PLACEHOLDER;
+  const showVoicePanel = isListening || showVoiceDraft;
+  const isSendDisabled = disabled || (!value.trim() && !attachedFile);
+  const voiceButtonTitle = speechSupported
+    ? isListening
+      ? "Stop voice input"
+      : "Start voice input"
+    : "Voice input is not supported in this browser";
 
   useEffect(() => {
     if (!textareaRef.current) {
@@ -59,13 +114,31 @@ function ChatInput({
     onSendRef.current = onSend;
   }, [onSend]);
 
-  const handleFileChange = (event) => {
-    const file = event.target.files?.[0];
-    if (!file) {
-      return;
+  useEffect(() => {
+    if (launcherView === "closed") {
+      return undefined;
     }
-    setAttachedFile(file);
-  };
+
+    const handlePointerDown = (event) => {
+      if (composerRef.current && !composerRef.current.contains(event.target)) {
+        setLauncherView("closed");
+      }
+    };
+
+    const handleEscape = (event) => {
+      if (event.key === "Escape") {
+        setLauncherView("closed");
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [launcherView]);
 
   const clearFile = () => {
     setAttachedFile(null);
@@ -82,6 +155,23 @@ function ChatInput({
     setShowVoiceDraft(false);
   };
 
+  const handleFileChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const imageFile = isImageFile(file);
+    setAttachedFile(file);
+    setLauncherView("closed");
+
+    if (imageFile) {
+      setSelectedPresetId("create_image");
+    } else {
+      setSelectedPresetId((current) => (current === "create_image" ? null : current));
+    }
+  };
+
   const dispatchMessage = (rawValue) => {
     if (disabledRef.current) {
       return;
@@ -89,20 +179,35 @@ function ChatInput({
 
     const trimmed = String(rawValue || "").trim();
     const currentFile = attachedFileRef.current;
+    const imageAttachment = isImageFile(currentFile);
     if (!trimmed && !currentFile) {
       return;
     }
 
+    const activePreset = selectedPresetId ? PRESET_MAP[selectedPresetId] || null : null;
+    const attachmentKind = currentFile ? (imageAttachment ? "image" : "document") : null;
+    const attachmentLabel = attachmentKind === "image" ? "Photo" : "File";
+    const fallbackText = currentFile
+      ? imageAttachment
+        ? "Create a polished edit from this uploaded photo."
+        : "Summarize this document in simple words."
+      : "";
+    const text = trimmed || fallbackText;
     const displayText = currentFile
-      ? `${trimmed}${trimmed ? " + " : ""}[File: ${currentFile.name}]`
+      ? `${trimmed}${trimmed ? " + " : ""}[${attachmentLabel}: ${currentFile.name}]`
       : trimmed;
-    const text = trimmed || (currentFile ? "Summarize this document in simple words." : "");
 
     onSendRef.current?.({
       text,
       displayText: displayText || text,
       file: currentFile || null,
+      attachmentKind,
+      presetId: activePreset?.id || null,
+      forceMode: activePreset?.forceMode || null,
+      promptPrefix: activePreset?.promptPrefix || "",
+      presetLabel: activePreset ? `${activePreset.emoji} ${activePreset.label}` : null,
     });
+
     resetVoiceDraft();
     clearFile();
     onChangeRef.current?.("");
@@ -276,13 +381,30 @@ function ChatInput({
     }
   };
 
-  const isSendDisabled = disabled || (!value.trim() && !attachedFile);
-  const voiceButtonTitle = speechSupported
-    ? isListening
-      ? "Stop voice input"
-      : "Start voice input"
-    : "Voice input is not supported in this browser";
-  const showVoicePanel = isListening || showVoiceDraft;
+  const handlePresetSelect = (presetId) => {
+    setSelectedPresetId(presetId);
+    setLauncherView("closed");
+    textareaRef.current?.focus();
+  };
+
+  const clearPreset = () => {
+    setSelectedPresetId(null);
+  };
+
+  const handleMenuAction = (actionId) => {
+    if (actionId === "attach") {
+      fileInputRef.current?.click();
+      setLauncherView("closed");
+      return;
+    }
+
+    if (actionId === "more") {
+      setLauncherView("more");
+      return;
+    }
+
+    handlePresetSelect(actionId);
+  };
 
   return (
     <div className="input-wrap">
@@ -320,68 +442,171 @@ function ChatInput({
         </div>
       ) : null}
 
-      <div className="input-tools">
-        <button
-          className={`input-chip${generatePromptImage ? " on" : ""}`}
-          type="button"
-          disabled={disabled}
-          onClick={onTogglePromptImage}
-        >
-          Prompt image
-        </button>
-        <button
-          className={`input-chip${generateAnswerImage ? " on" : ""}`}
-          type="button"
-          disabled={disabled || answerImageLocked}
-          onClick={() => {
-            if (!answerImageLocked) {
-              onToggleAnswerImage?.();
-            }
-          }}
-        >
-          {answerImageLocked ? "Answer visual on" : "Answer image"}
-        </button>
-        <div className="input-tools-hint">
-          {answerImageLocked
-            ? "Every answer tries to include a real web or generated visual when available."
-            : generateAnswerImage
-              ? "Answer visuals are on. Turn them off for faster text replies."
-              : "Answer visuals are off for faster replies. Turn them on when you want inline images."}
-        </div>
-      </div>
-
       {attachedFile ? (
-        <div className="fp">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <polyline points="14 2 14 8 20 8" />
-          </svg>
-          {attachedFile.name} ({(attachedFile.size / 1024).toFixed(1)}KB)
-          <button className="frm" type="button" onClick={clearFile}>
-            x
+        <div className={`fp${attachedImage ? " photo" : ""}`}>
+          <div className="fp-icon" aria-hidden="true">
+            {attachedImage ? "🖼️" : "📄"}
+          </div>
+          <div className="fp-copy">
+            <strong>{attachedFile.name}</strong>
+            <span>
+              {attachedImage ? "Photo ready for image remix" : "Document ready for chat analysis"} •{" "}
+              {formatFileSize(attachedFile.size)}
+            </span>
+          </div>
+          <button className="frm" type="button" onClick={clearFile} aria-label="Remove attachment">
+            ×
           </button>
         </div>
       ) : null}
 
-      <div className="input-pill">
-        <button className="input-btn ghost" type="button" onClick={() => fileInputRef.current?.click()}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        </button>
+      <div className="input-shell" ref={composerRef}>
+        {launcherView !== "closed" ? (
+          <div className={`launcher-menu${launcherView === "more" ? " more" : ""}`}>
+            {launcherView === "main" ? (
+              <div className="launcher-panel">
+                {CHAT_COMPOSER_MENU.map((item) => {
+                  const active = item.id === selectedPresetId;
+                  return (
+                    <button
+                      key={item.id}
+                      className={`launcher-action${active ? " active" : ""}`}
+                      type="button"
+                      onClick={() => handleMenuAction(item.id)}
+                    >
+                      <span className="launcher-action-icon" aria-hidden="true">
+                        {item.emoji}
+                      </span>
+                      <span className="launcher-action-copy">
+                        <strong>{item.label}</strong>
+                        <span>{item.description}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="launcher-panel">
+                <button className="launcher-back" type="button" onClick={() => setLauncherView("main")}>
+                  ← Back
+                </button>
 
-        <textarea
-          ref={textareaRef}
-          className="input-field"
-          placeholder="How can I help you today?"
-          rows={1}
-          value={value}
-          onChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-        />
+                <button
+                  className={`launcher-action${!selectedPreset ? " active" : ""}`}
+                  type="button"
+                  onClick={() => {
+                    clearPreset();
+                    setLauncherView("closed");
+                  }}
+                >
+                  <span className="launcher-action-icon" aria-hidden="true">
+                    💬
+                  </span>
+                  <span className="launcher-action-copy">
+                    <strong>General chat</strong>
+                    <span>Clear quick mode and return to a normal conversation</span>
+                  </span>
+                </button>
 
-        <div className="input-actions">
+                <button
+                  className={`launcher-action${generatePromptImage ? " active" : ""}`}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => {
+                    onTogglePromptImage?.();
+                    setLauncherView("closed");
+                  }}
+                >
+                  <span className="launcher-action-icon" aria-hidden="true">
+                    🎨
+                  </span>
+                  <span className="launcher-action-copy">
+                    <strong>{generatePromptImage ? "Prompt image on" : "Prompt image"}</strong>
+                    <span>Generate a visual from your prompt alongside the answer</span>
+                  </span>
+                </button>
+
+                <button
+                  className={`launcher-action${generateAnswerImage ? " active" : ""}`}
+                  type="button"
+                  disabled={disabled || answerImageLocked}
+                  onClick={() => {
+                    if (!answerImageLocked) {
+                      onToggleAnswerImage?.();
+                    }
+                    setLauncherView("closed");
+                  }}
+                >
+                  <span className="launcher-action-icon" aria-hidden="true">
+                    🖼️
+                  </span>
+                  <span className="launcher-action-copy">
+                    <strong>{answerImageLocked ? "Answer visuals always on" : "Answer visuals"}</strong>
+                    <span>Ask NOVA to add a relevant image to the response when possible</span>
+                  </span>
+                </button>
+
+                <div className="launcher-note">
+                  📌 Photos now flow into the image tool for edits and remixes. Documents still upload into chat for
+                  analysis and summarization.
+                </div>
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        <div className="input-pill">
+          <button
+            className={`input-btn ghost input-launcher-btn${launcherView !== "closed" ? " active" : ""}`}
+            type="button"
+            onClick={() => setLauncherView((current) => (current === "closed" ? "main" : "closed"))}
+            aria-label="Open tools"
+            disabled={disabled}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+
+          <textarea
+            ref={textareaRef}
+            className="input-field"
+            placeholder={placeholder}
+            rows={1}
+            value={value}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            disabled={disabled}
+          />
+
+          <div className="input-actions">
+            <button
+              className={`input-btn ghost${isListening ? " listening" : ""}`}
+              type="button"
+              title={voiceButtonTitle}
+              onClick={handleVoiceToggle}
+              disabled={!speechSupported || disabled}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+              </svg>
+            </button>
+            <button className="input-btn send send-circle" type="button" disabled={isSendDisabled} onClick={handleSend}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="input-meta">
+        <div className="input-meta-group">
           <div className="input-model input-model-wrap">
             <select
               className="input-model-select"
@@ -400,26 +625,29 @@ function ChatInput({
               <polyline points="6 9 12 15 18 9" />
             </svg>
           </div>
-          <button
-            className={`input-btn ghost${isListening ? " listening" : ""}`}
-            type="button"
-            title={voiceButtonTitle}
-            onClick={handleVoiceToggle}
-            disabled={!speechSupported || disabled}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-              <line x1="12" y1="19" x2="12" y2="23" />
-              <line x1="8" y1="23" x2="16" y2="23" />
-            </svg>
-          </button>
-          <button className="input-btn send" type="button" disabled={isSendDisabled} onClick={handleSend}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <line x1="22" y1="2" x2="11" y2="13" />
-              <polygon points="22 2 15 22 11 13 2 9 22 2" />
-            </svg>
-          </button>
+
+          {selectedPreset ? (
+            <button className="input-mode-pill" type="button" onClick={clearPreset}>
+              <span aria-hidden="true">{selectedPreset.emoji}</span>
+              <span>{selectedPreset.label}</span>
+              <span className="input-mode-pill-close" aria-hidden="true">
+                ×
+              </span>
+            </button>
+          ) : null}
+
+          {generatePromptImage ? <span className="input-status-pill">🎨 Prompt image on</span> : null}
+          {generateAnswerImage || answerImageLocked ? (
+            <span className="input-status-pill">🖼️ Answer visuals on</span>
+          ) : null}
+        </div>
+
+        <div className="input-meta-note">
+          {selectedPreset
+            ? selectedPreset.description
+            : attachedImage
+              ? "Photo uploads now go straight into the image tool for edits or remixes."
+              : "Use + to attach a file, launch research, or switch into image mode."}
         </div>
       </div>
 
@@ -427,7 +655,7 @@ function ChatInput({
         ref={fileInputRef}
         type="file"
         style={{ display: "none" }}
-        accept=".pdf,.txt,.docx,.md,.csv,.json,.py,.js,.jsx,.ts,.tsx,.html,.htm,.css,.xml,.yml,.yaml"
+        accept={FILE_INPUT_ACCEPT}
         onChange={handleFileChange}
       />
     </div>

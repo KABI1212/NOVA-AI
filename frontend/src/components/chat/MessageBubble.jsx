@@ -2,63 +2,9 @@
 import { motion } from "framer-motion";
 import { Bot, User, Copy, Check, Sparkles, Bookmark, Volume2, VolumeX } from "lucide-react";
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkBreaks from "remark-breaks";
-import rehypeRaw from "rehype-raw";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import toast from "react-hot-toast";
 import TTSButton from "./TTSButton";
-
-
-function CodeBlock({ language, value }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      toast.error("Failed to copy code");
-    }
-  };
-
-  return (
-    <div className="relative my-3 rounded-xl overflow-hidden border border-gray-700">
-      <div className="flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-700">
-        <span className="text-xs text-gray-400 font-mono">
-          {language || "code"}
-        </span>
-
-        <button
-          onClick={handleCopy}
-          className="text-xs text-gray-400 hover:text-white"
-        >
-          {copied ? "Copied!" : "Copy"}
-        </button>
-      </div>
-
-      <SyntaxHighlighter
-        style={oneDark}
-        language={language || "text"}
-        PreTag="div"
-        customStyle={{
-          margin: 0,
-          borderRadius: 0,
-          fontSize: "13px",
-          padding: "16px",
-          background: "#1a1b26"
-        }}
-        showLineNumbers={value.split("\n").length > 5}
-        wrapLongLines
-      >
-        {value}
-      </SyntaxHighlighter>
-    </div>
-  );
-}
+import MarkdownAnswer from "../common/MarkdownAnswer";
 
 function TypingCursor() {
   return (
@@ -141,41 +87,8 @@ function MessageBubble({
             {isUser ? (
               <p className="whitespace-pre-wrap text-sm">{message.content}</p>
             ) : (
-
-              <div className="prose prose-sm max-w-none dark:prose-invert">
-
-                <ReactMarkdown
-  remarkPlugins={[remarkGfm, remarkBreaks]}
-  rehypePlugins={[rehypeRaw]}
-  components={{
-    code({ node, className, children, ...props }) {
-
-      const language = className
-        ? className.replace("language-", "")
-        : "";
-
-      const value = String(children).replace(/\n$/, "");
-
-      const isInline = !className;
-
-      if (!isInline) {
-        return <CodeBlock language={language} value={value} />;
-      }
-
-      return (
-        <code
-          className="bg-gray-700 text-pink-300 px-1.5 py-0.5 rounded text-xs"
-          {...props}
-        >
-          {children}
-        </code>
-      );
-    }
-  }}
->
-  {message.content}
-</ReactMarkdown>
-
+              <div className="max-w-none">
+                <MarkdownAnswer content={message.content} />
                 {isStreaming && <TypingCursor/>}
 
                 {(message.images || (message.meta && message.meta.images)) && (

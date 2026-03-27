@@ -1,10 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from typing import Any
 from config.database import get_db
 from models.conversation import Conversation
 from services.conversation_store import conversation_message_count, serialize_conversation_messages
 from utils.dependencies import get_current_user
-from sqlalchemy.orm import Session
+try:
+    from sqlalchemy.orm import Session
+except ImportError:
+    Session = Any
 from datetime import datetime
 import random
 import string

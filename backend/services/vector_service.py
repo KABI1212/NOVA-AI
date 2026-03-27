@@ -20,7 +20,7 @@ except Exception:
 
 class VectorService:
     def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY) if settings.OPENAI_API_KEY else None
         self.dimension = settings.OPENAI_EMBEDDING_DIM
         self.index = faiss.IndexFlatL2(self.dimension) if HAS_FAISS else None
         self.documents = []
@@ -32,7 +32,7 @@ class VectorService:
 
     async def get_embedding(self, text: str) -> List[float]:
         """Get embedding vector for text using OpenAI"""
-        if not self.embeddings_enabled:
+        if not self.embeddings_enabled or self.client is None:
             raise RuntimeError(
                 "Embeddings are disabled because no OpenAI API key is configured."
             )

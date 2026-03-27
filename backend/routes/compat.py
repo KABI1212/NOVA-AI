@@ -1,5 +1,9 @@
 from fastapi import APIRouter, Depends, UploadFile, File
-from sqlalchemy.orm import Session
+from typing import Any
+try:
+    from sqlalchemy.orm import Session
+except ImportError:
+    Session = Any
 from config.database import get_db
 from models.user import User
 from utils.dependencies import get_current_user

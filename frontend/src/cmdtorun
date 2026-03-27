@@ -1,0 +1,11 @@
+Set-Location "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend"
+>> .\venv\Scripts\Activate.ps1
+>> python main.py
+
+
+
+
+
+
+Set-Location "C:\Users\Admin\OneDrive\Desktop\NOVA AI\frontend"
+>> npm.cmd run dev

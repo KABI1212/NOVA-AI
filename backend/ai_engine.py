@@ -41,6 +41,23 @@ _STRICT_EXAM_PATTERN = re.compile(
     r"\b(exam-ready|exam ready|exam format|for exam|for exams|easy to write in exams|strict academic tone|internal verification|definition.*explanation.*key points.*conclusion)\b",
     re.IGNORECASE,
 )
+_MULTI_QUESTION_REQUEST_PATTERN = re.compile(
+    r"\b(?:answer|solve|write|give|provide|return|generate)\s+(?:all|every)\s+(?:the\s+)?(?:questions?|answers?)\b"
+    r"|\ball questions?\b"
+    r"|\ball question answers?\b"
+    r"|\bquestion paper\b"
+    r"|\bsub-?questions?\b",
+    re.IGNORECASE,
+)
+_QUESTION_ITEM_PATTERN = re.compile(
+    r"(?m)^\s*(?:q(?:uestion)?\s*)?(?:\d+|[ivxlcdm]+|[a-z])[\).:-]\s+",
+    re.IGNORECASE,
+)
+_DIAGRAM_REQUEST_PATTERN = re.compile(
+    r"\b(diagram|flow\s?chart|flowchart|block diagram|architecture diagram|network diagram|sequence diagram|topology|stack diagram|layered diagram|with diagram|draw .*diagram|neat diagram)\b",
+    re.IGNORECASE,
+)
+_ASSIGNMENT_PATTERN = re.compile(r"\b(?:assignment|assignments)\b", re.IGNORECASE)
 _TECHNICAL_FOUNDATIONS_PATTERN = re.compile(
     r"\b(network|networking|protocol|http|https|smtp|imap|pop3|tcp/ip|tcp|udp|tls|ssl|dns|client|server|database|api|system|systems|architecture|ram|rom|memory|cache|operating system|os|compiler|process)\b",
     re.IGNORECASE,
@@ -67,23 +84,56 @@ def _latest_user_message(history: List[Dict[str, str]]) -> str:
 def _marks_instruction(marks: int) -> str:
     if marks <= 2:
         return (
-            "This is a short exam-style answer. Keep it crisp and direct: "
-            "2 to 3 sentences or 2 to 3 points, roughly 35 to 60 words."
+            "This is a very short exam-style answer. Keep it simple and direct: "
+            "1 to 2 short lines or 2 very short points, roughly 20 to 40 words. "
+            "State the main idea clearly and add only one small supporting detail when helpful."
         )
     if marks <= 5:
         return (
             "This is a short-to-medium exam answer. Give a compact definition or introduction "
-            "followed by 3 to 5 key points, roughly 80 to 150 words."
+            "followed by 3 to 5 key points, roughly 80 to 180 words."
         )
-    if marks <= 8:
+    if marks == 8:
         return (
-            "This is a medium exam answer. Give a short introduction and a clear structured explanation "
-            "with headings or bullets, roughly 160 to 260 words."
+            "This is a medium-to-long exam answer. Give a full, developed response with a short introduction, "
+            "well-explained points or short subsections, and a brief conclusion. Target about 1500 words."
+        )
+    if marks == 10:
+        return (
+            "This is a long exam answer. Give a well-structured response with introduction, deeper explanation, "
+            "clear subsections, and a brief conclusion. Target about 2000 words."
+        )
+    if marks <= 12:
+        return (
+            "This is a long exam answer. Give a well-structured response with introduction, key explanation, "
+            "important points, and a brief conclusion. Target about 2400 words."
+        )
+    if marks <= 16:
+        return (
+            "This is a very detailed long answer. Give a strong introduction, deeper explanation with clear "
+            "subsections, key points, and a short conclusion. Target about 3000 words."
         )
     return (
-        "This is a long exam answer. Give a well-structured response with introduction, key explanation, "
-        "important points, and a brief conclusion, roughly 300 to 500 words."
+        "This is an extended academic answer. Give a complete, well-structured response with strong explanation, "
+        "organized sections, and enough depth to feel comprehensive."
     )
+
+
+def _looks_like_multi_question_request(message: str) -> bool:
+    text = message or ""
+    if not text.strip():
+        return False
+
+    if _MULTI_QUESTION_REQUEST_PATTERN.search(text):
+        return True
+
+    if len(_QUESTION_ITEM_PATTERN.findall(text)) >= 2:
+        return True
+
+    if len(list(_MARKS_PATTERN.finditer(text))) >= 2 and _EXAM_CONTEXT_PATTERN.search(text):
+        return True
+
+    return False
 
 
 def _academic_answer_instruction(message: str) -> str | None:
@@ -94,21 +144,44 @@ def _academic_answer_instruction(message: str) -> str | None:
     simple_requested = bool(_SIMPLE_REQUEST_PATTERN.search(text))
     short_requested = bool(_SHORT_REQUEST_PATTERN.search(text))
     detailed_requested = bool(_DETAILED_REQUEST_PATTERN.search(text))
+    assignment_requested = bool(_ASSIGNMENT_PATTERN.search(text))
 
-    marks_match = _MARKS_PATTERN.search(text)
-    if marks_match:
-        marks = int(marks_match.group("marks"))
+    marks_matches = [int(match.group("marks")) for match in _MARKS_PATTERN.finditer(text)]
+    if marks_matches:
         language_instruction = (
             "- Use simple, easy-to-understand language.\n"
             if simple_requested
             else ""
         )
+        assignment_instruction = (
+            "- Since this is for an assignment, make the explanation fuller, more polished, and more submission-ready than a quick exam note.\n"
+            "- When helpful, use short headings, fuller paragraph development, and a brief concluding wrap-up.\n"
+            if assignment_requested
+            else ""
+        )
+        if _looks_like_multi_question_request(text) or len(set(marks_matches)) > 1 or len(marks_matches) > 1:
+            return (
+                "Answer in a student-friendly exam style.\n"
+                "- This request includes multiple questions or mixed-mark questions.\n"
+                "- Answer every question or sub-question in the order given.\n"
+                "- Preserve numbering or section labels so each answer maps to the correct question.\n"
+                "- Match each answer's depth to its own mark value instead of using one depth for the whole paper.\n"
+                f"{assignment_instruction}"
+                f"{language_instruction}"
+                "- Do not skip later questions.\n"
+                "- If any question text is missing or unclear, say which question is missing instead of silently omitting it.\n"
+                "- Keep the answers clear, accurate, and easy to write in an exam or assignment."
+            )
+
+        marks = marks_matches[0]
         return (
             "Answer in a student-friendly exam style.\n"
-            f"- Match the depth to a {marks}-mark question.\n"
+            f"- Match the depth to this {marks}-mark question.\n"
             f"- {_marks_instruction(marks)}\n"
+            f"{assignment_instruction}"
             f"{language_instruction}"
             "- Keep the answer clear, accurate, and easy to write in an exam or assignment.\n"
+            "- Use enough detail to feel complete, especially for higher-mark or assignment-style questions.\n"
             "- Do not add unnecessary filler."
         )
 
@@ -126,19 +199,63 @@ def _academic_answer_instruction(message: str) -> str | None:
                 "- Keep it clear and compact because the user explicitly asked for a simple answer."
             )
         if detailed_requested:
+            assignment_detail_instruction = (
+                "- Because this is for an assignment, add more depth, cleaner structure, and slightly fuller explanation than a short exam answer.\n"
+                if assignment_requested
+                else ""
+            )
             return (
                 "Answer in a detailed academic style suitable for an assignment or exam.\n"
                 "- Use clear structure with introduction, explanation, and conclusion when helpful.\n"
-                "- Keep the explanation complete but focused on the asked question."
+                "- Keep the explanation complete but focused on the asked question.\n"
+                f"{assignment_detail_instruction}"
             )
+        assignment_full_instruction = (
+            "- For assignments, make the answer fuller, more polished, and more submission-ready than a brief study note.\n"
+            "- When helpful, use short headings, fuller paragraph development, and a brief conclusion so the answer feels complete.\n"
+            if assignment_requested
+            else ""
+        )
         return (
             "Answer in a detailed academic style suitable for an assignment or exam.\n"
             "- By default, do not make it too short or overly simplified.\n"
             "- Give enough explanation, structure, and supporting points to feel complete.\n"
+            f"{assignment_full_instruction}"
             "- Only switch to a short or simple answer if the user explicitly asks for that."
         )
 
     return None
+
+
+def _diagram_answer_instruction(message: str) -> str | None:
+    text = " ".join((message or "").split())
+    if not text or not _DIAGRAM_REQUEST_PATTERN.search(text):
+        return None
+
+    return (
+        "The user wants a clear diagram-style answer.\n"
+        "- Do not draw rough ASCII art, text boxes, or fake diagrams inside code blocks unless the user explicitly asks for text-only formatting.\n"
+        "- Do not make the entire answer only a separate rough diagram. Give the full answer in normal prose and let the visual support it.\n"
+        "- Write a normal explanation in clean prose, and keep the diagram references aligned with that explanation.\n"
+        "- If the topic is a process, use clear step labels or numbering in the explanation so the visual can match it.\n"
+        "- If the topic is a layered architecture or stack, explain it in the same top-to-bottom order as the visual."
+    )
+
+
+def _multi_question_answer_instruction(message: str) -> str | None:
+    text = " ".join((message or "").split())
+    if not text or not _looks_like_multi_question_request(text):
+        return None
+
+    return (
+        "This request involves multiple questions.\n"
+        "- Answer all visible questions and sub-questions, not just the first few.\n"
+        "- Keep the same order as the source question paper or prompt.\n"
+        "- Use clear separators or headings so each answer is easy to match to its question.\n"
+        "- If different questions have different marks, adjust the answer length for each one individually.\n"
+        "- Do not stop after only a few answers when more questions are still visible.\n"
+        "- Never silently stop early."
+    )
 
 
 def _comparison_answer_instruction(message: str) -> str | None:
@@ -148,8 +265,11 @@ def _comparison_answer_instruction(message: str) -> str | None:
 
     return (
         "This is a comparison question.\n"
-        "- Do not make the answer too brief or overly simple.\n"
-        "- Use a clear Markdown table with meaningful comparison points.\n"
+        "- Do not answer in plain paragraphs only.\n"
+        "- Use a clear Markdown table as the main structure.\n"
+        "- Make the first column the comparison aspect or parameter.\n"
+        "- Put each item being compared in its own separate column so the differences are easy to scan.\n"
+        "- Cover the important differences with enough rows instead of only one or two surface points.\n"
         "- After the table, add a short explanation or summary so the differences are easy to understand.\n"
         "- If helpful, include one concise example."
     )
@@ -239,32 +359,50 @@ def _clarity_first_instruction(mode: str, message: str) -> str | None:
     )
 
 
+def contextual_system_instructions(mode: str, message: str) -> List[str]:
+    instructions: List[str] = []
+
+    clarity_instruction = _clarity_first_instruction(mode, message)
+    if clarity_instruction:
+        instructions.append(clarity_instruction)
+
+    comparison_instruction = _comparison_answer_instruction(message)
+    if comparison_instruction:
+        instructions.append(comparison_instruction)
+
+    diagram_instruction = _diagram_answer_instruction(message)
+    if diagram_instruction:
+        instructions.append(diagram_instruction)
+
+    multi_question_instruction = _multi_question_answer_instruction(message)
+    if multi_question_instruction:
+        instructions.append(multi_question_instruction)
+
+    academic_instruction = _academic_answer_instruction(message)
+    if academic_instruction:
+        instructions.append(academic_instruction)
+
+    exam_ready_instruction = _exam_ready_instruction(message)
+    if exam_ready_instruction:
+        instructions.append(exam_ready_instruction)
+
+    general_instruction = _general_response_instruction(message)
+    if general_instruction:
+        instructions.append(general_instruction)
+
+    return instructions
+
+
 def build_messages(history: List[Dict[str, str]], mode: str) -> List[Dict[str, str]]:
     """Inject system prompt for the selected mode."""
     system_prompt = get_mode_prompt(mode)
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
 
     latest_user_message = _latest_user_message(history)
-
-    clarity_instruction = _clarity_first_instruction(mode, latest_user_message)
-    if clarity_instruction:
-        messages.append({"role": "system", "content": clarity_instruction})
-
-    comparison_instruction = _comparison_answer_instruction(latest_user_message)
-    if comparison_instruction:
-        messages.append({"role": "system", "content": comparison_instruction})
-
-    academic_instruction = _academic_answer_instruction(latest_user_message)
-    if academic_instruction:
-        messages.append({"role": "system", "content": academic_instruction})
-
-    exam_ready_instruction = _exam_ready_instruction(latest_user_message)
-    if exam_ready_instruction:
-        messages.append({"role": "system", "content": exam_ready_instruction})
-
-    general_instruction = _general_response_instruction(latest_user_message)
-    if general_instruction:
-        messages.append({"role": "system", "content": general_instruction})
+    messages.extend(
+        {"role": "system", "content": instruction}
+        for instruction in contextual_system_instructions(mode, latest_user_message)
+    )
 
     return [*messages, *history]
 

@@ -89,6 +89,7 @@ export const documentAPI = {
   getDocuments: () => api.get('/api/document'),
   getDocument: (id) => api.get(`/api/document/${id}`),
   askQuestion: (data) => api.post('/api/document/ask', data),
+  rewriteQuestion: (data) => api.post('/api/document/rewrite-question', data),
   deleteDocument: (id) => api.delete(`/api/document/${id}`),
 };
 
@@ -107,7 +108,8 @@ export const explainAPI = {
 
 // Image API
 export const imageAPI = {
-  generate: (data) => api.post('/api/image', data),
+  generate: (data) => api.post('/api/image/generate', data, { timeout: 240000 }),
+  variation: (data) => api.post('/api/image/variations', data, { timeout: 240000 }),
 };
 
 export default api;

@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 import React, { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
@@ -6,11 +6,10 @@ import { useNavigate } from "react-router-dom";
 import "../index.css";
 import ChatInput from "../components/ChatInput";
 import ChatWindow from "../components/ChatWindow";
-import FeatureCards from "../components/FeatureCards";
 import MouseSpark from "../components/MouseSpark";
 import Sidebar from "../components/Sidebar";
 import Topbar from "../components/Topbar";
-import { chatAPI, documentAPI } from "../services/api";
+import { chatAPI, documentAPI, imageAPI } from "../services/api";
 import { useAuthStore } from "../utils/store";
 
 const API_BASE = (import.meta.env.VITE_API_URL || "").trim();
@@ -20,7 +19,7 @@ const API_ENDPOINT = API_BASE_NORMALIZED
     ? `${API_BASE_NORMALIZED}/chat`
     : `${API_BASE_NORMALIZED}/api/chat`
   : "/api/chat";
-const REQUEST_TIMEOUT_MS = 120000;
+const REQUEST_TIMEOUT_MS = 240000;
 const SESSION_STORAGE_KEY = "nova_session_id";
 const MODEL_STORAGE_KEY = "nova_selected_model";
 const PROMPT_IMAGE_STORAGE_KEY = "nova_generate_prompt_image";
@@ -35,6 +34,10 @@ const IMAGE_INTENT_PATTERNS = [
   /^(?:can you|could you|please)\b[\s\S]{0,40}\b(?:generate|create|make|draw|design|illustrate|paint|render|show|give|send)\b[\s\S]{0,90}\b(?:image|picture|photo|art|artwork|illustration|poster|logo|portrait|wallpaper|banner|thumbnail|cover art|sticker|icon|mascot|avatar)\b/i,
   /^(?:paint|illustrate|sketch)\b[\s\S]{0,220}$/i,
 ];
+const IMAGE_PROMPT_DETAIL_PATTERN =
+  /\b(?:cinematic|photorealistic|hyperrealistic|realistic(?: style)?|highly detailed|ultra detailed|4k(?: quality)?|8k(?: quality)?|shallow depth of field|depth of field|soft natural lighting|natural lighting|studio lighting|golden hour|bokeh|concept art|watercolor|oil painting|digital art|render|matte painting|volumetric lighting|dramatic lighting)\b/gi;
+const NON_IMAGE_HELP_PATTERN =
+  /\b(?:explain|compare|difference|what|why|how|when|where|who|rewrite|improve|analyze|analysis|summarize)\b/i;
 const ACTIVE_NAV_TO_MODE = {
   Chat: "chat",
   Search: "search",
@@ -246,7 +249,17 @@ const looksLikeImageRequest = (value) => {
     return false;
   }
 
-  return IMAGE_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
+  if (IMAGE_INTENT_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
+
+  if (NON_IMAGE_HELP_PATTERN.test(normalized)) {
+    return false;
+  }
+
+  const detailMatches = normalized.match(IMAGE_PROMPT_DETAIL_PATTERN) || [];
+  const commaCount = (normalized.match(/,/g) || []).length;
+  return normalized.split(/\s+/).length >= 8 && commaCount >= 2 && detailMatches.length >= 2;
 };
 
 const getOrCreateSessionId = () => {
@@ -266,6 +279,37 @@ const getOrCreateSessionId = () => {
   window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
   return sessionId;
 };
+
+const IMAGE_ATTACHMENT_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"];
+
+const isImageAttachment = (file) => {
+  if (!file) {
+    return false;
+  }
+
+  const fileType = String(file.type || "").toLowerCase();
+  if (fileType.startsWith("image/")) {
+    return true;
+  }
+
+  const fileName = String(file.name || "").toLowerCase();
+  return IMAGE_ATTACHMENT_EXTENSIONS.some((extension) => fileName.endsWith(extension));
+};
+
+const readFileAsDataUrl = (file) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      resolve(String(reader.result || ""));
+    };
+
+    reader.onerror = () => {
+      reject(new Error(`Could not read ${file?.name || "the selected file"}.`));
+    };
+
+    reader.readAsDataURL(file);
+  });
 
 const readSseEvents = async (response, onEvent) => {
   if (!response.body) {
@@ -642,20 +686,38 @@ function Chat() {
       const text = isStructuredPayload ? payload.text : payload;
       const displayText = isStructuredPayload ? payload.displayText : payload;
       const attachedFile = isStructuredPayload ? payload.file : null;
-      const trimmed = String(text || "").trim();
+      const attachmentKind = isStructuredPayload ? payload.attachmentKind : null;
+      const forceMode = isStructuredPayload ? payload.forceMode : null;
+      const promptPrefix = isStructuredPayload ? payload.promptPrefix : "";
+      const presetLabel = isStructuredPayload ? payload.presetLabel : null;
+      let trimmed = String(text || "").trim();
+      const hasImageAttachment = attachmentKind === "image" || isImageAttachment(attachedFile);
+      const predictedImageRequest =
+        forceMode === "image" || (resolvedMode === "chat" && looksLikeImageRequest(trimmed));
+      if (!trimmed && hasImageAttachment && attachedFile && !predictedImageRequest) {
+        trimmed = "Describe this image clearly.";
+      }
       const displayValue = String(displayText || trimmed).trim();
+      let attachedImageDataUrl = null;
 
       if (!trimmed || isTyping || isConversationLoading) {
         return;
       }
 
+      if (hasImageAttachment && attachedFile && !predictedImageRequest) {
+        attachedImageDataUrl = await readFileAsDataUrl(attachedFile);
+      }
+
       stopSpeaking();
       const optimisticUserMessage = createMessage("user", displayValue || trimmed, currentConversationId, {
-        images: [],
+        images: attachedImageDataUrl ? [attachedImageDataUrl] : [],
         meta: {
           generate_prompt_image: generatePromptImage,
           generate_answer_image: generateAnswerImage,
-          ...(attachedFile?.name ? { document_name: attachedFile.name } : {}),
+          ...(presetLabel ? { quick_mode: presetLabel } : {}),
+          ...(attachedFile?.name && !hasImageAttachment ? { document_name: attachedFile.name } : {}),
+          ...(hasImageAttachment ? { attachment_kind: "image" } : {}),
+          ...(attachedImageDataUrl ? { image_origin: "upload" } : {}),
           ...(activeDocumentContext?.id && !attachedFile
             ? {
                 document_id: activeDocumentContext.id,
@@ -667,13 +729,12 @@ function Chat() {
       setMessages((previous) => [...previous, optimisticUserMessage]);
       setIsTyping(true);
       if (attachedFile?.name) {
-        setStatus(`Reading ${attachedFile.name}...`);
+        setStatus(hasImageAttachment ? `Preparing ${attachedFile.name}...` : `Reading ${attachedFile.name}...`);
       } else {
-        const predictedImageRequest = resolvedMode === "chat" && looksLikeImageRequest(trimmed);
         setStatus(
           buildProgressStatus({
             text: trimmed,
-            isSearch: activeNav === "Search",
+            isSearch: forceMode === "search" || activeNav === "Search",
             isImage: predictedImageRequest,
             generatePromptImage,
             generateAnswerImage,
@@ -685,9 +746,94 @@ function Chat() {
       let timeoutId = null;
 
       try {
+        if (predictedImageRequest && !attachedFile) {
+          setStatus("NOVA AI is generating your image...");
+          const response = await imageAPI.generate({
+            prompt: trimmed,
+            size: "1024x1024",
+            quality: "standard",
+            style: "vivid",
+          });
+          const images = Array.isArray(response?.data?.images)
+            ? response.data.images
+            : response?.data?.url
+              ? [response.data.url]
+              : [];
+          const imageError = response?.data?.error || null;
+
+          if (!images.length) {
+            throw new Error(imageError || "Image generation returned no images.");
+          }
+
+          setMessages((previous) => [
+            ...previous,
+            createMessage(
+              "assistant",
+              "## **✨ Image Ready**\nHere is the image generated from your prompt.",
+              currentConversationId,
+              { images }
+            ),
+          ]);
+          return;
+        }
+
+        if (hasImageAttachment && attachedFile && predictedImageRequest) {
+          setStatus(`Remixing ${attachedFile.name || "photo"}...`);
+          const imageDataUrl = attachedImageDataUrl || (await readFileAsDataUrl(attachedFile));
+          const imageBase64 = imageDataUrl.includes(",") ? imageDataUrl.split(",")[1] : imageDataUrl;
+          const response = await imageAPI.variation({
+            prompt: trimmed,
+            image_b64: imageBase64,
+            mime_type: attachedFile.type || "image/png",
+          });
+          const images = Array.isArray(response?.data?.images)
+            ? response.data.images
+            : response?.data?.url
+              ? [response.data.url]
+              : [];
+
+          if (!images.length) {
+            throw new Error("Image editing returned no images.");
+          }
+
+          setActiveDocumentContext(null);
+          setMessages((previous) => {
+            const updated = previous.map((message) =>
+              message.id === optimisticUserMessage.id
+                ? {
+                    ...message,
+                    images: [imageDataUrl],
+                    meta: {
+                      ...(message.meta || {}),
+                      attachment_kind: "image",
+                      image_origin: "upload",
+                    },
+                  }
+                : message
+            );
+
+            updated.push(
+              createMessage(
+                "assistant",
+                trimmed
+                  ? "## **✨ Image Remix Ready**\nI used your uploaded photo and prompt to create a fresh visual."
+                  : "## **✨ Image Remix Ready**\nI created a fresh visual from your uploaded photo.",
+                currentConversationId,
+                {
+                  images,
+                }
+              )
+            );
+
+            return updated;
+          });
+
+          return;
+        }
+
         let documentContext = attachedFile ? null : activeDocumentContext;
 
-        if (attachedFile) {
+        if (attachedFile && !hasImageAttachment) {
           const uploadedDocument = await uploadDocumentForChat(attachedFile);
           if (!uploadedDocument?.id) {
             throw new Error("Document upload did not return an id.");
@@ -698,9 +844,7 @@ function Chat() {
 
         const requestMode = documentContext?.id
           ? "documents"
-          : resolvedMode === "chat" && looksLikeImageRequest(trimmed)
-            ? "image"
-            : resolvedMode;
+          : forceMode || (resolvedMode === "chat" && looksLikeImageRequest(trimmed) ? "image" : resolvedMode);
         setStatus(
           buildProgressStatus({
             text: trimmed,
@@ -711,10 +855,12 @@ function Chat() {
           })
         );
 
+        const trimmedPromptPrefix = String(promptPrefix || "").trim();
+        const combinedPromptPrefix = [toolPrefix, trimmedPromptPrefix].filter(Boolean).join("\n");
         const prompt = requestMode === "documents"
-          ? trimmed
-          : toolPrefix
-            ? `${toolPrefix}\n${trimmed}`
+          ? [trimmedPromptPrefix, trimmed].filter(Boolean).join("\n")
+          : combinedPromptPrefix
+            ? `${combinedPromptPrefix}\n${trimmed}`
             : trimmed;
         const selectedProvider =
           selectedModelOption?.provider && selectedModelOption?.model
@@ -747,6 +893,14 @@ function Chat() {
             ...selectedProvider,
             generate_prompt_image: generatePromptImage,
             generate_answer_image: generateAnswerImage,
+            ...(attachedImageDataUrl
+              ? {
+                  image_b64: attachedImageDataUrl.includes(",")
+                    ? attachedImageDataUrl.split(",")[1]
+                    : attachedImageDataUrl,
+                  image_mime_type: attachedFile?.type || "image/png",
+                }
+              : {}),
           }),
           signal: controller.signal,
         });
@@ -959,10 +1113,10 @@ function Chat() {
       }
     },
     [
-      activeNav,
       activeDocumentContext,
       currentConversationId,
       handleUnauthorized,
+      activeNav,
       isConversationLoading,
       isTyping,
       loadConversations,
@@ -1109,11 +1263,6 @@ function Chat() {
     ]
   );
 
-  const handleSuggestion = (text) => {
-    setInput(text);
-    handleSend(text);
-  };
-
   return (
     <>
       <MouseSpark />
@@ -1153,7 +1302,6 @@ function Chat() {
             onTogglePromptImage={() => setGeneratePromptImage((previous) => !previous)}
             onToggleAnswerImage={() => setGenerateAnswerImage((previous) => !previous)}
           />
-          <FeatureCards visible={!messages.length} onSelect={handleSuggestion} />
         </main>
       </div>
     </>
@@ -1161,3 +1309,4 @@ function Chat() {
 }
 
 export default Chat;
+
