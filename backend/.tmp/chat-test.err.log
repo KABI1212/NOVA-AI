@@ -1,0 +1,22 @@
+INFO:     Started server process [23144]
+INFO:     Waiting for application startup.
+2026-03-19 19:13:26,932 INFO [main] NOVA AI v1.0.0 starting
+2026-03-19 19:13:26,937 INFO [main] Database connected: sqlite:///./test.db
+2026-03-19 19:13:26,937 INFO [main] CORS enabled for: ['http://localhost:3000']
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8002 (Press CTRL+C to quit)
+2026-03-19 19:13:27,380 INFO [routes.chat] Chat request mode=chat provider=google model=<default> conversation_id=<none> message=how many teams available in ipl and what are the teams name and their captions?
+2026-03-19 19:13:27,380 INFO [services.ai_service] AI request provider=google model=gemini-2.5-flash temperature=0.30 max_tokens=2048 message_count=2 preview=[{"role": "system", "content": "You are NOVA AI, a careful and reliable assistant. Core rules: - Prioritize accuracy over sounding confident. - Never guess, fabricate facts, invent sources, or hallucinate missing details. - If the answer is uncertain, unavailable from the conversation, or needs verification, say \"I don't know\" or clearly state the uncertainty. - Use the full conversation context when answering follow-up question"}, {"role": "user", "content": "how many teams available in ipl and what are the teams name and their captions?"}]
+2026-03-19 19:13:28,032 WARNING [services.ai_service] AI provider failed provider=google model=gemini-2.5-flash error=Part.from_text() takes 1 positional argument but 2 were given
+Traceback (most recent call last):
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\services\ai_service.py", line 552, in _stream_with_fallback
+    async for token in fn(
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\services\ai_service.py", line 241, in _stream_google
+    contents, system_instruction = _messages_to_gemini(messages)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\services\ai_service.py", line 189, in _messages_to_gemini
+    contents.append(types.Content(role=gemini_role, parts=[types.Part.from_text(content)]))
+                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: Part.from_text() takes 1 positional argument but 2 were given
+2026-03-19 19:13:28,035 WARNING [routes.chat] Public chat completion failed: All configured AI providers failed or returned empty responses: google: Part.from_text() takes 1 positional argument but 2 were given
+2026-03-19 19:13:28,035 INFO [routes.chat] Chat response mode=chat provider=google model=<default> chars=50 preview=NOVA AI encountered an issue but is still running.

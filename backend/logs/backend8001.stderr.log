@@ -1,0 +1,201 @@
+INFO:     Started server process [9492]
+INFO:     Waiting for application startup.
+2026-03-20 16:17:30,883 INFO [main] NOVA AI v1.0.0 starting
+2026-03-20 16:17:30,893 INFO [config.database] mongodb_event=init_success uri='mongodb://localhost:27017/nova_ai' database='nova_ai' attempt=1 attempts=3
+2026-03-20 16:17:30,893 INFO [main] Database connected: mongodb://localhost:27017/nova_ai
+2026-03-20 16:17:30,893 INFO [main] CORS enabled for: ['http://localhost:3000']
+INFO:     Application startup complete.
+ERROR:    [Errno 11001] getaddrinfo failed
+INFO:     Waiting for application shutdown.
+2026-03-20 16:17:30,897 INFO [main] NOVA AI shutting down
+INFO:     Application shutdown complete.
+INFO:     Started server process [16552]
+INFO:     Waiting for application startup.
+2026-03-20 16:18:20,598 INFO [main] NOVA AI v1.0.0 starting
+2026-03-20 16:18:20,608 INFO [config.database] mongodb_event=init_success uri='mongodb://localhost:27017/nova_ai' database='nova_ai' attempt=1 attempts=3
+2026-03-20 16:18:20,608 INFO [main] Database connected: mongodb://localhost:27017/nova_ai
+2026-03-20 16:18:20,608 INFO [main] CORS enabled for: ['http://localhost:3000']
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+2026-03-20 16:19:01,341 ERROR [main] Unhandled exception for path=/api/chat
+Traceback (most recent call last):
+  File "c:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\config\database.py", line 296, in commit
+    self._save_object(obj)
+  File "c:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\config\database.py", line 284, in _save_object
+    self.collection_for(model).update_one(
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\collection.py", line 1336, in update_one
+    self._update_retryable(
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\collection.py", line 1118, in _update_retryable
+    return self._database.client._retryable_write(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 2083, in _retryable_write
+    return self._retry_with_session(retryable, func, s, bulk, operation, operation_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 1968, in _retry_with_session
+    return self._retry_internal(
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\_csot.py", line 125, in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 2014, in _retry_internal
+    ).run()
+      ^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 2763, in run
+    return self._read() if self._is_read else self._write()
+                                              ^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 2895, in _write
+    return self._func(self._session, conn, self._retryable)  # type: ignore
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\collection.py", line 1098, in _update
+    return self._update(
+           ^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\collection.py", line 1059, in _update
+    _check_write_command_response(result)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\helpers_shared.py", line 322, in _check_write_command_response
+    _raise_last_write_error(write_errors)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\helpers_shared.py", line 292, in _raise_last_write_error
+    raise DuplicateKeyError(error.get("errmsg"), 11000, error)
+pymongo.errors.DuplicateKeyError: E11000 duplicate key error collection: nova_ai.conversations index: share_id_1 dup key: { share_id: null }, full error: {'index': 0, 'code': 11000, 'errmsg': 'E11000 duplicate key error collection: nova_ai.conversations index: share_id_1 dup key: { share_id: null }', 'keyPattern': {'share_id': 1}, 'keyValue': {'share_id': None}}
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\middleware\cors.py", line 87, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\middleware\exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\fastapi\middleware\asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\routing.py", line 716, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\routing.py", line 736, in app
+    await route.handle(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\routing.py", line 290, in handle
+    await self.app(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\fastapi\routing.py", line 130, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\fastapi\routing.py", line 116, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\fastapi\routing.py", line 670, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\fastapi\routing.py", line 324, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\routes\chat.py", line 601, in chat
+    conversation = _get_or_create_conversation(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\routes\chat.py", line 377, in _get_or_create_conversation
+    db.commit()
+  File "c:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\config\database.py", line 298, in commit
+    raise IntegrityError(None, None, exc) from exc
+sqlalchemy.exc.IntegrityError: (pymongo.errors.DuplicateKeyError) E11000 duplicate key error collection: nova_ai.conversations index: share_id_1 dup key: { share_id: null }, full error: {'index': 0, 'code': 11000, 'errmsg': 'E11000 duplicate key error collection: nova_ai.conversations index: share_id_1 dup key: { share_id: null }', 'keyPattern': {'share_id': 1}, 'keyValue': {'share_id': None}}
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "c:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\config\database.py", line 296, in commit
+    self._save_object(obj)
+  File "c:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\config\database.py", line 284, in _save_object
+    self.collection_for(model).update_one(
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\collection.py", line 1336, in update_one
+    self._update_retryable(
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\collection.py", line 1118, in _update_retryable
+    return self._database.client._retryable_write(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 2083, in _retryable_write
+    return self._retry_with_session(retryable, func, s, bulk, operation, operation_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 1968, in _retry_with_session
+    return self._retry_internal(
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\_csot.py", line 125, in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 2014, in _retry_internal
+    ).run()
+      ^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 2763, in run
+    return self._read() if self._is_read else self._write()
+                                              ^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 2895, in _write
+    return self._func(self._session, conn, self._retryable)  # type: ignore
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\collection.py", line 1098, in _update
+    return self._update(
+           ^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\synchronous\collection.py", line 1059, in _update
+    _check_write_command_response(result)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\helpers_shared.py", line 322, in _check_write_command_response
+    _raise_last_write_error(write_errors)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\pymongo\helpers_shared.py", line 292, in _raise_last_write_error
+    raise DuplicateKeyError(error.get("errmsg"), 11000, error)
+pymongo.errors.DuplicateKeyError: E11000 duplicate key error collection: nova_ai.conversations index: share_id_1 dup key: { share_id: null }, full error: {'index': 0, 'code': 11000, 'errmsg': 'E11000 duplicate key error collection: nova_ai.conversations index: share_id_1 dup key: { share_id: null }', 'keyPattern': {'share_id': 1}, 'keyValue': {'share_id': None}}
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 416, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\uvicorn\middleware\proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\fastapi\applications.py", line 1160, in __call__
+    await super().__call__(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\applications.py", line 107, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\middleware\errors.py", line 186, in __call__
+    raise exc
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\middleware\cors.py", line 87, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\middleware\exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\fastapi\middleware\asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\routing.py", line 716, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\routing.py", line 736, in app
+    await route.handle(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\routing.py", line 290, in handle
+    await self.app(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\fastapi\routing.py", line 130, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\fastapi\routing.py", line 116, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\fastapi\routing.py", line 670, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\venv\Lib\site-packages\fastapi\routing.py", line 324, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\routes\chat.py", line 601, in chat
+    conversation = _get_or_create_conversation(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\routes\chat.py", line 377, in _get_or_create_conversation
+    db.commit()
+  File "c:\Users\Admin\OneDrive\Desktop\NOVA AI\backend\config\database.py", line 298, in commit
+    raise IntegrityError(None, None, exc) from exc
+sqlalchemy.exc.IntegrityError: (pymongo.errors.DuplicateKeyError) E11000 duplicate key error collection: nova_ai.conversations index: share_id_1 dup key: { share_id: null }, full error: {'index': 0, 'code': 11000, 'errmsg': 'E11000 duplicate key error collection: nova_ai.conversations index: share_id_1 dup key: { share_id: null }', 'keyPattern': {'share_id': 1}, 'keyValue': {'share_id': None}}
+(Background on this error at: https://sqlalche.me/e/20/gkpj)

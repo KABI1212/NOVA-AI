@@ -1,0 +1,64 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Backend: FastAPI Server",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/start-nova-local.ps1",
+        "-SkipMongo"
+      ],
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "custom",
+        "pattern": {
+          "regexp": "^(?!.*$)(.+)$",
+          "file": 1,
+          "message": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*$",
+          "endsPattern": "Uvicorn running on http://127\\.0\\.0\\.1:8000"
+        }
+      }
+    },
+    {
+      "label": "Frontend: Vite Dev Server",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/start-frontend-dev.ps1"
+      ],
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "custom",
+        "pattern": {
+          "regexp": "^(?!.*$)(.+)$",
+          "file": 1,
+          "message": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*$",
+          "endsPattern": "Local:\\s+http://localhost:5173"
+        }
+      }
+    },
+    {
+      "label": "Full Stack: Start Dev Servers",
+      "dependsOrder": "parallel",
+      "dependsOn": [
+        "Backend: FastAPI Server",
+        "Frontend: Vite Dev Server"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+INFO:     Started server process [15452]
+INFO:     Waiting for application startup.
+2026-03-19 19:15:56,468 INFO [main] NOVA AI v1.0.0 starting
+2026-03-19 19:15:56,470 INFO [main] Database connected: sqlite:///./test.db
+2026-03-19 19:15:56,471 INFO [main] CORS enabled for: ['http://localhost:3000']
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8004 (Press CTRL+C to quit)
+2026-03-19 19:15:58,285 INFO [primp] response: https://en.wikipedia.org/w/api.php?action=opensearch&profile=fuzzy&limit=1&search=how%20many%20teams%20available%20in%20ipl%20and%20what%20are%20the%20teams%20name%20and%20their%20captions%3F 200
+2026-03-19 19:15:58,410 INFO [primp] response: https://grokipedia.com/api/typeahead?query=how+many+teams+available+in+ipl+and+what+are+the+teams+name+and+their+captions%3F&limit=1 200
+2026-03-19 19:15:59,021 INFO [primp] response: https://yandex.com/search/site/?text=how+many+teams+available+in+ipl+and+what+are+the+teams+name+and+their+captions%3F&web=1&searchid=7330361 200
+2026-03-19 19:16:01,752 INFO [primp] response: https://html.duckduckgo.com/html/ 200
+2026-03-19 19:16:02,791 INFO [primp] response: https://duckduckgo.com/?q=how+many+teams+available+in+ipl+and+what+are+the+teams+name+and+their+captions%3F 200
+2026-03-19 19:16:03,147 INFO [primp] response: https://www.bing.com/news/infinitescrollajax?q=how+many+teams+available+in+ipl+and+what+are+the+teams+name+and+their+captions%3F&InfiniteScroll=1&first=11&SFX=1&cc=us&setlang=en 200
+2026-03-19 19:16:03,239 INFO [primp] response: https://duckduckgo.com/news.js?l=us-en&o=json&noamp=1&q=how+many+teams+available+in+ipl+and+what+are+the+teams+name+and+their+captions%3F&vqd=4-280378945061292058794708072499006642339&p=-1 200
+2026-03-19 19:16:03,898 INFO [primp] response: https://news.search.yahoo.com/search?p=how+many+teams+available+in+ipl+and+what+are+the+teams+name+and+their+captions%3F 200
+2026-03-19 19:16:04,136 INFO [routes.chat] Chat request mode=chat provider=google model=<default> conversation_id=<none> message=how many teams available in ipl and what are the teams name and their captions?
+2026-03-19 19:16:04,140 INFO [services.ai_service] AI request provider=google model=gemini-2.5-flash temperature=0.30 max_tokens=2048 message_count=2 preview=[{"role": "system", "content": "You are NOVA AI, a careful and reliable assistant. Core rules: - Prioritize accuracy over sounding confident. - Never guess, fabricate facts, invent sources, or hallucinate missing details. - If the answer is uncertain, unavailable from the conversation, or needs verification, say \"I don't know\" or clearly state the uncertainty. - Use the full conversation context when answering follow-up question"}, {"role": "user", "content": "Today's date is March 19, 2026. Use the search results below as the primary source for recent or year-specific facts. If the user asks about a specific year or range such as 2024 to 2025, prioritize results that match those years exactly. SEARCH RESULTS: [1] IPL 2026 auction: Full breakdown of purse remaining for all 10 teams URL: https://www.msn.com/en-us/sports/other/ipl-2026-auction-full-breakd"}]
+2026-03-19 19:16:06,515 INFO [google_genai.models] AFC is enabled with max remote calls: 10.
+2026-03-19 19:16:09,527 INFO [services.ai_service] AI response provider=google model=gemini-2.5-flash chars=154 preview=Based on the search results, there are 10 teams in the IPL [1, 2, 4]. The provided search results do not list the names of these teams or their captains.
+2026-03-19 19:16:09,530 INFO [routes.chat] Chat response mode=chat provider=google model=<default> chars=154 preview=Based on the search results, there are 10 teams in the IPL [1, 2, 4]. The provided search results do not list the names of these teams or their captains.

@@ -1,0 +1,1 @@
+AI ImpactSense focuses on document reasoning with grounded answers.

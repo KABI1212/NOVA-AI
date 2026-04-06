@@ -1,0 +1,12 @@
+INFO:     Started server process [16476]
+INFO:     Waiting for application startup.
+2026-03-19 19:14:16,085 INFO [main] NOVA AI v1.0.0 starting
+2026-03-19 19:14:16,088 INFO [main] Database connected: sqlite:///./test.db
+2026-03-19 19:14:16,088 INFO [main] CORS enabled for: ['http://localhost:3000']
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8003 (Press CTRL+C to quit)
+2026-03-19 19:14:16,584 INFO [routes.chat] Chat request mode=chat provider=google model=<default> conversation_id=<none> message=how many teams available in ipl and what are the teams name and their captions?
+2026-03-19 19:14:16,587 INFO [services.ai_service] AI request provider=google model=gemini-2.5-flash temperature=0.30 max_tokens=2048 message_count=2 preview=[{"role": "system", "content": "You are NOVA AI, a careful and reliable assistant. Core rules: - Prioritize accuracy over sounding confident. - Never guess, fabricate facts, invent sources, or hallucinate missing details. - If the answer is uncertain, unavailable from the conversation, or needs verification, say \"I don't know\" or clearly state the uncertainty. - Use the full conversation context when answering follow-up question"}, {"role": "user", "content": "how many teams available in ipl and what are the teams name and their captions?"}]
+2026-03-19 19:14:17,797 INFO [google_genai.models] AFC is enabled with max remote calls: 10.
+2026-03-19 19:14:21,436 INFO [services.ai_service] AI response provider=google model=gemini-2.5-flash chars=609 preview=There are **10 teams** available in the Indian Premier League (IPL). Here are the teams and their captains (as of the 2024 season): 1. **Chennai Super Kings (CSK)** - Ruturaj Gaikwad 2. **Delhi Capitals (DC)** - Rishabh Pant 3. **Gujarat Titans (GT)** - Shubman Gill 4. **Kolkata Knight Riders (KKR)** - Shreyas Iyer 5. **Lucknow Super Giants (LSG)** - KL Rahul 6. **Mumbai Indians (MI)** - Hardik Pa
+2026-03-19 19:14:21,439 INFO [routes.chat] Chat response mode=chat provider=google model=<default> chars=609 preview=There are **10 teams** available in the Indian Premier League (IPL). Here are the teams and their captains (as of the 2024 season): 1. **Chennai Super Kings (CSK)** - Ruturaj Gaikwad 2. **Delhi Capitals (DC)** - Rishabh Pant 3. **Gujarat Titans (GT)** - Shubman Gill 4. **Kolkata Knight Riders (KKR)** - Shreyas Iyer 5. **Lucknow Super Giants (LSG)** - KL Rahul 6. **Mumbai Indians (MI)** - Hardik Pa

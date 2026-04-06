@@ -1,0 +1,40 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend: FastAPI",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/main.py",
+      "cwd": "${workspaceFolder}/backend",
+      "python": "${workspaceFolder}/backend/venv314/Scripts/python.exe",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Frontend: Chrome",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:3000",
+      "webRoot": "${workspaceFolder}/frontend",
+      "userDataDir": true
+    },
+    {
+      "name": "Frontend: Edge",
+      "type": "msedge",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/frontend",
+      "userDataDir": true
+    }
+  ],
+  "compounds": [
+    {
+      "name": "🚀 Full Stack (FastAPI + Vite)",
+      "preLaunchTask": "Full Stack: Start Dev Servers",
+      "configurations": [
+        "Backend: FastAPI",
+        "Frontend: Edge"
+      ]
+    }
+  ]
+}

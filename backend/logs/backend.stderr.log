@@ -1,0 +1,25 @@
+No Python at '"C:\Users\Admin\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\python.exe'
+INFO:     Started server process [15812]
+INFO:     Waiting for application startup.
+2026-03-20 15:56:22,712 INFO [main] NOVA AI v1.0.0 starting
+2026-03-20 15:56:22,717 ERROR [config.database] mongodb_event=init_error uri='mongodb://localhost:27017/nova_ai' database='nova_ai' attempt=1 attempts=3 error='The field \'unique\' is not valid for an _id index specification. Specification: { unique: true, name: "_id_1", key: { _id: 1 }, v: 2 }, full error: {\'ok\': 0.0, \'errmsg\': \'The field \\\'unique\\\' is not valid for an _id index specification. Specification: { unique: true, name: "_id_1", key: { _id: 1 }, v: 2 }\', \'code\': 197, \'codeName\': \'InvalidIndexSpecificationOption\'}'
+2026-03-20 15:56:22,718 INFO [config.database] mongodb_event=init_backoff_sleep delay_seconds=2.0 next_attempt=2
+2026-03-20 15:56:24,720 ERROR [config.database] mongodb_event=init_error uri='mongodb://localhost:27017/nova_ai' database='nova_ai' attempt=2 attempts=3 error='The field \'unique\' is not valid for an _id index specification. Specification: { unique: true, name: "_id_1", key: { _id: 1 }, v: 2 }, full error: {\'ok\': 0.0, \'errmsg\': \'The field \\\'unique\\\' is not valid for an _id index specification. Specification: { unique: true, name: "_id_1", key: { _id: 1 }, v: 2 }\', \'code\': 197, \'codeName\': \'InvalidIndexSpecificationOption\'}'
+2026-03-20 15:56:24,720 INFO [config.database] mongodb_event=init_backoff_sleep delay_seconds=4.0 next_attempt=3
+2026-03-20 15:56:28,722 ERROR [config.database] mongodb_event=init_error uri='mongodb://localhost:27017/nova_ai' database='nova_ai' attempt=3 attempts=3 error='The field \'unique\' is not valid for an _id index specification. Specification: { unique: true, name: "_id_1", key: { _id: 1 }, v: 2 }, full error: {\'ok\': 0.0, \'errmsg\': \'The field \\\'unique\\\' is not valid for an _id index specification. Specification: { unique: true, name: "_id_1", key: { _id: 1 }, v: 2 }\', \'code\': 197, \'codeName\': \'InvalidIndexSpecificationOption\'}'
+2026-03-20 15:56:28,722 ERROR [config.database] mongodb_event=init_fallback_without_db uri='mongodb://localhost:27017/nova_ai' database='nova_ai' required=False error='MongoDB is unavailable at mongodb://localhost:27017/nova_ai. Check whether mongod is installed, running, and listening on the expected host/port. Details: The field \'unique\' is not valid for an _id index specification. Specification: { unique: true, name: "_id_1", key: { _id: 1 }, v: 2 }, full error: {\'ok\': 0.0, \'errmsg\': \'The field \\\'unique\\\' is not valid for an _id index specification. Specification: { unique: true, name: "_id_1", key: { _id: 1 }, v: 2 }\', \'code\': 197, \'codeName\': \'InvalidIndexSpecificationOption\'}'
+2026-03-20 15:56:28,722 WARNING [main] Database unavailable during startup: {'available': False, 'last_error': 'The field \'unique\' is not valid for an _id index specification. Specification: { unique: true, name: "_id_1", key: { _id: 1 }, v: 2 }, full error: {\'ok\': 0.0, \'errmsg\': \'The field \\\'unique\\\' is not valid for an _id index specification. Specification: { unique: true, name: "_id_1", key: { _id: 1 }, v: 2 }\', \'code\': 197, \'codeName\': \'InvalidIndexSpecificationOption\'}', 'last_checked_at': '2026-03-20T10:26:28.722059', 'database_name': 'nova_ai'}
+2026-03-20 15:56:28,722 INFO [main] CORS enabled for: ['http://localhost:3000']
+INFO:     Application startup complete.
+ERROR:    [Errno 10048] error while attempting to bind on address ('0.0.0.0', 8000): [winerror 10048] only one usage of each socket address (protocol/network address/port) is normally permitted
+INFO:     Waiting for application shutdown.
+2026-03-20 15:56:28,723 INFO [main] NOVA AI shutting down
+INFO:     Application shutdown complete.
+INFO:     Started server process [5620]
+INFO:     Waiting for application startup.
+2026-03-20 15:59:35,019 INFO [main] NOVA AI v1.0.0 starting
+2026-03-20 15:59:35,127 INFO [config.database] mongodb_event=init_success uri='mongodb://localhost:27017/nova_ai' database='nova_ai' attempt=1 attempts=3
+2026-03-20 15:59:35,127 INFO [main] Database connected: mongodb://localhost:27017/nova_ai
+2026-03-20 15:59:35,127 INFO [main] CORS enabled for: ['http://localhost:3000']
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)

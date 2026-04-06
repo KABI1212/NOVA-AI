@@ -1,0 +1,2 @@
+INFO:     127.0.0.1:56276 - "POST /api/chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56276 - "POST /api/chat/debug HTTP/1.1" 200 OK
