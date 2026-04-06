@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import Any, List
+import logging
 import re
 try:
     from sqlalchemy.orm import Session
@@ -18,6 +19,7 @@ from utils.dependencies import get_current_user
 from config.settings import settings
 
 router = APIRouter(prefix="/api/document", tags=["Document Analyzer"])
+logger = logging.getLogger(__name__)
 _ALL_QUESTIONS_PATTERN = re.compile(
     r"\b(?:answer|solve|write|give|provide|return|generate)\s+(?:all|every)\s+(?:the\s+)?(?:questions?|answers?)\b"
     r"|\ball questions?\b"
@@ -106,6 +108,158 @@ SUPPORTED_DOCUMENT_EXTENSIONS = {
     ".yml",
     ".yaml",
 }
+_AI_PROVIDER_OFFLINE_PATTERN = re.compile(
+    r"offline mode|provider not configured|temporarily unavailable|missing [A-Z_]+API_KEY|ollama serve",
+    re.IGNORECASE,
+)
+
+
+def _fallback_document_summary(text: str, limit: int = 520) -> str:
+    cleaned = " ".join((text or "").split()).strip()
+    if not cleaned:
+        return "Summary is unavailable because no readable text was extracted from this document."
+
+    preview = cleaned[:limit].rstrip()
+    if len(cleaned) > limit:
+        preview = f"{preview}..."
+    return f"Summary is unavailable right now. Preview: {preview}"
+
+
+def _looks_like_ai_provider_issue(message: str) -> bool:
+    return bool(_AI_PROVIDER_OFFLINE_PATTERN.search(str(message or "")))
+
+
+def _document_question_terms(question: str, limit: int = 10) -> List[str]:
+    raw_terms = re.findall(r"[A-Za-z0-9][A-Za-z0-9/+.-]{1,}", str(question or "").lower())
+    terms: List[str] = []
+    seen: set[str] = set()
+
+    for term in raw_terms:
+        cleaned = term.strip().lower()
+        if (
+            not cleaned
+            or cleaned in _STOPWORDS
+            or len(cleaned) < 3
+            or cleaned.isdigit()
+        ):
+            continue
+        if cleaned in seen:
+            continue
+        seen.add(cleaned)
+        terms.append(cleaned)
+        if len(terms) >= limit:
+            break
+
+    return terms
+
+
+def _document_passages(text: str, chunk_chars: int = 420) -> List[str]:
+    passages: List[str] = []
+    sections = re.split(r"\n{2,}", str(text or ""))
+
+    for section in sections:
+        cleaned_section = " ".join(section.split()).strip()
+        if not cleaned_section:
+            continue
+        if len(cleaned_section) <= chunk_chars:
+            passages.append(cleaned_section)
+            continue
+
+        sentences = re.split(r"(?<=[.!?])\s+", cleaned_section)
+        current_chunk = ""
+        for sentence in sentences:
+            candidate = f"{current_chunk} {sentence}".strip()
+            if current_chunk and len(candidate) > chunk_chars:
+                passages.append(current_chunk)
+                current_chunk = sentence.strip()
+            else:
+                current_chunk = candidate
+
+        if current_chunk:
+            passages.append(current_chunk)
+
+    if passages:
+        return passages
+
+    cleaned_text = " ".join(str(text or "").split()).strip()
+    return [cleaned_text] if cleaned_text else []
+
+
+def _score_document_passage(passage: str, terms: List[str], index: int) -> float:
+    lowered = passage.lower()
+    score = 0.0
+
+    for term in terms:
+        if term in lowered:
+            score += 3.0 + min(lowered.count(term), 3)
+
+    if len(terms) >= 2:
+        consecutive_matches = sum(
+            1 for first, second in zip(terms, terms[1:]) if f"{first} {second}" in lowered
+        )
+        score += consecutive_matches * 2.5
+
+    score += max(0, 2 - index) * 0.15
+    return score
+
+
+def _trim_document_excerpt(text: str, limit: int = 360) -> str:
+    cleaned = " ".join(str(text or "").split()).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return f"{cleaned[:limit].rstrip()}..."
+
+
+def _fallback_answer_from_context(question: str, context: str) -> str:
+    passages = _document_passages(context)
+    if not passages:
+        return (
+            "I could not build a useful fallback answer from this document because no readable "
+            "text was available in the selected context."
+        )
+
+    terms = _document_question_terms(question)
+    ranked_passages = sorted(
+        (
+            (_score_document_passage(passage, terms, index), index, passage)
+            for index, passage in enumerate(passages)
+        ),
+        key=lambda item: (item[0], -item[1]),
+        reverse=True,
+    )
+
+    selected = [passage for score, _, passage in ranked_passages if score > 0][:3]
+    if not selected:
+        selected = passages[:2]
+
+    formatted_excerpts = [
+        f"{index + 1}. {_trim_document_excerpt(passage)}"
+        for index, passage in enumerate(selected)
+    ]
+
+    if len(formatted_excerpts) == 1:
+        return (
+            "NOVA AI is using document fallback mode, so here is the most relevant passage I found:\n\n"
+            f"{formatted_excerpts[0]}\n\n"
+            "Ask a narrower follow-up if you want another section from the same file."
+        )
+
+    return (
+        "NOVA AI is using document fallback mode, so here are the most relevant parts I found in your file:\n\n"
+        + "\n".join(formatted_excerpts)
+        + "\n\nAsk a more specific follow-up and I can pull the next most relevant section."
+    )
+
+
+def _fallback_rewrite_question(question: str) -> str:
+    cleaned = " ".join((question or "").split()).strip()
+    if not cleaned:
+        return ""
+
+    rebuilt = cleaned[0].upper() + cleaned[1:] if cleaned else cleaned
+    if rebuilt[-1] not in {"?", ".", "!"}:
+        rebuilt = f"{rebuilt}?"
+    return rebuilt
 
 
 def _needs_full_document_context(question: str) -> bool:
@@ -384,17 +538,52 @@ async def upload_document(
             file_path,
             document.file_type
         )
+        cleaned_text_content = str(text_content or "").strip()
 
         # Update document with extracted text
-        document.text_content = text_content
+        document.text_content = cleaned_text_content or None
+
+        if not cleaned_text_content:
+            document.is_processed = False
+            document.summary = (
+                "No readable text could be extracted from this file. "
+                "Try a text-based PDF, DOCX, TXT, Markdown, or code file."
+            )
+            db.commit()
+            db.refresh(document)
+            return {
+                "id": document.id,
+                "filename": document.filename,
+                "file_type": document.file_type,
+                "file_size": document.file_size,
+                "summary": document.summary,
+                "is_processed": document.is_processed,
+                "created_at": document.created_at.isoformat()
+            }
+
         document.is_processed = True
 
-        # Generate summary
-        summary = await ai_service.summarize_document(text_content)
-        document.summary = summary
+        try:
+            summary = await ai_service.summarize_document(cleaned_text_content)
+            document.summary = summary or _fallback_document_summary(cleaned_text_content)
+        except Exception as exc:
+            logger.warning(
+                "document_summary_failed document_id=%s filename=%s error=%s",
+                document.id,
+                document.filename,
+                exc,
+            )
+            document.summary = _fallback_document_summary(cleaned_text_content)
 
-        # Add to vector database for semantic search
-        await vector_service.upsert_document(text_content, document.id)
+        try:
+            await vector_service.upsert_document(cleaned_text_content, document.id)
+        except Exception as exc:
+            logger.warning(
+                "document_vector_index_failed document_id=%s filename=%s error=%s",
+                document.id,
+                document.filename,
+                exc,
+            )
 
         db.commit()
         db.refresh(document)
@@ -482,24 +671,62 @@ async def ask_question(
         raise HTTPException(status_code=404, detail="Document not found")
 
     if not document.is_processed:
-        raise HTTPException(status_code=400, detail="Document is still being processed")
+        raise HTTPException(
+            status_code=400,
+            detail=document.summary or "Document is still being processed",
+        )
 
-    # Use vector search to find relevant context
-    await vector_service.ensure_document(document.text_content or "", document.id)
+    document_text = str(document.text_content or "").strip()
+    if not document_text:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No readable text was extracted from this document. "
+                "Upload a text-based PDF, DOCX, TXT, Markdown, or code file."
+            ),
+        )
+
     if _needs_full_document_context(request.question):
-        context = str(document.text_content or "")[:_EXPANDED_DOCUMENT_CONTEXT_CHARS]
+        context = document_text[:_EXPANDED_DOCUMENT_CONTEXT_CHARS]
         context_limit = _EXPANDED_DOCUMENT_CONTEXT_CHARS
     else:
-        search_results = await vector_service.search(request.question, k=3, doc_id=document.id)
-        context = "\n\n".join([result[0] for result in search_results])
         context_limit = _DEFAULT_DOCUMENT_CONTEXT_CHARS
+        context = ""
+        try:
+            await vector_service.ensure_document(document_text, document.id)
+            search_results = await vector_service.search(request.question, k=3, doc_id=document.id)
+            context = "\n\n".join([result[0] for result in search_results])
+        except Exception as exc:
+            logger.warning(
+                "document_context_lookup_failed document_id=%s filename=%s error=%s",
+                document.id,
+                document.filename,
+                exc,
+            )
+
+    context_for_answer = context if context else document_text[:context_limit]
 
     # Get answer from AI
-    answer = await ai_service.answer_question_from_document(
-        request.question,
-        context if context else str(document.text_content or ""),
-        max_context_chars=context_limit,
-    )
+    answer_mode = "ai"
+    try:
+        answer = await ai_service.answer_question_from_document(
+            request.question,
+            context_for_answer,
+            max_context_chars=context_limit,
+        )
+        if _looks_like_ai_provider_issue(answer):
+            answer = _fallback_answer_from_context(request.question, context_for_answer)
+            answer_mode = "fallback"
+    except Exception as exc:
+        logger.warning(
+            "document_answer_failed document_id=%s filename=%s error=%s",
+            document.id,
+            document.filename,
+            exc,
+        )
+        answer = _fallback_answer_from_context(request.question, context_for_answer)
+        answer_mode = "fallback"
+
     answer_images: List[str] = []
     if _looks_like_diagram_request(request.question):
         answer_images = await _generate_document_answer_images_best_effort(
@@ -512,6 +739,7 @@ async def ask_question(
         "question": request.question,
         "answer": answer,
         "answer_images": answer_images,
+        "answer_mode": answer_mode,
     }
 
 
@@ -525,13 +753,24 @@ async def rewrite_question(
     if not question:
         raise HTTPException(status_code=400, detail="Question is required")
 
-    rewritten_question = await ai_service.rewrite_document_question(question)
+    rewrite_mode = "ai"
+    try:
+        rewritten_question = await ai_service.rewrite_document_question(question)
+        if not rewritten_question or _looks_like_ai_provider_issue(rewritten_question):
+            rewritten_question = _fallback_rewrite_question(question)
+            rewrite_mode = "fallback"
+    except Exception as exc:
+        logger.warning("document_question_rewrite_failed question=%s error=%s", question, exc)
+        rewritten_question = _fallback_rewrite_question(question)
+        rewrite_mode = "fallback"
+
     if not rewritten_question:
         raise HTTPException(status_code=500, detail="Could not rewrite the question right now")
 
     return {
         "question": question,
         "rewritten_question": rewritten_question,
+        "rewrite_mode": rewrite_mode,
     }
 
 

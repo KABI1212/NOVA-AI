@@ -1,6 +1,6 @@
 import asyncio
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List
 
 import bs4
@@ -12,6 +12,9 @@ TEMPORAL_KEYWORDS = (
     "latest",
     "current",
     "today",
+    "tomorrow",
+    "yesterday",
+    "tonight",
     "recent",
     "new",
     "updated",
@@ -25,6 +28,8 @@ TEMPORAL_KEYWORDS = (
     "happened",
     "released",
     "announced",
+    "live",
+    "upcoming",
 )
 SPORTS_LEAGUE_KEYWORDS = (
     "ipl",
@@ -59,6 +64,43 @@ SPORTS_STATUS_KEYWORDS = (
     "transfer",
     "injury",
 )
+SPORTS_CONTEXT_KEYWORDS = SPORTS_LEAGUE_KEYWORDS + (
+    "football",
+    "soccer",
+    "basketball",
+    "baseball",
+    "hockey",
+    "rugby",
+    "tennis",
+    "golf",
+    "tournament",
+    "player",
+    "players",
+    "match",
+    "matches",
+    "season",
+    "club",
+    "franchise",
+    "innings",
+    "goal",
+    "goals",
+)
+VOLATILE_FACT_KEYWORDS = (
+    "weather",
+    "forecast",
+    "temperature",
+    "rain",
+    "snow",
+    "price",
+    "prices",
+    "pricing",
+    "stock price",
+    "share price",
+    "market cap",
+    "exchange rate",
+    "currency rate",
+    "flight status",
+)
 NEWS_KEYWORDS = (
     "news",
     "breaking",
@@ -81,9 +123,13 @@ def is_temporal_query(query: str) -> bool:
         return True
     if any(keyword in text for keyword in TEMPORAL_KEYWORDS):
         return True
+    if any(keyword in text for keyword in VOLATILE_FACT_KEYWORDS):
+        return True
     if any(keyword in text for keyword in SPORTS_LEAGUE_KEYWORDS):
         return True
-    return any(keyword in text for keyword in SPORTS_STATUS_KEYWORDS)
+    has_sports_status = any(keyword in text for keyword in SPORTS_STATUS_KEYWORDS)
+    has_sports_context = any(keyword in text for keyword in SPORTS_CONTEXT_KEYWORDS)
+    return has_sports_status and has_sports_context
 
 
 def _infer_timelimit(query: str, years: List[str]) -> str | None:
@@ -159,7 +205,7 @@ def _score_result(result: Dict, query: str, query_years: List[str], index: int) 
     if result.get("date"):
         score += 1.0
 
-    current_year = str(datetime.utcnow().year)
+    current_year = str(datetime.now(timezone.utc).year)
     if is_temporal_query(text) and current_year in haystack:
         score += 2.0
 

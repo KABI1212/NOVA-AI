@@ -1,0 +1,4 @@
+No SQL revisions are stored here.
+
+The current NOVA AI backend uses MongoDB and creates collections/indexes at
+startup in `config.database.init_db()`.

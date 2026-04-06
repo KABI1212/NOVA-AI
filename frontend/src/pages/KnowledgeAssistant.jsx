@@ -1,16 +1,21 @@
 // @ts-nocheck
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { BookOpen, Send } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Layout from '../components/common/Layout';
 import MessageBubble from '../components/chat/MessageBubble';
 import { explainAPI } from '../services/api';
+import { stopSpeechPlayback } from '../utils/speech';
 
 function KnowledgeAssistant() {
   const [activeTab, setActiveTab] = useState('ask');
   const [prompt, setPrompt] = useState('');
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => () => {
+    stopSpeechPlayback();
+  }, []);
 
   const tabs = [
     { id: 'ask', label: 'Ask a Question' },
@@ -25,6 +30,7 @@ function KnowledgeAssistant() {
 
   const handleSubmit = async () => {
     if (!prompt.trim() || loading) return;
+    stopSpeechPlayback();
     setLoading(true);
     try {
       const response = await explainAPI.explain({

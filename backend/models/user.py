@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
-
-from models.base import Field, MongoModel
+from models.base import Field, MongoModel, utc_now
 
 
 class User(MongoModel):
@@ -17,8 +15,8 @@ class User(MongoModel):
     full_name = Field(default="")
     is_active = Field(default=True)
     is_verified = Field(default=False)
-    created_at = Field(default_factory=datetime.utcnow)
-    updated_at = Field(default_factory=datetime.utcnow)
+    created_at = Field(default_factory=utc_now)
+    updated_at = Field(default_factory=utc_now)
 
     def __repr__(self) -> str:
         return f"<User {self.username}>"

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Callable, ClassVar
 
 
 _MISSING = object()
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 def _merge_filters(operator: str, parts: list[dict]) -> dict:

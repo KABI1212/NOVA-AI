@@ -1,19 +1,75 @@
 // @ts-nocheck
-import { useState, useEffect } from 'react';
-import { BookOpen, Plus, Check } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { BookOpen, Plus, Check, Volume2, VolumeX } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Layout from '../components/common/Layout';
 import { learningAPI } from '../services/api';
+import {
+  speakText,
+  speechSupported as browserSpeechSupported,
+  stopSpeechPlayback,
+} from '../utils/speech';
 
 function LearningAssistant() {
   const [roadmaps, setRoadmaps] = useState([]);
   const [topic, setTopic] = useState('');
   const [level, setLevel] = useState('beginner');
   const [loading, setLoading] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [speakingRoadmapId, setSpeakingRoadmapId] = useState(null);
 
   useEffect(() => {
     loadRoadmaps();
   }, []);
+
+  const stopSpeaking = useCallback(() => {
+    stopSpeechPlayback();
+    setSpeakingRoadmapId(null);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    setSpeechSupported(browserSpeechSupported());
+
+    return () => {
+      stopSpeaking();
+    };
+  }, [stopSpeaking]);
+
+  const handleSpeakRoadmap = useCallback(
+    (roadmap) => {
+      if (!speechSupported || !roadmap) {
+        return;
+      }
+
+      if (speakingRoadmapId === roadmap.id) {
+        stopSpeaking();
+        return;
+      }
+
+      const roadmapText =
+        roadmap?.roadmap?.roadmap || roadmap?.topic || '';
+      const started = speakText(roadmapText, {
+        onStart: () => {
+          setSpeakingRoadmapId(roadmap.id);
+        },
+        onEnd: () => {
+          setSpeakingRoadmapId((current) => (current === roadmap.id ? null : current));
+        },
+        onError: () => {
+          setSpeakingRoadmapId((current) => (current === roadmap.id ? null : current));
+        },
+      });
+
+      if (!started) {
+        setSpeakingRoadmapId(null);
+      }
+    },
+    [speechSupported, speakingRoadmapId, stopSpeaking]
+  );
 
   const loadRoadmaps = async () => {
     try {
@@ -27,6 +83,7 @@ function LearningAssistant() {
   const handleGenerate = async () => {
     if (!topic.trim()) return;
 
+    stopSpeaking();
     setLoading(true);
     try {
       const response = await learningAPI.generateRoadmap({ topic, level });
@@ -90,7 +147,27 @@ function LearningAssistant() {
                       {roadmap.current_level}
                     </span>
                   </div>
-                  <BookOpen className="w-6 h-6 text-primary-600" />
+                  <div className="flex items-center gap-2">
+                    {speechSupported ? (
+                      <button
+                        type="button"
+                        onClick={() => handleSpeakRoadmap(roadmap)}
+                        className={`rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+                          speakingRoadmapId === roadmap.id
+                            ? 'border-blue-500/40 bg-blue-500/10 text-blue-500'
+                            : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-200 dark:hover:bg-gray-800'
+                        }`}
+                        title={speakingRoadmapId === roadmap.id ? 'Stop reading roadmap' : 'Read roadmap aloud'}
+                      >
+                        {speakingRoadmapId === roadmap.id ? (
+                          <VolumeX className="w-4 h-4" />
+                        ) : (
+                          <Volume2 className="w-4 h-4" />
+                        )}
+                      </button>
+                    ) : null}
+                    <BookOpen className="w-6 h-6 text-primary-600" />
+                  </div>
                 </div>
 
                 <div className="prose dark:prose-invert max-w-none">

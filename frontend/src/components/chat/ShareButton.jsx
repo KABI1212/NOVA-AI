@@ -1,254 +1,292 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
+
 import { useAuthStore } from "../../utils/store";
 
-export default function ShareButton({ conversationId, conversationTitle }) {
-  const [status,    setStatus]    = useState(null);  // share status from API
-  const [loading,   setLoading]   = useState(false);
-  const [copied,    setCopied]    = useState(false);
-  const [showModal, setShowModal] = useState(false);
-  const [shareTitle, setShareTitle] = useState(conversationTitle || "");
+function formatViewCount(value) {
+  const count = Number(value || 0);
+  if (!Number.isFinite(count) || count <= 0) {
+    return "No views yet";
+  }
+  return `${count} view${count === 1 ? "" : "s"}`;
+}
+
+export default function ShareButton({
+  conversationId = null,
+  conversationTitle = "",
+}) {
   const { token } = useAuthStore();
 
-  // Load share status on mount
-  useEffect(() => {
-    if (conversationId) fetchStatus();
-  }, [conversationId]);
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [shareTitle, setShareTitle] = useState(conversationTitle || "");
 
-  const fetchStatus = async () => {
-    try {
-      const res = await fetch(`/api/share/status/${conversationId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setStatus(data);
+  useEffect(() => {
+    setShareTitle(conversationTitle || "");
+    setCopied(false);
+  }, [conversationId, conversationTitle]);
+
+  useEffect(() => {
+    if (!conversationId || !token) {
+      setStatus(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const fetchStatus = async () => {
+      try {
+        const response = await fetch(`/api/share/status/${conversationId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (!response.ok) {
+          if (!cancelled) {
+            setStatus(null);
+          }
+          return;
+        }
+
+        const data = await response.json();
+        if (!cancelled) {
+          setStatus(data);
+          if (data?.share_title) {
+            setShareTitle(data.share_title);
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          setStatus(null);
+        }
       }
-    } catch {}
-  };
+    };
+
+    fetchStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId, token]);
+
+  const isShared = Boolean(status?.is_shared);
+  const shareUrl = useMemo(() => {
+    if (!status?.share_id || typeof window === "undefined") {
+      return "";
+    }
+    return `${window.location.origin}/share/${status.share_id}`;
+  }, [status?.share_id]);
 
   const enableShare = async () => {
+    if (!conversationId) {
+      return;
+    }
+
     setLoading(true);
     try {
-      const res = await fetch("/api/share/create", {
+      const response = await fetch("/api/share/create", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization:  `Bearer ${token}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           conversation_id: conversationId,
-          share_title:     shareTitle,
+          share_title: shareTitle.trim() || conversationTitle || "",
         }),
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.detail || "Could not create a share link.");
       }
 
-      const data = await res.json();
-      setStatus(prev => ({ ...prev, ...data }));
-    } catch (err) {
-      alert(err.message);
+      setStatus((previous) => ({ ...(previous || {}), ...data, is_shared: true }));
+      if (data?.share_title) {
+        setShareTitle(data.share_title);
+      }
+      toast.success("Share link is ready.");
+    } catch (error) {
+      toast.error(error?.message || "Could not create a share link right now.");
     } finally {
       setLoading(false);
     }
   };
 
   const disableShare = async () => {
+    if (!conversationId) {
+      return;
+    }
+
     setLoading(true);
     try {
-      await fetch(`/api/share/disable/${conversationId}`, {
+      const response = await fetch(`/api/share/disable/${conversationId}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
-      setStatus(prev => ({ ...prev, is_shared: false }));
-    } catch {}
-    finally {
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.detail || "Could not disable sharing.");
+      }
+
+      setStatus((previous) => ({ ...(previous || {}), is_shared: false }));
+      toast.success("Share link disabled.");
+    } catch (error) {
+      toast.error(error?.message || "Could not disable sharing right now.");
+    } finally {
       setLoading(false);
     }
   };
 
-  const copyLink = () => {
-    const url = `${window.location.origin}/share/${status.share_id}`;
-    navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
+  const copyLink = async () => {
+    if (!shareUrl) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      toast.success("Link copied.");
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Could not copy the link.");
+    }
   };
 
-  const shareUrl = status?.share_id
-    ? `${window.location.origin}/share/${status.share_id}`
-    : null;
+  const openPreview = () => {
+    if (!shareUrl) {
+      return;
+    }
+
+    window.open(shareUrl, "_blank", "noopener,noreferrer");
+  };
+
+  const openNativeShare = async () => {
+    if (!shareUrl) {
+      return;
+    }
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: shareTitle.trim() || conversationTitle || "NOVA AI conversation",
+          url: shareUrl,
+        });
+        return;
+      } catch {
+        return;
+      }
+    }
+
+    await copyLink();
+  };
 
   return (
     <>
-      {/* Trigger button */}
       <button
+        type="button"
+        className={`tb-ghost share-trigger${isShared ? " active" : ""}`}
         onClick={() => setShowModal(true)}
-        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm
-                    border transition-all
-                    ${status?.is_shared
-                      ? "border-green-600 bg-green-600/10 text-green-400"
-                      : "border-gray-700 text-gray-400 hover:border-gray-500 hover:text-white"}`}
-        title="Share conversation"
+        aria-label="Share conversation"
       >
-        {status?.is_shared ? "🔗 Shared" : "🔗 Share"}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="18" cy="5" r="3" />
+          <circle cx="6" cy="12" r="3" />
+          <circle cx="18" cy="19" r="3" />
+          <path d="M8.6 13.5 15.4 17.5" />
+          <path d="M15.4 6.5 8.6 10.5" />
+        </svg>
+        <span className="share-trigger-label">{isShared ? "Shared" : "Share"}</span>
       </button>
 
-      {/* Modal */}
-      {showModal && (
+      {showModal ? (
         <div
-          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50
-                     flex items-center justify-center p-4"
-          onClick={e => { if (e.target === e.currentTarget) setShowModal(false); }}
+          className="ov open"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setShowModal(false);
+            }
+          }}
         >
-          <div className="bg-gray-900 border border-gray-700 rounded-2xl
-                          shadow-2xl w-full max-w-md p-6">
+          <div className="modal share-modal" onClick={(event) => event.stopPropagation()}>
+            <h3>Share Conversation</h3>
+            <p>Anyone with the link can view this chat.</p>
 
-            {/* Header */}
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <h2 className="text-lg font-semibold text-white">
-                  Share Conversation
-                </h2>
-                <p className="text-sm text-gray-500 mt-0.5">
-                  Anyone with the link can view this chat
-                </p>
+            {!conversationId ? (
+              <div className="share-empty">
+                Send at least one message first. Once the conversation exists, you can create a public link here
+                without changing the current layout.
               </div>
-              <button
-                onClick={() => setShowModal(false)}
-                className="text-gray-600 hover:text-white transition-colors text-xl"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Share title input */}
-            <div className="mb-4">
-              <label className="text-sm text-gray-400 mb-1.5 block">
-                Share title (optional)
-              </label>
-              <input
-                value={shareTitle}
-                onChange={e => setShareTitle(e.target.value)}
-                placeholder={conversationTitle || "My conversation"}
-                className="w-full bg-gray-800 border border-gray-700 rounded-xl
-                           px-4 py-2.5 text-white text-sm placeholder-gray-500
-                           focus:outline-none focus:border-blue-500 transition-colors"
-              />
-            </div>
-
-            {/* Toggle share */}
-            <div className="flex items-center justify-between bg-gray-800
-                            border border-gray-700 rounded-xl px-4 py-3 mb-4">
-              <div>
-                <p className="text-sm font-medium text-white">
-                  {status?.is_shared ? "Link is active" : "Link sharing"}
-                </p>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  {status?.is_shared
-                    ? `${status.view_count || 0} views`
-                    : "Enable to create a public link"}
-                </p>
-              </div>
-
-              {/* Toggle switch */}
-              <button
-                onClick={status?.is_shared ? disableShare : enableShare}
-                disabled={loading}
-                className={`relative w-12 h-6 rounded-full transition-all duration-200
-                            ${status?.is_shared ? "bg-green-500" : "bg-gray-600"}
-                            disabled:opacity-50`}
-              >
-                <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full
-                                  shadow transition-all duration-200
-                                  ${status?.is_shared ? "left-6" : "left-0.5"}`}
+            ) : (
+              <>
+                <label className="modal-label" htmlFor="share-title-input">
+                  Share title
+                </label>
+                <input
+                  id="share-title-input"
+                  type="text"
+                  value={shareTitle}
+                  onChange={(event) => setShareTitle(event.target.value)}
+                  placeholder={conversationTitle || "My conversation"}
+                  disabled={loading}
                 />
-              </button>
-            </div>
 
-            {/* Share link display */}
-            {status?.is_shared && shareUrl && (
-              <div className="space-y-3">
-                {/* Link box */}
-                <div className="flex items-center gap-2 bg-gray-800 border
-                                border-gray-700 rounded-xl px-3 py-2.5">
-                  <span className="flex-1 text-sm text-blue-400 truncate font-mono">
-                    {shareUrl}
-                  </span>
-                  <button
-                    onClick={copyLink}
-                    className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-lg
-                                font-medium transition-all
-                                ${copied
-                                  ? "bg-green-600 text-white"
-                                  : "bg-gray-700 hover:bg-gray-600 text-gray-300"}`}
-                  >
-                    {copied ? "✅ Copied!" : "📋 Copy"}
-                  </button>
+                <div className="share-panel">
+                  <div className="share-toggle-row">
+                    <div className="share-toggle-copy">
+                      <strong>{isShared ? "Link is active" : "Link sharing"}</strong>
+                      <span>{isShared ? formatViewCount(status?.view_count) : "Enable this to create a public link."}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className={`share-switch${isShared ? " on" : ""}`}
+                      onClick={isShared ? disableShare : enableShare}
+                      disabled={loading}
+                      aria-label={isShared ? "Disable sharing" : "Enable sharing"}
+                    >
+                      <span className="share-switch-thumb" />
+                    </button>
+                  </div>
                 </div>
 
-                {/* Share actions */}
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    onClick={copyLink}
-                    className="flex flex-col items-center gap-1.5 py-3 bg-gray-800
-                               hover:bg-gray-700 border border-gray-700 rounded-xl
-                               text-xs text-gray-400 hover:text-white transition-all"
-                  >
-                    <span className="text-lg">📋</span>
-                    Copy link
-                  </button>
+                {isShared && shareUrl ? (
+                  <>
+                    <div className="share-link-box">
+                      <input className="share-link-input" type="text" readOnly value={shareUrl} />
+                      <button className="bok share-inline-btn" type="button" onClick={copyLink}>
+                        {copied ? "Copied" : "Copy"}
+                      </button>
+                    </div>
 
-                  <button
-                    onClick={() => window.open(shareUrl, "_blank")}
-                    className="flex flex-col items-center gap-1.5 py-3 bg-gray-800
-                               hover:bg-gray-700 border border-gray-700 rounded-xl
-                               text-xs text-gray-400 hover:text-white transition-all"
-                  >
-                    <span className="text-lg">👁️</span>
-                    Preview
-                  </button>
+                    <div className="share-action-row">
+                      <button className="share-action" type="button" onClick={openPreview}>
+                        Open link
+                      </button>
+                      <button className="share-action" type="button" onClick={openNativeShare}>
+                        Share
+                      </button>
+                    </div>
 
-                  <button
-                    onClick={() => {
-                      const text = `Check out this AI conversation: ${shareUrl}`;
-                      window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank");
-                    }}
-                    className="flex flex-col items-center gap-1.5 py-3 bg-gray-800
-                               hover:bg-gray-700 border border-gray-700 rounded-xl
-                               text-xs text-gray-400 hover:text-white transition-all"
-                  >
-                    <span className="text-lg">𝕏</span>
-                    Tweet
-                  </button>
-                </div>
-
-                {/* Warning */}
-                <div className="flex items-start gap-2 bg-amber-900/20 border
-                                border-amber-700/30 rounded-xl px-3 py-2.5">
-                  <span className="text-amber-500 flex-shrink-0">⚠️</span>
-                  <p className="text-xs text-amber-500/80">
-                    Anyone with the link can view this conversation.
-                    Disable sharing to revoke access.
-                  </p>
-                </div>
-              </div>
+                    <div className="share-warning">
+                      Anyone with the link can read this conversation until you turn sharing off.
+                    </div>
+                  </>
+                ) : (
+                  <div className="share-empty">Enable sharing to create a public link for this conversation.</div>
+                )}
+              </>
             )}
 
-            {/* Footer */}
-            <div className="mt-4 flex justify-end">
-              <button
-                onClick={() => setShowModal(false)}
-                className="px-5 py-2 bg-gray-800 hover:bg-gray-700 text-white
-                           text-sm rounded-xl transition-colors border border-gray-700"
-              >
-                Done
+            <div className="mbtns">
+              <button className="bcnl" type="button" onClick={() => setShowModal(false)}>
+                Close
               </button>
             </div>
           </div>
         </div>
-      )}
+      ) : null}
     </>
   );
 }

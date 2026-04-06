@@ -34,6 +34,7 @@ class RateLimitService:
         self.redis_retry_cooldown_seconds = max(1, redis_retry_cooldown_seconds)
         self._redis: Redis | None = None
         self._redis_disabled_until = 0.0
+        self._memory_fallback_logged = False
         self._memory: dict[str, tuple[int, float]] = {}
         self._memory_lock = asyncio.Lock()
 
@@ -106,6 +107,7 @@ class RateLimitService:
         async with self._memory_lock:
             self._memory.clear()
         self._redis_disabled_until = 0.0
+        self._memory_fallback_logged = False
 
     def _build_status(
         self,
@@ -152,10 +154,14 @@ class RateLimitService:
 
     async def _disable_redis(self, exc: RedisError) -> None:
         self._redis_disabled_until = time.monotonic() + self.redis_retry_cooldown_seconds
-        logger.warning(
-            "Redis unavailable for rate limiting; using in-memory fallback error=%s",
-            exc,
-        )
+        if settings.RATE_LIMIT_WARN_ON_MEMORY_FALLBACK:
+            logger.warning(
+                "Redis unavailable for rate limiting; using in-memory fallback error=%s",
+                exc,
+            )
+            self._memory_fallback_logged = True
+        elif not self._memory_fallback_logged:
+            self._memory_fallback_logged = True
         if self._redis is not None:
             try:
                 await self._redis.aclose()

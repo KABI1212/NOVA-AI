@@ -11,7 +11,7 @@ ai_service_module = importlib.import_module("services.ai_service")
 def test_generate_explanation_includes_presentation_style(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    async def fake_complete(messages, provider=None, model=None, temperature=None, max_tokens=None):
+    async def fake_complete(messages, provider=None, model=None, temperature=None, max_tokens=None, use_case=None):
         captured["messages"] = messages
         return "ok"
 
@@ -37,7 +37,7 @@ def test_generate_explanation_includes_presentation_style(monkeypatch) -> None:
 def test_document_answers_include_presentation_style(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    async def fake_complete(messages, provider=None, model=None, temperature=None, max_tokens=None):
+    async def fake_complete(messages, provider=None, model=None, temperature=None, max_tokens=None, use_case=None):
         captured["messages"] = messages
         return "ok"
 
@@ -60,7 +60,7 @@ def test_document_answers_include_presentation_style(monkeypatch) -> None:
 def test_document_answers_include_contextual_exam_and_diagram_guidance(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    async def fake_complete(messages, provider=None, model=None, temperature=None, max_tokens=None):
+    async def fake_complete(messages, provider=None, model=None, temperature=None, max_tokens=None, use_case=None):
         captured["messages"] = messages
         return "ok"
 
@@ -97,7 +97,7 @@ def test_document_answers_include_contextual_exam_and_diagram_guidance(monkeypat
 def test_document_answers_raise_max_tokens_for_8_mark_questions(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    async def fake_complete(messages, provider=None, model=None, temperature=None, max_tokens=None):
+    async def fake_complete(messages, provider=None, model=None, temperature=None, max_tokens=None, use_case=None):
         captured["messages"] = messages
         captured["max_tokens"] = max_tokens
         return "ok"
@@ -119,7 +119,7 @@ def test_document_answers_raise_max_tokens_for_8_mark_questions(monkeypatch) -> 
 def test_document_answers_raise_max_tokens_for_16_mark_questions(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    async def fake_complete(messages, provider=None, model=None, temperature=None, max_tokens=None):
+    async def fake_complete(messages, provider=None, model=None, temperature=None, max_tokens=None, use_case=None):
         captured["messages"] = messages
         captured["max_tokens"] = max_tokens
         return "ok"

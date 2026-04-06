@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import Layout from "../components/common/Layout";
 import { useAuthStore } from "../utils/store";
@@ -10,11 +10,7 @@ export default function MyShares() {
   const [copied, setCopied] = useState(null);
   const { token } = useAuthStore();
 
-  useEffect(() => {
-    fetchShares();
-  }, []);
-
-  const fetchShares = async () => {
+  const fetchShares = useCallback(async () => {
     try {
       const response = await fetch("/api/share/my-shares", {
         headers: { Authorization: `Bearer ${token}` },
@@ -26,7 +22,11 @@ export default function MyShares() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [token]);
+
+  useEffect(() => {
+    fetchShares();
+  }, [fetchShares]);
 
   const disableShare = async (conversationId, shareId) => {
     try {

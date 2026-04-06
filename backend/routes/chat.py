@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
@@ -15,14 +15,15 @@ try:
 except ImportError:
     Session = Any
 
-from ai_engine import build_messages, response_envelope, select_model
+from ai_engine import build_messages, response_envelope
 from config.database import get_db, get_db_optional
 from config.settings import settings
 from models.conversation import Conversation
 from models.document import Document
 from models.user import User
+from prompts import get_presentation_style_prompt
 from services.ai_provider import PROVIDERS, generate_response, stream_response
-from services.ai_service import ai_service
+from services.ai_service import LOCAL_FALLBACK_MESSAGE, ai_service, infer_use_case, normalize_image_asset
 from services.conversation_summary import (
     build_summary_history_message,
     refresh_conversation_summary,
@@ -44,16 +45,29 @@ from utils.rate_limit import enforce_chat_rate_limit, enforce_image_rate_limit
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 MAX_HISTORY_MESSAGES = 12
 logger = logging.getLogger(__name__)
-FALLBACK_MESSAGE = (
-    "I couldn't produce a reliable answer because the available AI providers did not respond. "
-    "Please check that the backend is running and that at least one provider key is configured, "
-    "then try again."
-)
+FALLBACK_MESSAGE = LOCAL_FALLBACK_MESSAGE
 SETUP_RETRY_MESSAGE = "That option isn't ready just yet. Want me to try again?"
 REGENERATE_VARIATION_INSTRUCTION = (
     "This is a regenerate request. Give a fresh version of the answer. "
     "Do not repeat the previous wording. Improve clarity, add a useful example, or simplify the explanation."
 )
+_VOLATILE_FACT_PATTERN = re.compile(
+    r"\b(?:weather|forecast|temperature|rain|snow|price|prices|pricing|stock price|share price|market cap|exchange rate|currency rate|flight status)\b",
+    re.IGNORECASE,
+)
+_STALE_KNOWLEDGE_REPLY_PATTERNS = (
+    re.compile(r"\b(?:knowledge|training)\s+(?:cutoff|cut-off)\b", re.IGNORECASE),
+    re.compile(r"\b(?:as of|up to|through|until)\s+(?:late\s+)?2023\b", re.IGNORECASE),
+    re.compile(r"\b(?:do not|don't|cannot|can't)\s+(?:have|know|access).{0,80}\b(?:after|beyond)\s+2023\b", re.IGNORECASE),
+    re.compile(r"\b(?:do not|don't|cannot|can't)\s+(?:browse|access)\s+(?:the\s+)?web\b", re.IGNORECASE),
+    re.compile(r"\bno real[- ]time (?:data|access|information)\b", re.IGNORECASE),
+)
+_FRESHNESS_RETRY_INSTRUCTION = (
+    "Freshness retry is required. The previous draft relied on an outdated cutoff or missing live data.\n"
+    "Use fresh web-backed information if available, and do not answer with a 2023 cutoff disclaimer when newer sources are provided."
+)
+_VERIFICATION_SOURCE_CHARS = 12000
+_VERIFICATION_TEMPERATURE = 0.0
 _SEARCHABLE_PROMPT_PREFIXES = (
     "who ",
     "what ",
@@ -83,6 +97,9 @@ _SEARCHABLE_PROMPT_PREFIXES = (
     "How do I",
     "Why does",
     "What if",
+    "I need",
+    "i need",
+    
 )
 _SPORTS_QUERY_REWRITES = (
     (re.compile(r"\bcaptions\b", re.IGNORECASE), "captains"),
@@ -154,6 +171,13 @@ class ConversationResponse(BaseModel):
     title: str
     created_at: str
     updated_at: str
+    preview: Optional[str] = None
+
+
+class ConversationUpdateRequest(BaseModel):
+    title: str
+
+    model_config = ConfigDict(extra="ignore")
 
 
 def _sse_event(payload: dict) -> str:
@@ -166,6 +190,7 @@ def _payload(
     images: Optional[List[str]] = None,
     prompt_images: Optional[List[str]] = None,
     answer_images: Optional[List[str]] = None,
+    sources: Optional[List[dict]] = None,
 ) -> dict:
     resolved_answer_images = answer_images if answer_images is not None else images
     payload = {
@@ -174,6 +199,7 @@ def _payload(
         "images": resolved_answer_images or [],
         "answer_images": resolved_answer_images or [],
         "prompt_images": prompt_images or [],
+        "sources": sources or [],
     }
     if conversation is not None:
         payload["conversation_id"] = conversation.id
@@ -187,6 +213,7 @@ def _final_payload(
     images: Optional[List[str]] = None,
     prompt_images: Optional[List[str]] = None,
     answer_images: Optional[List[str]] = None,
+    sources: Optional[List[dict]] = None,
     interrupted: bool = False,
 ) -> dict:
     payload = _payload(
@@ -195,6 +222,7 @@ def _final_payload(
         images,
         prompt_images=prompt_images,
         answer_images=answer_images,
+        sources=sources,
     ) | {"type": "final"}
     if interrupted:
         payload["error"] = "retry"
@@ -928,7 +956,7 @@ def _dedupe_image_assets(images: List[str], limit: int = 3) -> List[str]:
     deduped: List[str] = []
     seen: set[str] = set()
     for image in images:
-        candidate = str(image or "").strip()
+        candidate = normalize_image_asset(image)
         if not candidate or candidate in seen:
             continue
         seen.add(candidate)
@@ -974,10 +1002,12 @@ async def _generate_images_best_effort(prompt: str) -> List[str]:
 
 
 async def _generate_images_for_prompt(prompt: str) -> List[str]:
+    if not ai_service.has_available_image_provider():
+        return []
     images = await ai_service.generate_image(prompt)
     if images:
         return images
-    raise RuntimeError("Image generation returned no image data")
+    return []
 
 
 def _start_prompt_image_task(enabled: bool, user_message: str):
@@ -1131,9 +1161,13 @@ def _needs_full_document_context(message: Optional[str]) -> bool:
 
 def _response_max_tokens(message: Optional[str], mode: str, doc_context: Optional[str] = None) -> int:
     base = int(getattr(settings, "AI_MAX_TOKENS", 2048) or 2048)
+    fast_cap = int(getattr(settings, "AI_FAST_MAX_TOKENS", 320) or 320)
     cleaned_message = " ".join(str(message or "").split())
     if (mode or "").lower() == "image":
         return base
+
+    if infer_use_case(mode, cleaned_message) == "quick":
+        return max(160, min(base, fast_cap))
 
     marks = [int(match.group("marks")) for match in _MARKS_PATTERN.finditer(cleaned_message)]
 
@@ -1215,14 +1249,8 @@ def _resolve_provider_and_model(
     requested_model: Optional[str],
 ) -> tuple[Optional[str], Optional[str]]:
     explicit_provider = (requested_provider or "").strip().lower() or None
-    configured_provider = (settings.AI_PROVIDER or "").strip().lower() or None
-    provider_for_model = explicit_provider or configured_provider
     explicit_model = (requested_model or "").strip() or None
-    if explicit_model:
-        return explicit_provider, explicit_model
-    if provider_for_model == "openai":
-        return explicit_provider, select_model(mode)
-    return explicit_provider, None
+    return explicit_provider, explicit_model
 
 
 def _build_ai_messages(
@@ -1231,8 +1259,13 @@ def _build_ai_messages(
     mode: str,
     doc_context: Optional[str] = None,
     extra_instruction: Optional[str] = None,
+    instruction_message: Optional[str] = None,
 ) -> List[dict]:
-    ai_messages = build_messages([*history, {"role": "user", "content": user_message}], mode)
+    ai_messages = build_messages(
+        [*history, {"role": "user", "content": user_message}],
+        mode,
+        instruction_message=instruction_message,
+    )
     insert_index = 1
     if extra_instruction:
         ai_messages.insert(insert_index, {"role": "system", "content": extra_instruction})
@@ -1246,14 +1279,18 @@ async def _collect_ai_response(
     ai_messages: List[dict],
     provider: Optional[str],
     model: Optional[str],
+    temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
+    use_case: Optional[str] = None,
 ) -> str:
     response_text = ""
     async for chunk in ai_service.chat_stream(
         ai_messages,
         provider=provider,
         model=model,
+        temperature=temperature,
         max_tokens=max_tokens,
+        use_case=use_case,
     ):
         response_text += chunk
 
@@ -1267,11 +1304,217 @@ def _should_use_search(message: str, force_search: bool = False) -> bool:
     cleaned = " ".join((message or "").split()).strip().lower()
     if not cleaned:
         return False
-    if force_search or is_temporal_query(cleaned):
+    if force_search:
         return True
-    if cleaned.endswith("?"):
+    if _VOLATILE_FACT_PATTERN.search(cleaned):
         return True
-    return any(cleaned.startswith(prefix) for prefix in _SEARCHABLE_PROMPT_PREFIXES)
+    return is_temporal_query(cleaned)
+
+
+def _verification_max_tokens(max_tokens: Optional[int]) -> int:
+    if max_tokens is None:
+        return 768
+    return max(320, min(int(max_tokens), 1024))
+
+
+def _merge_extra_instructions(*parts: Optional[str]) -> Optional[str]:
+    cleaned_parts = [str(part).strip() for part in parts if str(part or "").strip()]
+    if not cleaned_parts:
+        return None
+    return "\n\n".join(cleaned_parts)
+
+
+def _looks_like_stale_cutoff_answer(answer: Optional[str]) -> bool:
+    cleaned_answer = " ".join((answer or "").split())
+    if not cleaned_answer:
+        return False
+    return any(pattern.search(cleaned_answer) for pattern in _STALE_KNOWLEDGE_REPLY_PATTERNS)
+
+
+def _should_cross_check_answer(
+    user_message: str,
+    source_material: Optional[str],
+    draft_answer: Optional[str],
+) -> bool:
+    cleaned_answer = str(draft_answer or "").strip()
+    if not cleaned_answer or cleaned_answer == FALLBACK_MESSAGE:
+        return False
+
+    normalized_user = " ".join((user_message or "").split()).strip()
+    normalized_source = " ".join((source_material or "").split()).strip()
+    return bool(normalized_source and normalized_source != normalized_user)
+
+
+def _build_cross_check_messages(
+    user_message: str,
+    source_material: str,
+    draft_answer: str,
+) -> List[dict]:
+    verifier_system = (
+        "You are verifying a draft answer for factual accuracy.\n"
+        "- Use the provided source material as the ground truth for current facts.\n"
+        "- Correct unsupported or outdated names, dates, numbers, prices, standings, releases, or claims.\n"
+        "- Remove stale knowledge-cutoff or no-browsing disclaimers when the source material already provides fresh facts.\n"
+        "- If the source material does not support a detail, remove it or briefly mark it as uncertain.\n"
+        "- Preserve the user's language, the draft's useful level of detail, and its helpful Markdown structure.\n"
+        "- Do not flatten a structured draft into one dense paragraph.\n"
+        "- Keep helpful headings, bullets, numbered steps, tables, and code blocks unless a correction requires changing that specific part.\n"
+        f"{get_presentation_style_prompt()}\n"
+        "- Return only the final corrected answer."
+    )
+    verifier_prompt = (
+        f"User question:\n{user_message.strip()}\n\n"
+        f"Source material:\n{source_material[:_VERIFICATION_SOURCE_CHARS].strip()}\n\n"
+        f"Draft answer to verify:\n{draft_answer.strip()}"
+    )
+    return [
+        {"role": "system", "content": verifier_system},
+        {"role": "user", "content": verifier_prompt},
+    ]
+
+
+async def _cross_check_answer_if_needed(
+    user_message: str,
+    source_material: Optional[str],
+    draft_answer: str,
+    provider: Optional[str],
+    model: Optional[str],
+    max_tokens: Optional[int] = None,
+    compatible_provider: Optional[str] = None,
+) -> str:
+    if not _should_cross_check_answer(user_message, source_material, draft_answer):
+        return draft_answer
+
+    if compatible_provider and not model:
+        return draft_answer
+
+    verifier_messages = _build_cross_check_messages(
+        user_message,
+        str(source_material or ""),
+        draft_answer,
+    )
+    verifier_max_tokens = _verification_max_tokens(max_tokens)
+
+    try:
+        if compatible_provider:
+            revised = await generate_response(
+                compatible_provider,
+                model or "",
+                verifier_messages,
+                temperature=_VERIFICATION_TEMPERATURE,
+                max_tokens=verifier_max_tokens,
+            )
+            verified_text = (revised.get("response", "") if isinstance(revised, dict) else str(revised)).strip()
+        else:
+            verified_text = await _collect_ai_response(
+                verifier_messages,
+                provider,
+                model,
+                temperature=_VERIFICATION_TEMPERATURE,
+                max_tokens=verifier_max_tokens,
+                use_case="research",
+            )
+    except Exception as exc:
+        logger.warning(
+            "Answer cross-check failed provider=%s model=%s compat_provider=%s error=%s",
+            provider or "<auto>",
+            model or "<default>",
+            compatible_provider or "<none>",
+            exc,
+        )
+        return draft_answer
+
+    return verified_text or draft_answer
+
+
+async def _fetch_page_excerpt(url: str, max_chars: int = 1400, timeout_seconds: float = 4.0) -> Optional[str]:
+    try:
+        page_text = await asyncio.wait_for(fetch_page_content(url, max_chars=max_chars), timeout=timeout_seconds)
+    except Exception:
+        return None
+
+    if not page_text or page_text.startswith("Could not fetch page:"):
+        return None
+    return page_text
+
+
+async def _retry_stale_answer_with_fresh_sources(
+    history: List[dict],
+    user_message: str,
+    mode: str,
+    provider: Optional[str],
+    model: Optional[str],
+    doc_context: Optional[str] = None,
+    extra_instruction: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+) -> Optional[str]:
+    refreshed_answer, _ = await _retry_stale_answer_with_fresh_sources_bundle(
+        history,
+        user_message,
+        mode,
+        provider,
+        model,
+        doc_context=doc_context,
+        extra_instruction=extra_instruction,
+        max_tokens=max_tokens,
+    )
+    return refreshed_answer
+
+
+async def _retry_stale_answer_with_fresh_sources_bundle(
+    history: List[dict],
+    user_message: str,
+    mode: str,
+    provider: Optional[str],
+    model: Optional[str],
+    doc_context: Optional[str] = None,
+    extra_instruction: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+) -> tuple[Optional[str], List[dict]]:
+    searched_message, searched_sources = await _maybe_enhance_temporal_message_with_sources(
+        user_message,
+        force_search=True,
+    )
+    if searched_message == user_message:
+        return await _search_backup_answer_bundle(user_message, force_search=True)
+
+    retry_messages = _build_ai_messages(
+        history,
+        searched_message,
+        mode,
+        doc_context=doc_context,
+        extra_instruction=_merge_extra_instructions(extra_instruction, _FRESHNESS_RETRY_INSTRUCTION),
+        instruction_message=user_message,
+    )
+
+    try:
+        retry_answer = await _collect_ai_response(
+            retry_messages,
+            provider,
+            model,
+            max_tokens=max_tokens,
+            use_case="research",
+        )
+        retry_answer = await _cross_check_answer_if_needed(
+            user_message,
+            searched_message,
+            retry_answer,
+            provider,
+            model,
+            max_tokens=max_tokens,
+        )
+        if retry_answer and not _looks_like_stale_cutoff_answer(retry_answer):
+            return retry_answer, searched_sources
+    except Exception as exc:
+        logger.warning(
+            "Freshness retry failed mode=%s provider=%s model=%s error=%s",
+            mode,
+            provider or "<auto>",
+            model or "<default>",
+            exc,
+        )
+
+    return await _search_backup_answer_bundle(user_message, force_search=True)
 
 
 def _build_search_query(message: str) -> str:
@@ -1287,6 +1530,34 @@ def _build_search_query(message: str) -> str:
             search_query = f"{search_query} current IPL team list"
 
     return search_query
+
+
+def _visible_search_sources(results: List[dict], max_items: int = 3) -> List[dict]:
+    sources: List[dict] = []
+    seen_urls = set()
+
+    for result in results:
+        if len(sources) >= max_items:
+            break
+
+        url = str(result.get("url") or "").strip()
+        if not url or url in seen_urls:
+            continue
+
+        seen_urls.add(url)
+        source_item = {
+            "title": str(result.get("title") or "Source").strip() or "Source",
+            "url": url,
+        }
+        if result.get("source"):
+            source_item["source"] = str(result.get("source")).strip()
+        if result.get("date"):
+            source_item["date"] = str(result.get("date")).strip()
+        if result.get("snippet"):
+            source_item["snippet"] = str(result.get("snippet")).strip()[:240]
+        sources.append(source_item)
+
+    return sources
 
 
 def _format_search_fallback_answer(results: List[dict]) -> str:
@@ -1322,14 +1593,22 @@ def _format_search_fallback_answer(results: List[dict]) -> str:
 
 
 async def _search_backup_answer(message: str, force_search: bool = False) -> Optional[str]:
+    answer, _ = await _search_backup_answer_bundle(message, force_search=force_search)
+    return answer
+
+
+async def _search_backup_answer_bundle(
+    message: str,
+    force_search: bool = False,
+) -> tuple[Optional[str], List[dict]]:
     if not _should_use_search(message, force_search=force_search):
-        return None
+        return None, []
 
     results = await search_web(_build_search_query(message), max_results=5)
     if not results:
-        return None
+        return None, []
 
-    return _format_search_fallback_answer(results)
+    return _format_search_fallback_answer(results), _visible_search_sources(results)
 
 
 async def _best_effort_answer(
@@ -1343,7 +1622,36 @@ async def _best_effort_answer(
     force_search: bool = False,
     max_tokens: Optional[int] = None,
 ) -> str:
-    primary_message = await _maybe_enhance_temporal_message(user_message, force_search=force_search)
+    answer, _ = await _best_effort_answer_bundle(
+        history,
+        user_message,
+        mode,
+        provider,
+        model,
+        doc_context=doc_context,
+        extra_instruction=extra_instruction,
+        force_search=force_search,
+        max_tokens=max_tokens,
+    )
+    return answer
+
+
+async def _best_effort_answer_bundle(
+    history: List[dict],
+    user_message: str,
+    mode: str,
+    provider: Optional[str],
+    model: Optional[str],
+    doc_context: Optional[str] = None,
+    extra_instruction: Optional[str] = None,
+    force_search: bool = False,
+    max_tokens: Optional[int] = None,
+) -> tuple[str, List[dict]]:
+    primary_message, primary_sources = await _maybe_enhance_temporal_message_with_sources(
+        user_message,
+        force_search=force_search,
+    )
+    use_case = "research" if force_search else infer_use_case(mode, user_message)
     resolved_max_tokens = max_tokens or _response_max_tokens(user_message, mode, doc_context)
 
     try:
@@ -1353,8 +1661,37 @@ async def _best_effort_answer(
             mode,
             doc_context=doc_context,
             extra_instruction=extra_instruction,
+            instruction_message=user_message,
         )
-        return await _collect_ai_response(primary_messages, provider, model, max_tokens=resolved_max_tokens)
+        primary_answer = await _collect_ai_response(
+            primary_messages,
+            provider,
+            model,
+            max_tokens=resolved_max_tokens,
+            use_case=use_case,
+        )
+        primary_answer = await _cross_check_answer_if_needed(
+            user_message,
+            primary_message,
+            primary_answer,
+            provider,
+            model,
+            max_tokens=resolved_max_tokens,
+        )
+        if _looks_like_stale_cutoff_answer(primary_answer):
+            refreshed_answer, refreshed_sources = await _retry_stale_answer_with_fresh_sources_bundle(
+                history,
+                user_message,
+                mode,
+                provider,
+                model,
+                doc_context=doc_context,
+                extra_instruction=extra_instruction,
+                max_tokens=resolved_max_tokens,
+            )
+            if refreshed_answer:
+                return refreshed_answer, refreshed_sources or primary_sources
+        return primary_answer, primary_sources
     except Exception as exc:
         logger.warning(
             "Primary AI answer failed mode=%s provider=%s model=%s error=%s",
@@ -1365,7 +1702,10 @@ async def _best_effort_answer(
         )
 
     if primary_message == user_message:
-        searched_message = await _maybe_enhance_temporal_message(user_message, force_search=True)
+        searched_message, searched_sources = await _maybe_enhance_temporal_message_with_sources(
+            user_message,
+            force_search=True,
+        )
         if searched_message != user_message:
             try:
                 retry_messages = _build_ai_messages(
@@ -1374,8 +1714,31 @@ async def _best_effort_answer(
                     mode,
                     doc_context=doc_context,
                     extra_instruction=extra_instruction,
+                    instruction_message=user_message,
                 )
-                return await _collect_ai_response(retry_messages, provider, model, max_tokens=resolved_max_tokens)
+                retry_answer = await _collect_ai_response(
+                    retry_messages,
+                    provider,
+                    model,
+                    max_tokens=resolved_max_tokens,
+                    use_case="research" if force_search or searched_message != user_message else use_case,
+                )
+                retry_answer = await _cross_check_answer_if_needed(
+                    user_message,
+                    searched_message,
+                    retry_answer,
+                    provider,
+                    model,
+                    max_tokens=resolved_max_tokens,
+                )
+                if _looks_like_stale_cutoff_answer(retry_answer):
+                    search_backup, backup_sources = await _search_backup_answer_bundle(
+                        user_message,
+                        force_search=True,
+                    )
+                    if search_backup:
+                        return search_backup, backup_sources
+                return retry_answer, searched_sources
             except Exception as exc:
                 logger.warning(
                     "Search-backed AI retry failed mode=%s provider=%s model=%s error=%s",
@@ -1385,11 +1748,59 @@ async def _best_effort_answer(
                     exc,
                 )
 
-    search_backup = await _search_backup_answer(user_message, force_search=force_search)
+    search_backup, backup_sources = await _search_backup_answer_bundle(
+        user_message,
+        force_search=force_search,
+    )
     if search_backup:
-        return search_backup
+        return search_backup, backup_sources
 
-    return FALLBACK_MESSAGE
+    return FALLBACK_MESSAGE, []
+
+
+async def _rescue_stale_compatible_provider_answer(
+    history: List[dict],
+    user_message: str,
+    draft_answer: str,
+    mode: str,
+    max_tokens: Optional[int],
+    extra_instruction: Optional[str] = None,
+) -> str:
+    rescued_answer, _ = await _rescue_stale_compatible_provider_answer_bundle(
+        history,
+        user_message,
+        draft_answer,
+        mode,
+        max_tokens,
+        extra_instruction=extra_instruction,
+    )
+    return rescued_answer
+
+
+async def _rescue_stale_compatible_provider_answer_bundle(
+    history: List[dict],
+    user_message: str,
+    draft_answer: str,
+    mode: str,
+    max_tokens: Optional[int],
+    extra_instruction: Optional[str] = None,
+) -> tuple[str, List[dict]]:
+    if not _looks_like_stale_cutoff_answer(draft_answer):
+        return draft_answer, []
+
+    rescued_answer, rescued_sources = await _best_effort_answer_bundle(
+        history,
+        user_message,
+        mode,
+        None,
+        None,
+        extra_instruction=_merge_extra_instructions(extra_instruction, _FRESHNESS_RETRY_INSTRUCTION),
+        force_search=True,
+        max_tokens=max_tokens,
+    )
+    if rescued_answer and not _looks_like_stale_cutoff_answer(rescued_answer):
+        return rescued_answer, rescued_sources
+    return draft_answer, []
 
 
 def _log_chat_request(
@@ -1437,6 +1848,28 @@ def _append_message(
 
 def _save_conversation(db: Session, conversation: Conversation) -> Conversation:
     return save_conversation(db, conversation)
+
+
+def _conversation_preview_text(
+    db: Session,
+    conversation: Conversation,
+    limit: int = 120,
+) -> Optional[str]:
+    try:
+        messages = ensure_conversation_messages(db, conversation)
+    except Exception:
+        return None
+
+    for message in reversed(messages):
+        content = " ".join(str(getattr(message, "content", "") or "").split()).strip()
+        if not content:
+            continue
+        return content[:limit] + ("..." if len(content) > limit else "")
+
+    summary = " ".join(str(getattr(conversation, "context_summary", "") or "").split()).strip()
+    if not summary:
+        return None
+    return summary[:limit] + ("..." if len(summary) > limit else "")
 
 
 async def _save_conversation_with_summary(
@@ -1504,25 +1937,44 @@ def _session_id_from_request(http_request: Request) -> str:
 
 
 async def _maybe_enhance_temporal_message(message: str, force_search: bool = False) -> str:
+    enhanced_message, _ = await _maybe_enhance_temporal_message_with_sources(
+        message,
+        force_search=force_search,
+    )
+    return enhanced_message
+
+
+async def _maybe_enhance_temporal_message_with_sources(
+    message: str,
+    force_search: bool = False,
+) -> tuple[str, List[dict]]:
     if not _should_use_search(message, force_search=force_search):
-        return message
+        return message, []
 
     search_query = _build_search_query(message)
-    search_results = await search_web(search_query, max_results=6 if force_search else 5)
+    search_results = await search_web(search_query, max_results=5 if force_search else 4)
     if not search_results:
-        return message
+        return message, []
 
-    today = datetime.utcnow().strftime("%B %d, %Y")
+    today = datetime.now(timezone.utc).strftime("%B %d, %Y")
     search_context = format_results_for_ai(search_results)
+    visible_sources = _visible_search_sources(search_results)
     fetched_pages = []
-    for index, result in enumerate(search_results[:2], start=1):
-        url = (result.get("url") or "").strip()
-        if not url:
-            continue
-        page_text = await fetch_page_content(url, max_chars=2000)
-        if not page_text or page_text.startswith("Could not fetch page:"):
-            continue
-        fetched_pages.append(f"[Page {index}] {url}\n{page_text}")
+    if force_search:
+        page_targets = [
+            ((result.get("url") or "").strip(), index)
+            for index, result in enumerate(search_results[:1], start=1)
+            if (result.get("url") or "").strip()
+        ]
+        if page_targets:
+            page_texts = await asyncio.gather(
+                *[_fetch_page_excerpt(url) for url, _ in page_targets],
+                return_exceptions=True,
+            )
+            for (url, index), page_text in zip(page_targets, page_texts):
+                if isinstance(page_text, Exception) or not page_text:
+                    continue
+                fetched_pages.append(f"[Page {index}] {url}\n{page_text}")
 
     page_context = "\n\n".join(fetched_pages).strip()
     if page_context:
@@ -1530,10 +1982,12 @@ async def _maybe_enhance_temporal_message(message: str, force_search: bool = Fal
 
     search_instruction = (
         "Search mode is enabled. Use the search results below as the primary source.\n"
-        "Prefer the most recent, source-backed facts.\n"
+        "Verify names, dates, prices, rankings, and counts against the freshest source-backed results.\n"
+        "Do not answer with a training or knowledge cutoff disclaimer when fresh sources are provided.\n"
         "If sources disagree, mention that briefly and give the best-supported answer."
         if force_search
-        else "Use the search results below as the primary source for recent or year-specific facts.\n"
+        else "Use the search results below as the primary source only for recent, volatile, or year-specific facts.\n"
+        "Do not answer with a training or knowledge cutoff disclaimer when fresh sources are provided.\n"
         "If the user asks about a specific year or range such as 2024 to 2025, prioritize results that match those years exactly."
     )
 
@@ -1542,7 +1996,7 @@ async def _maybe_enhance_temporal_message(message: str, force_search: bool = Fal
         f"{search_instruction}\n\n"
         f"{search_context}\n"
         f"User Question: {message}"
-    )
+    ), visible_sources
 
 
 @router.post("")
@@ -1645,11 +2099,21 @@ async def chat(
 
         force_search = mode == "search"
         enhanced_message = message_text
+        answer_sources: List[dict] = []
         if mode not in {"documents", "image"}:
-            enhanced_message = await _maybe_enhance_temporal_message(message_text, force_search=force_search)
+            enhanced_message, answer_sources = await _maybe_enhance_temporal_message_with_sources(
+                message_text,
+                force_search=force_search,
+            )
 
-        public_messages = _build_ai_messages(history, enhanced_message, mode)
+        public_messages = _build_ai_messages(
+            history,
+            enhanced_message,
+            mode,
+            instruction_message=message_text,
+        )
         provider, model = _resolve_provider_and_model(mode, request.provider, request.model)
+        response_max_tokens = _response_max_tokens(message_text, mode)
         _log_chat_request(mode, provider, model, message_text)
 
         if provider_key in PROVIDERS and mode not in {"documents", "image"}:
@@ -1672,12 +2136,34 @@ async def chat(
                 async def generate_provider_stream():
                     full_response = ""
                     try:
-                        async for chunk in stream_response(provider_key, request.model or "", public_messages):
+                        async for chunk in stream_response(
+                            provider_key,
+                            request.model or "",
+                            public_messages,
+                            max_tokens=response_max_tokens,
+                        ):
                             full_response += chunk
                             yield _sse_event({"type": "delta", "content": chunk})
                         full_response = full_response.strip()
                         if not full_response:
                             raise RuntimeError("Provider returned an empty response")
+                        full_response = await _cross_check_answer_if_needed(
+                            message_text,
+                            enhanced_message,
+                            full_response,
+                            provider=None,
+                            model=request.model,
+                            max_tokens=response_max_tokens,
+                            compatible_provider=provider_key,
+                        )
+                        full_response, rescued_sources = await _rescue_stale_compatible_provider_answer_bundle(
+                            history,
+                            message_text,
+                            full_response,
+                            mode,
+                            response_max_tokens,
+                        )
+                        final_sources = rescued_sources or answer_sources
                         prompt_images = await _await_image_task(prompt_image_task)
                         answer_images = []
                         if generate_answer_image:
@@ -1690,6 +2176,7 @@ async def chat(
                                 full_response,
                                 prompt_images=prompt_images,
                                 answer_images=answer_images,
+                                sources=final_sources,
                             )
                         )
                     except Exception as exc:
@@ -1703,8 +2190,30 @@ async def chat(
             prompt_image_task = _start_prompt_image_task(generate_prompt_image, message_text)
 
             try:
-                answer = await generate_response(provider_key, request.model, public_messages)
+                answer = await generate_response(
+                    provider_key,
+                    request.model,
+                    public_messages,
+                    max_tokens=response_max_tokens,
+                )
                 text = (answer.get("response", "") if isinstance(answer, dict) else str(answer)).strip()
+                text = await _cross_check_answer_if_needed(
+                    message_text,
+                    enhanced_message,
+                    text,
+                    provider=None,
+                    model=request.model,
+                    max_tokens=response_max_tokens,
+                    compatible_provider=provider_key,
+                )
+                text, rescued_sources = await _rescue_stale_compatible_provider_answer_bundle(
+                    history,
+                    message_text,
+                    text,
+                    mode,
+                    response_max_tokens,
+                )
+                final_sources = rescued_sources or answer_sources
                 prompt_images = await _await_image_task(prompt_image_task)
                 answer_images = []
                 if text and generate_answer_image:
@@ -1717,10 +2226,18 @@ async def chat(
                     text or fallback_message,
                     prompt_images=prompt_images,
                     answer_images=answer_images,
+                    sources=final_sources,
                 )
             except Exception as exc:
                 logger.warning("Compatible provider public chat failed provider=%s model=%s error=%s", provider_key, request.model, exc)
-                answer = await _best_effort_answer(history, message_text, mode, None, None, force_search=force_search)
+                answer, final_sources = await _best_effort_answer_bundle(
+                    history,
+                    message_text,
+                    mode,
+                    None,
+                    None,
+                    force_search=force_search,
+                )
                 prompt_images = await _await_image_task(prompt_image_task)
                 answer_images = []
                 if answer and generate_answer_image and answer != FALLBACK_MESSAGE:
@@ -1731,6 +2248,7 @@ async def chat(
                     answer,
                     prompt_images=prompt_images,
                     answer_images=answer_images,
+                    sources=final_sources,
                 )
 
         if mode == "documents":
@@ -1746,7 +2264,7 @@ async def chat(
         if mode not in {"documents", "image"}:
             prompt_image_task = _start_prompt_image_task(generate_prompt_image, message_text)
             add_message("user", message_text, session_id=session_id)
-            answer = await _best_effort_answer(
+            answer, answer_sources = await _best_effort_answer_bundle(
                 history,
                 message_text,
                 mode,
@@ -1766,6 +2284,7 @@ async def chat(
                 answer,
                 prompt_images=prompt_images,
                 answer_images=answer_images,
+                sources=answer_sources,
             )
             if request.stream:
                 async def generate_fast():
@@ -1774,6 +2293,7 @@ async def chat(
                             answer,
                             prompt_images=prompt_images,
                             answer_images=answer_images,
+                            sources=answer_sources,
                         )
                     )
 
@@ -1798,6 +2318,7 @@ async def chat(
                         provider=provider,
                         model=model,
                         max_tokens=response_max_tokens,
+                        use_case=infer_use_case(mode, message_text),
                     ):
                         full_response += chunk
                         yield _sse_event({"type": "delta", "content": chunk})
@@ -1817,7 +2338,13 @@ async def chat(
             return _payload("Here are your images.", images=images)
 
         try:
-            response_text = await _collect_ai_response(ai_messages, provider, model)
+            response_text = await _collect_ai_response(
+                ai_messages,
+                provider,
+                model,
+                max_tokens=response_max_tokens,
+                use_case=infer_use_case(mode, message_text),
+            )
             _log_chat_response(mode, provider, model, response_text)
             return _payload(response_text)
         except Exception as exc:
@@ -1954,17 +2481,23 @@ async def chat(
 
     provider, model = _resolve_provider_and_model(mode, request.provider, request.model)
     force_search = mode == "search"
+    response_max_tokens = _response_max_tokens(message_text, mode)
     _log_chat_request(mode, provider, model, message_text, conversation.id)
 
     if provider_key in PROVIDERS and mode not in {"documents", "image"}:
         history = _conversation_history(db, conversation, drop_last=(mode not in {"documents", "image"}))
         enhanced_message = message_text
+        answer_sources: List[dict] = []
         if mode not in {"documents", "image"}:
-            enhanced_message = await _maybe_enhance_temporal_message(message_text, force_search=force_search)
+            enhanced_message, answer_sources = await _maybe_enhance_temporal_message_with_sources(
+                message_text,
+                force_search=force_search,
+            )
         provider_messages = _build_ai_messages(
             history,
             enhanced_message,
             mode,
+            instruction_message=message_text,
         )
 
         if request.stream:
@@ -1984,13 +2517,35 @@ async def chat(
             async def generate_provider_stream_auth():
                 full_response = ""
                 try:
-                    async for chunk in stream_response(provider_key, request.model or "", provider_messages):
+                    async for chunk in stream_response(
+                        provider_key,
+                        request.model or "",
+                        provider_messages,
+                        max_tokens=response_max_tokens,
+                    ):
                         full_response += chunk
                         yield _sse_event({"type": "delta", "content": chunk})
 
                     full_response = full_response.strip()
                     if not full_response:
                         raise RuntimeError("Provider returned an empty response")
+                    full_response = await _cross_check_answer_if_needed(
+                        message_text,
+                        enhanced_message,
+                        full_response,
+                        provider=None,
+                        model=request.model,
+                        max_tokens=response_max_tokens,
+                        compatible_provider=provider_key,
+                    )
+                    full_response, rescued_sources = await _rescue_stale_compatible_provider_answer_bundle(
+                        history,
+                        message_text,
+                        full_response,
+                        mode,
+                        response_max_tokens,
+                    )
+                    final_sources = rescued_sources or answer_sources
                     prompt_images = await _await_image_task(prompt_image_task)
                     answer_images = []
                     if generate_answer_image:
@@ -2012,6 +2567,7 @@ async def chat(
                             {"mode": mode},
                             images=answer_images,
                             image_origin="answer" if answer_images else None,
+                            sources=final_sources,
                         ),
                     )
                     saved_conversation = await _save_conversation_with_summary(
@@ -2026,6 +2582,7 @@ async def chat(
                             saved_conversation,
                             prompt_images=prompt_images,
                             answer_images=answer_images,
+                            sources=final_sources,
                         )
                     )
                 except Exception as exc:
@@ -2037,11 +2594,33 @@ async def chat(
             return _payload(SETUP_RETRY_MESSAGE, conversation)
 
         try:
-            answer = await generate_response(provider_key, request.model, provider_messages)
+            answer = await generate_response(
+                provider_key,
+                request.model,
+                provider_messages,
+                max_tokens=response_max_tokens,
+            )
             text = (answer.get("response", "") if isinstance(answer, dict) else str(answer)).strip()
+            text = await _cross_check_answer_if_needed(
+                message_text,
+                enhanced_message,
+                text,
+                provider=None,
+                model=request.model,
+                max_tokens=response_max_tokens,
+                compatible_provider=provider_key,
+            )
+            text, rescued_sources = await _rescue_stale_compatible_provider_answer_bundle(
+                history,
+                message_text,
+                text,
+                mode,
+                response_max_tokens,
+            )
+            final_sources = rescued_sources or answer_sources
         except Exception as exc:
             logger.warning("Compatible provider chat failed provider=%s model=%s error=%s", provider_key, request.model, exc)
-            text = await _best_effort_answer(
+            text, final_sources = await _best_effort_answer_bundle(
                 history,
                 message_text,
                 mode,
@@ -2071,6 +2650,7 @@ async def chat(
                 {"mode": mode},
                 images=answer_images,
                 image_origin="answer" if answer_images else None,
+                sources=final_sources,
             ),
         )
         conversation = await _save_conversation_with_summary(
@@ -2085,11 +2665,12 @@ async def chat(
             conversation,
             prompt_images=prompt_images,
             answer_images=answer_images,
+            sources=final_sources,
         )
 
     if mode not in {"documents", "image"}:
         history = _conversation_history(db, conversation, drop_last=True)
-        answer = await _best_effort_answer(
+        answer, answer_sources = await _best_effort_answer_bundle(
             history,
             message_text,
             mode,
@@ -2119,6 +2700,7 @@ async def chat(
                 {"mode": mode},
                 images=answer_images,
                 image_origin="answer" if answer_images else None,
+                sources=answer_sources,
             ),
         )
         conversation = await _save_conversation_with_summary(
@@ -2132,6 +2714,7 @@ async def chat(
             conversation,
             prompt_images=prompt_images,
             answer_images=answer_images,
+            sources=answer_sources,
         )
 
         if request.stream:
@@ -2142,6 +2725,7 @@ async def chat(
                         conversation,
                         prompt_images=prompt_images,
                         answer_images=answer_images,
+                        sources=answer_sources,
                     )
                 )
 
@@ -2187,6 +2771,7 @@ async def chat(
                     provider=provider,
                     model=model,
                     max_tokens=response_max_tokens,
+                    use_case=infer_use_case(mode, message_text),
                 ):
                     full_response += chunk
                     yield _sse_event({"type": "delta", "content": chunk})
@@ -2417,18 +3002,24 @@ async def regenerate(
 
     provider, model = _resolve_provider_and_model(mode, request.provider, request.model)
     force_search = mode == "search"
+    response_max_tokens = _response_max_tokens(last_user_message_content, mode)
     _log_chat_request(mode, provider, model, last_user_message_content, conversation.id)
 
     if provider_key in PROVIDERS and mode not in {"documents", "image"}:
         history = _conversation_history(db, conversation, drop_last=(mode not in {"documents", "image"}))
         enhanced_message = last_user_message_content
+        answer_sources: List[dict] = []
         if mode not in {"documents", "image"}:
-            enhanced_message = await _maybe_enhance_temporal_message(last_user_message_content, force_search=force_search)
+            enhanced_message, answer_sources = await _maybe_enhance_temporal_message_with_sources(
+                last_user_message_content,
+                force_search=force_search,
+            )
         provider_messages = _build_ai_messages(
             history,
             enhanced_message,
             mode,
             extra_instruction=regenerate_instruction,
+            instruction_message=last_user_message_content,
         )
 
         if request.stream:
@@ -2448,13 +3039,36 @@ async def regenerate(
             async def generate_provider_stream():
                 full_response = ""
                 try:
-                    async for chunk in stream_response(provider_key, request.model or "", provider_messages):
+                    async for chunk in stream_response(
+                        provider_key,
+                        request.model or "",
+                        provider_messages,
+                        max_tokens=response_max_tokens,
+                    ):
                         full_response += chunk
                         yield _sse_event({"type": "delta", "content": chunk})
 
                     full_response = full_response.strip()
                     if not full_response:
                         raise RuntimeError("Provider returned an empty response")
+                    full_response = await _cross_check_answer_if_needed(
+                        last_user_message_content,
+                        enhanced_message,
+                        full_response,
+                        provider=None,
+                        model=request.model,
+                        max_tokens=response_max_tokens,
+                        compatible_provider=provider_key,
+                    )
+                    full_response, rescued_sources = await _rescue_stale_compatible_provider_answer_bundle(
+                        history,
+                        last_user_message_content,
+                        full_response,
+                        mode,
+                        response_max_tokens,
+                        extra_instruction=regenerate_instruction,
+                    )
+                    final_sources = rescued_sources or answer_sources
                     prompt_images = _message_images(last_user_message)
                     answer_images = []
                     if generate_answer_image:
@@ -2470,6 +3084,7 @@ async def regenerate(
                             {"mode": mode},
                             images=answer_images,
                             image_origin="answer" if answer_images else None,
+                            sources=final_sources,
                         ),
                     )
                     saved_conversation = await _save_conversation_with_summary(
@@ -2484,6 +3099,7 @@ async def regenerate(
                             saved_conversation,
                             prompt_images=prompt_images,
                             answer_images=answer_images,
+                            sources=final_sources,
                         )
                     )
                 except Exception as exc:
@@ -2495,8 +3111,31 @@ async def regenerate(
             return _payload(SETUP_RETRY_MESSAGE, conversation)
 
         try:
-            answer = await generate_response(provider_key, request.model, provider_messages)
+            answer = await generate_response(
+                provider_key,
+                request.model,
+                provider_messages,
+                max_tokens=response_max_tokens,
+            )
             text = (answer.get("response", "") if isinstance(answer, dict) else str(answer)).strip()
+            text = await _cross_check_answer_if_needed(
+                last_user_message_content,
+                enhanced_message,
+                text,
+                provider=None,
+                model=request.model,
+                max_tokens=response_max_tokens,
+                compatible_provider=provider_key,
+            )
+            text, rescued_sources = await _rescue_stale_compatible_provider_answer_bundle(
+                history,
+                last_user_message_content,
+                text,
+                mode,
+                response_max_tokens,
+                extra_instruction=regenerate_instruction,
+            )
+            final_sources = rescued_sources or answer_sources
         except Exception as exc:
             logger.warning(
                 "Compatible provider regenerate failed provider=%s model=%s error=%s",
@@ -2504,7 +3143,7 @@ async def regenerate(
                 request.model,
                 exc,
             )
-            text = await _best_effort_answer(
+            text, final_sources = await _best_effort_answer_bundle(
                 history,
                 last_user_message_content,
                 mode,
@@ -2530,6 +3169,7 @@ async def regenerate(
                 {"mode": mode},
                 images=answer_images,
                 image_origin="answer" if answer_images else None,
+                sources=final_sources,
             ),
         )
         conversation = await _save_conversation_with_summary(
@@ -2544,11 +3184,12 @@ async def regenerate(
             conversation,
             prompt_images=prompt_images,
             answer_images=answer_images,
+            sources=final_sources,
         )
 
     if mode not in {"documents", "image"}:
         history = _conversation_history(db, conversation, drop_last=True)
-        answer = await _best_effort_answer(
+        answer, answer_sources = await _best_effort_answer_bundle(
             history,
             last_user_message_content,
             mode,
@@ -2574,6 +3215,7 @@ async def regenerate(
                 {"mode": mode},
                 images=answer_images,
                 image_origin="answer" if answer_images else None,
+                sources=answer_sources,
             ),
         )
         conversation = await _save_conversation_with_summary(
@@ -2587,6 +3229,7 @@ async def regenerate(
             conversation,
             prompt_images=prompt_images,
             answer_images=answer_images,
+            sources=answer_sources,
         )
 
         if request.stream:
@@ -2597,6 +3240,7 @@ async def regenerate(
                         conversation,
                         prompt_images=prompt_images,
                         answer_images=answer_images,
+                        sources=answer_sources,
                     )
                 )
 
@@ -2669,6 +3313,7 @@ async def regenerate(
                     provider=provider,
                     model=model,
                     max_tokens=response_max_tokens,
+                    use_case=infer_use_case(mode, last_user_message_content),
                 ):
                     full_response += chunk
                     yield _sse_event({"type": "delta", "content": chunk})
@@ -2800,6 +3445,7 @@ async def get_conversations(
             "model": conv.model,
             "created_at": conv.created_at.isoformat(),
             "updated_at": conv.updated_at.isoformat() if conv.updated_at else (conv.created_at.isoformat() if conv.created_at else None),
+            "preview": _conversation_preview_text(db, conv),
         }
         for conv in conversations
     ]
@@ -2827,7 +3473,44 @@ async def get_conversation(
         "title": conversation.title,
         "created_at": conversation.created_at.isoformat(),
         "updated_at": conversation.updated_at.isoformat() if conversation.updated_at else (conversation.created_at.isoformat() if conversation.created_at else None),
+        "preview": _conversation_preview_text(db, conversation),
         "messages": serialized_messages,
+    }
+
+
+@router.put("/conversations/{conversation_id}")
+async def update_conversation(
+    conversation_id: str,
+    request: ConversationUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update a conversation title."""
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id,
+        Conversation.user_id == current_user.id,
+    ).first()
+
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    next_title = " ".join(str(request.title or "").split()).strip()
+    if not next_title:
+        raise HTTPException(status_code=400, detail="Conversation title cannot be empty")
+
+    if len(next_title) > 120:
+        raise HTTPException(status_code=400, detail="Conversation title must be 120 characters or fewer")
+
+    conversation.title = next_title
+    conversation = _save_conversation(db, conversation)
+
+    return {
+        "id": conversation.id,
+        "title": conversation.title,
+        "created_at": conversation.created_at.isoformat() if conversation.created_at else None,
+        "updated_at": conversation.updated_at.isoformat() if conversation.updated_at else None,
+        "preview": _conversation_preview_text(db, conversation),
+        "message": "Conversation updated successfully",
     }
 
 

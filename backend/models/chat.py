@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
-
-from models.base import Field, MongoModel
+from models.base import Field, MongoModel, utc_now
 
 
 class ChatMessage(MongoModel):
@@ -15,7 +13,7 @@ class ChatMessage(MongoModel):
     role = Field(default="assistant")
     content = Field(default="")
     meta = Field(default=None)
-    created_at = Field(default_factory=datetime.utcnow)
+    created_at = Field(default_factory=utc_now)
 
     def __repr__(self) -> str:
         return f"<ChatMessage {self.id} {self.role}>"

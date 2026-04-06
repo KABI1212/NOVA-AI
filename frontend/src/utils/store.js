@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 
+import { BROWSER_VOICE_AUTO, DEFAULT_TTS_VOICE } from './voices';
+
 // Auth Store
 export const useAuthStore = create((set) => ({
   user: JSON.parse(localStorage.getItem('user')) || null,
@@ -60,4 +62,21 @@ export const useDocumentStore = create((set) => ({
   setDocuments: (documents) => set({ documents }),
   setCurrentDocument: (document) => set({ currentDocument: document }),
   addDocument: (document) => set((state) => ({ documents: [document, ...state.documents] })),
+}));
+
+const BROWSER_VOICE_STORAGE_KEY = 'nova_browser_voice';
+const TTS_VOICE_STORAGE_KEY = 'nova_tts_voice';
+
+// Voice Store
+export const useVoiceStore = create((set) => ({
+  browserVoice: localStorage.getItem(BROWSER_VOICE_STORAGE_KEY) || BROWSER_VOICE_AUTO,
+  ttsVoice: localStorage.getItem(TTS_VOICE_STORAGE_KEY) || DEFAULT_TTS_VOICE,
+  setBrowserVoice: (browserVoice) => {
+    localStorage.setItem(BROWSER_VOICE_STORAGE_KEY, browserVoice || BROWSER_VOICE_AUTO);
+    set({ browserVoice: browserVoice || BROWSER_VOICE_AUTO });
+  },
+  setTtsVoice: (ttsVoice) => {
+    localStorage.setItem(TTS_VOICE_STORAGE_KEY, ttsVoice || DEFAULT_TTS_VOICE);
+    set({ ttsVoice: ttsVoice || DEFAULT_TTS_VOICE });
+  },
 }));

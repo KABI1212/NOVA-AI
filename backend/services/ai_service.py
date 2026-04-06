@@ -11,6 +11,8 @@ import io
 import json
 import logging
 import re
+import time
+from urllib.parse import urlparse
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from xml.sax.saxutils import escape
 
@@ -23,6 +25,12 @@ from prompts import get_presentation_style_prompt
 
 logger = logging.getLogger(__name__)
 
+LOCAL_FALLBACK_MESSAGE = (
+    "NOVA AI is in local fallback mode right now. "
+    "Groq, Ollama, and the other providers did not return a usable response. "
+    "Please try again in a moment."
+)
+
 _OFFLINE_TEXT = (
     "NOVA AI is running in offline mode. "
     "Configure an AI provider (OPENAI_API_KEY / DEEPSEEK_API_KEY / "
@@ -30,15 +38,91 @@ _OFFLINE_TEXT = (
     "or start Ollama (ollama serve)."
 )
 
-_DEFAULT_GEMINI_MODEL = "gemini-1.5-flash"
+_DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 _DEFAULT_GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image"
+_DEFAULT_OPENROUTER_IMAGE_MODEL = "sourceful/riverflow-v2-fast-preview"
+_OPENROUTER_IMAGE_FALLBACK_MODELS = [
+    "sourceful/riverflow-v2-fast-preview",
+    "sourceful/riverflow-v2-standard-preview",
+    "google/gemini-2.5-flash-image",
+]
 _DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 _DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 _DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-5"
 _DEFAULT_OLLAMA_MODEL = "llama3"
 
-_FALLBACK_CHAIN = ["openai", "deepseek", "google", "groq", "anthropic", "ollama"]
+_FALLBACK_CHAIN = ["groq", "ollama", "google", "openai", "anthropic", "deepseek"]
+_PROVIDER_DISABLE_SECONDS = 900.0
+_PROVIDER_DISABLED_UNTIL: Dict[str, float] = {}
+_IMAGE_PROVIDER_DISABLED_UNTIL: Dict[str, float] = {}
 _VALID_ROLES = {"system", "user", "assistant"}
+_IMAGE_PROVIDER_ALIASES = {
+    "": "",
+    "auto": "",
+    "default": "",
+    "openai": "openai",
+    "chatgpt": "openai",
+    "google": "google",
+    "gemini": "google",
+    "openrouter": "openrouter",
+}
+_IMAGE_PROVIDER_LABELS = {
+    "openai": "ChatGPT",
+    "google": "Gemini",
+    "openrouter": "OpenRouter",
+}
+_IMAGE_PROMPT_TARGET_GUIDANCE = {
+    "auto": "Optimize the wording for a modern image generation model.",
+    "chatgpt": "Optimize the wording for ChatGPT / OpenAI image generation.",
+    "gemini": "Optimize the wording for Google Gemini image generation.",
+    "canva": "Optimize the wording for Canva-style design generation with a clean focal point and layout-ready phrasing.",
+}
+_IMAGE_STYLE_HINTS = {
+    "vivid": "rich color, cinematic lighting, strong contrast, and a bold focal point",
+    "natural": "lifelike detail, realistic lighting, balanced color, and an authentic look",
+}
+_IMAGE_QUALITY_HINTS = {
+    "standard": "clean composition with reliable detail",
+    "hd": "very high detail, polished lighting, crisp textures, and premium finish",
+}
+_TASK_PROVIDER_PREFERENCES = {
+    "quick": ["groq", "ollama", "google", "openai", "anthropic", "deepseek"],
+    "concept": ["groq", "ollama", "google", "openai", "anthropic", "deepseek"],
+    "writing": ["groq", "ollama", "google", "anthropic", "openai", "deepseek"],
+    "coding": ["groq", "ollama", "google", "anthropic", "openai", "deepseek"],
+    "research": ["groq", "ollama", "google", "openai", "anthropic", "deepseek"],
+    "document": ["groq", "ollama", "google", "anthropic", "openai", "deepseek"],
+    "image_generation": ["google", "openrouter", "openai"],
+    "image_prompting": ["groq", "ollama", "google", "openai", "anthropic", "deepseek"],
+    "budget": ["groq", "ollama", "google", "deepseek", "openai", "anthropic"],
+}
+_TASK_LABELS = {
+    "quick": "Quick replies",
+    "concept": "Explaining concepts",
+    "writing": "Writing",
+    "coding": "Coding",
+    "research": "Research / search",
+    "document": "Speed & large files",
+    "image_generation": "Image generation",
+    "image_prompting": "Image prompt optimization",
+    "budget": "Budget option",
+}
+_WRITING_REQUEST_PATTERN = re.compile(
+    r"\b(?:write|writing|rewrite|rephrase|improve|polish|draft|email|essay|article|story|caption|copy|content|blog|linkedin|tweet|post|proposal|letter|statement|bio|script)\b",
+    re.IGNORECASE,
+)
+_CONCEPT_REQUEST_PATTERN = re.compile(
+    r"\b(?:explain|what is|what are|why|how|compare|difference|teach|understand|concept|meaning|overview)\b",
+    re.IGNORECASE,
+)
+_QUICK_REQUEST_START_PATTERN = re.compile(
+    r"^(?:what(?:'s|\s+is)?|who(?:'s|\s+is)?|where(?:'s|\s+is)?|when(?:'s|\s+is)?|define|meaning of|tell me about|explain|summarize)\b",
+    re.IGNORECASE,
+)
+_QUICK_REQUEST_COMPLEXITY_PATTERN = re.compile(
+    r"\b(?:compare|difference|detailed|detail|essay|article|research|latest|today|current|news|2024|2025|2026|code|debug|optimize|document|assignment|step by step|roadmap|plan)\b",
+    re.IGNORECASE,
+)
 _DOCUMENT_MARKS_PATTERN = re.compile(
     r"\b(?P<marks>2|3|4|5|8|10|12|15|16)\s*(?:-)?\s*(?:mark|marks)\b",
     re.IGNORECASE,
@@ -186,22 +270,125 @@ def _log_failure(provider: str, model: Optional[str], exc: Exception):
     )
 
 
+def _parse_stream_error_detail(status_code: int, error_body: bytes) -> str:
+    try:
+        payload = json.loads((error_body or b"").decode("utf-8", errors="replace"))
+        error = payload.get("error") or {}
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])
+        if isinstance(payload, dict) and payload.get("message"):
+            return str(payload["message"])
+    except Exception:
+        pass
+
+    text = (error_body or b"").decode("utf-8", errors="replace").strip()
+    return text or f"HTTP {status_code}"
+
+
+async def _stream_error_message(response: httpx.Response, provider_label: str) -> str:
+    error_body = await response.aread()
+    detail = _parse_stream_error_detail(response.status_code, error_body)
+    return f"{provider_label} HTTP {response.status_code}: {detail}"
+
+
+def _provider_temporarily_disabled(provider: str) -> bool:
+    disabled_until = _PROVIDER_DISABLED_UNTIL.get(str(provider or "").strip().lower(), 0.0)
+    return disabled_until > time.monotonic()
+
+
+def _should_temporarily_disable_provider(provider: str, exc: Exception) -> bool:
+    message = " ".join(str(exc or "").split()).lower()
+    if not message:
+        return False
+
+    patterns = (
+        "insufficient_quota",
+        "exceeded your current quota",
+        "credit balance is too low",
+        "insufficient balance",
+        "payment required",
+        "invalid api key",
+        "authentication",
+        "unauthorized",
+    )
+    return any(pattern in message for pattern in patterns)
+
+
+def _temporarily_disable_provider(provider: str, exc: Exception) -> None:
+    normalized_provider = str(provider or "").strip().lower()
+    if not normalized_provider or not _should_temporarily_disable_provider(normalized_provider, exc):
+        return
+
+    disabled_until = time.monotonic() + _PROVIDER_DISABLE_SECONDS
+    _PROVIDER_DISABLED_UNTIL[normalized_provider] = disabled_until
+    logger.info(
+        "Provider temporarily disabled provider=%s seconds=%s reason=%s",
+        normalized_provider,
+        int(_PROVIDER_DISABLE_SECONDS),
+        str(exc),
+    )
+
+
+def _image_provider_temporarily_disabled(provider: str) -> bool:
+    disabled_until = _IMAGE_PROVIDER_DISABLED_UNTIL.get(str(provider or "").strip().lower(), 0.0)
+    return disabled_until > time.monotonic()
+
+
+def _should_temporarily_disable_image_provider(provider: str, exc: Exception) -> bool:
+    message = " ".join(str(exc or "").split()).lower()
+    if not message:
+        return False
+
+    patterns = (
+        "billing_hard_limit_reached",
+        "billing hard limit",
+        "insufficient credits",
+        "not enough credits",
+        "requires more credits",
+        "resource_exhausted",
+        "quota exceeded",
+        "rate limit",
+        "payment required",
+        "invalid api key",
+        "authentication",
+        "unauthorized",
+    )
+    return any(pattern in message for pattern in patterns)
+
+
+def _temporarily_disable_image_provider(provider: str, exc: Exception) -> None:
+    normalized_provider = str(provider or "").strip().lower()
+    if not normalized_provider or not _should_temporarily_disable_image_provider(normalized_provider, exc):
+        return
+
+    disabled_until = time.monotonic() + _PROVIDER_DISABLE_SECONDS
+    _IMAGE_PROVIDER_DISABLED_UNTIL[normalized_provider] = disabled_until
+    logger.info(
+        "Image provider temporarily disabled provider=%s seconds=%s reason=%s",
+        normalized_provider,
+        int(_PROVIDER_DISABLE_SECONDS),
+        str(exc),
+    )
+
+
 def _resolve_provider() -> str:
     configured = (getattr(settings, "AI_PROVIDER", "") or "").lower().strip()
     if configured == "auto":
         configured = ""
     if configured:
         return configured
-    if _openai_api_key():
-        return "openai"
-    if _deepseek_api_key():
-        return "deepseek"
-    if _google_api_key():
-        return "google"
-    if getattr(settings, "GROQ_API_KEY", ""):
+    if getattr(settings, "GROQ_API_KEY", "") and not _provider_temporarily_disabled("groq"):
         return "groq"
-    if getattr(settings, "ANTHROPIC_API_KEY", ""):
+    if getattr(settings, "OLLAMA_BASE_URL", "") and not _provider_temporarily_disabled("ollama"):
+        return "ollama"
+    if _google_api_key() and not _provider_temporarily_disabled("google"):
+        return "google"
+    if _openai_api_key() and not _provider_temporarily_disabled("openai"):
+        return "openai"
+    if getattr(settings, "ANTHROPIC_API_KEY", "") and not _provider_temporarily_disabled("anthropic"):
         return "anthropic"
+    if _deepseek_api_key() and not _provider_temporarily_disabled("deepseek"):
+        return "deepseek"
     return "ollama"
 
 
@@ -217,13 +404,111 @@ def _deepseek_api_key() -> str:
     return getattr(settings, "DEEPSEEK_API_KEY", "") or ""
 
 
-def _provider_default_model(provider: str) -> str:
+def _openrouter_api_key() -> str:
+    return getattr(settings, "OPENROUTER_API_KEY", "") or ""
+
+
+def is_quick_answer_request(mode: Optional[str] = None, message: Optional[str] = None) -> bool:
+    normalized_mode = str(mode or "chat").strip().lower()
+    if normalized_mode != "chat":
+        return False
+
+    text = " ".join((message or "").split()).strip()
+    if not text:
+        return False
+
+    lowered_text = text.lower()
+
+    if len(text) > 90 or len(text.split()) > 14:
+        return False
+
+    if lowered_text.startswith("explain ") and len(text.split()) > 4:
+        return False
+
+    if lowered_text.startswith(("what is ", "what are ", "what's ")) and " how " in lowered_text:
+        return False
+
+    if any(
+        marker in lowered_text
+        for marker in (
+            " classified",
+            " classification",
+            " types of ",
+            " advantages",
+            " disadvantages",
+            " use cases",
+        )
+    ):
+        return False
+
+    if _WRITING_REQUEST_PATTERN.search(text) or _DOCUMENT_ASSIGNMENT_PATTERN.search(text):
+        return False
+
+    if _QUICK_REQUEST_COMPLEXITY_PATTERN.search(text):
+        return False
+
+    return bool(_QUICK_REQUEST_START_PATTERN.search(text) or len(text.split()) <= 6)
+
+
+def infer_use_case(mode: Optional[str] = None, message: Optional[str] = None) -> str:
+    normalized_mode = str(mode or "chat").strip().lower()
+    text = " ".join((message or "").split()).strip()
+
+    if normalized_mode == "image":
+        return "image_generation"
+    if normalized_mode == "search":
+        return "research"
+    if normalized_mode == "code":
+        return "coding"
+    if normalized_mode == "documents":
+        return "document"
+    if normalized_mode in {"summary", "summarize", "rewrite"}:
+        return "writing"
+    if is_quick_answer_request(normalized_mode, text):
+        return "quick"
+    if normalized_mode in {"deep", "knowledge", "learning", "safe"}:
+        if _WRITING_REQUEST_PATTERN.search(text):
+            return "writing"
+        return "concept"
+    if _WRITING_REQUEST_PATTERN.search(text):
+        return "writing"
+    if _CONCEPT_REQUEST_PATTERN.search(text):
+        return "concept"
+    return "concept"
+
+
+def _configured_provider_override() -> Optional[str]:
+    configured = (getattr(settings, "AI_PROVIDER", "") or "").lower().strip()
+    if configured == "auto":
+        return None
+    return configured or None
+
+
+def _configured_model_override() -> Optional[str]:
+    configured = (getattr(settings, "AI_MODEL", "") or "").strip()
+    return configured or None
+
+
+def _provider_chain_for_use_case(use_case: Optional[str]) -> List[str]:
+    requested_use_case = str(use_case or "").strip().lower()
+    preferred = _TASK_PROVIDER_PREFERENCES.get(requested_use_case) or _FALLBACK_CHAIN
+    return list(dict.fromkeys([*preferred, *_FALLBACK_CHAIN]))
+
+
+def _provider_default_model(provider: str, use_case: Optional[str] = None) -> str:
+    normalized_use_case = str(use_case or "").strip().lower()
     if provider == "openai":
-        return getattr(settings, "OPENAI_CHAT_MODEL", "") or "gpt-4-turbo-preview"
+        if normalized_use_case == "quick":
+            return getattr(settings, "OPENAI_FAST_MODEL", "") or "gpt-4o-mini"
+        if normalized_use_case == "coding":
+            return getattr(settings, "OPENAI_CODE_MODEL", "") or getattr(settings, "OPENAI_CHAT_MODEL", "") or "gpt-4o"
+        if normalized_use_case in {"concept", "document", "research"}:
+            return getattr(settings, "OPENAI_EXPLAIN_MODEL", "") or getattr(settings, "OPENAI_CHAT_MODEL", "") or "gpt-4o"
+        return getattr(settings, "OPENAI_CHAT_MODEL", "") or "gpt-4o"
     if provider == "deepseek":
         return _DEFAULT_DEEPSEEK_MODEL
     if provider == "google":
-        return _DEFAULT_GEMINI_MODEL
+        return getattr(settings, "GEMINI_CHAT_MODEL", "") or _DEFAULT_GEMINI_MODEL
     if provider == "groq":
         return _DEFAULT_GROQ_MODEL
     if provider == "anthropic":
@@ -231,19 +516,144 @@ def _provider_default_model(provider: str) -> str:
     return _DEFAULT_OLLAMA_MODEL
 
 
-def _resolve_image_provider() -> Optional[str]:
-    configured = (getattr(settings, "AI_PROVIDER", "") or "").lower().strip()
-    if configured == "auto":
-        configured = ""
-    if configured in {"google", "gemini"} and _google_api_key():
+def _normalize_image_provider(provider: Optional[str]) -> str:
+    normalized = str(provider or "").strip().lower()
+    return _IMAGE_PROVIDER_ALIASES.get(normalized, normalized)
+
+
+def _image_provider_ready(provider: str) -> bool:
+    if provider == "openai":
+        return bool(_openai_api_key())
+    if provider == "google":
+        return bool(_google_api_key())
+    if provider == "openrouter":
+        return bool(_openrouter_api_key())
+    return False
+
+
+def _image_provider_available(provider: str) -> bool:
+    return _image_provider_ready(provider) and not _image_provider_temporarily_disabled(provider)
+
+
+def _resolve_image_provider(provider: Optional[str] = None) -> Optional[str]:
+    requested = _normalize_image_provider(provider)
+    if requested:
+        return requested if _image_provider_available(requested) else None
+
+    configured = _normalize_image_provider(getattr(settings, "AI_IMAGE_PROVIDER", "") or "")
+    if configured:
+        return configured if _image_provider_available(configured) else None
+
+    if _image_provider_available("google"):
         return "google"
-    if configured == "openai" and _openai_api_key():
-        return "openai"
-    if _google_api_key():
-        return "google"
-    if _openai_api_key():
+    if _image_provider_available("openrouter"):
+        return "openrouter"
+    if _image_provider_available("openai"):
         return "openai"
     return None
+
+
+def _resolve_image_provider_chain(provider: Optional[str] = None) -> List[str]:
+    requested = _normalize_image_provider(provider)
+    if requested:
+        return [requested] if _image_provider_available(requested) else []
+
+    configured = _normalize_image_provider(getattr(settings, "AI_IMAGE_PROVIDER", "") or "")
+    preferred_chain = _provider_chain_for_use_case("image_generation")
+    chain: List[str] = []
+
+    if configured and _image_provider_available(configured):
+        chain.append(configured)
+
+    for candidate in preferred_chain:
+        if (
+            candidate in {"google", "openai", "openrouter"}
+            and _image_provider_available(candidate)
+            and candidate not in chain
+        ):
+            chain.append(candidate)
+
+    return chain
+
+
+def _resolve_prompt_enhancer_provider(provider: Optional[str] = None) -> Optional[str]:
+    requested = _normalize_image_provider(provider)
+    if requested and _provider_available(requested):
+        return requested
+
+    configured = str(getattr(settings, "IMAGE_PROMPT_ENHANCER_PROVIDER", "") or "").strip().lower()
+    if configured and _provider_available(configured):
+        return configured
+
+    for candidate in (_resolve_provider(), "groq", "ollama", "google", "openai", *[item for item in _FALLBACK_CHAIN if item not in {"groq", "ollama", "google", "openai"}]):
+        normalized = str(candidate or "").strip().lower()
+        if normalized and _provider_available(normalized):
+            return normalized
+    return None
+
+
+def _normalize_image_prompt_target(target: Optional[str]) -> str:
+    normalized = str(target or "").strip().lower()
+    if normalized in {"", "auto", "default"}:
+        return "auto"
+    if normalized in {"openai", "chatgpt"}:
+        return "chatgpt"
+    if normalized in {"google", "gemini"}:
+        return "gemini"
+    if normalized == "canva":
+        return "canva"
+    return "auto"
+
+
+def _clean_image_prompt(prompt: str, limit: int = 4000) -> str:
+    return " ".join((prompt or "").split()).strip()[:limit]
+
+
+def _heuristic_image_prompt(
+    prompt: str,
+    *,
+    size: str = "1024x1024",
+    quality: str = "standard",
+    style: str = "vivid",
+) -> str:
+    cleaned_prompt = _clean_image_prompt(prompt, 2400)
+    if not cleaned_prompt:
+        return ""
+
+    details = [
+        cleaned_prompt,
+        f"Aspect ratio target: {_image_size_to_aspect_ratio(size)}.",
+        f"Visual style: {_IMAGE_STYLE_HINTS.get(style, _IMAGE_STYLE_HINTS['vivid'])}.",
+        f"Quality target: {_IMAGE_QUALITY_HINTS.get(quality, _IMAGE_QUALITY_HINTS['standard'])}.",
+    ]
+
+    lowered = cleaned_prompt.lower()
+    if "text" not in lowered and "caption" not in lowered and "logo" not in lowered:
+        details.append("Avoid captions, watermarks, logos, and stray text unless explicitly requested.")
+
+    return " ".join(details).strip()
+
+
+def _image_generation_prompt_for_provider(
+    prompt: str,
+    *,
+    provider: str,
+    size: str = "1024x1024",
+    quality: str = "standard",
+    style: str = "vivid",
+) -> str:
+    cleaned_prompt = _clean_image_prompt(prompt, 3200)
+    if not cleaned_prompt:
+        return ""
+
+    if provider == "google":
+        return _heuristic_image_prompt(
+            cleaned_prompt,
+            size=size,
+            quality=quality,
+            style=style,
+        )
+    return cleaned_prompt
 
 
 def _image_size_to_aspect_ratio(size: str) -> str:
@@ -288,6 +698,40 @@ def _google_image_error(payload: Any, status_code: int, model_name: str) -> Runt
     return RuntimeError(f"{message} (model={model_name})")
 
 
+def _summarize_image_provider_error(exc: Exception) -> str:
+    message = " ".join(str(exc or "").split()).strip()
+    lowered = message.lower()
+
+    if "billing_hard_limit_reached" in lowered or "billing hard limit" in lowered:
+        return "billing hard limit reached"
+    if "insufficient credits" in lowered or "not enough credits" in lowered:
+        return "insufficient credits"
+    if "requires more credits" in lowered or "can only afford" in lowered:
+        return "insufficient credits"
+    if "no endpoints found" in lowered:
+        return "model unavailable"
+    if "resource_exhausted" in lowered or "quota exceeded" in lowered:
+        return "quota exhausted"
+    if "content_policy_violation" in lowered or "content policy" in lowered:
+        return "prompt blocked by content policy"
+    if "rate limit" in lowered:
+        return "rate limited"
+    if "provider not configured" in lowered or "no supported image provider" in lowered:
+        return "provider not configured"
+    return message[:220] if message else "unknown error"
+
+
+def _build_image_provider_failure(provider_errors: List[tuple[str, Exception]]) -> RuntimeError:
+    if not provider_errors:
+        return RuntimeError("All image providers failed.")
+
+    details = [
+        f"{_IMAGE_PROVIDER_LABELS.get(provider, provider.title())}: {_summarize_image_provider_error(exc)}"
+        for provider, exc in provider_errors
+    ]
+    return RuntimeError(f"All image providers failed. {'; '.join(details)}")
+
+
 def _inline_data_to_data_url(inline_data) -> Optional[str]:
     if inline_data is None:
         return None
@@ -330,11 +774,142 @@ def _google_response_to_images(payload: Any) -> List[str]:
     return images
 
 
+def _openrouter_image_models() -> List[str]:
+    configured_model = str(getattr(settings, "OPENROUTER_IMAGE_MODEL", "") or "").strip()
+    models = [configured_model] if configured_model else []
+    for candidate in [_DEFAULT_OPENROUTER_IMAGE_MODEL, *_OPENROUTER_IMAGE_FALLBACK_MODELS]:
+        normalized = str(candidate or "").strip()
+        if normalized and normalized not in models:
+            models.append(normalized)
+    return models
+
+
+def _openrouter_image_modalities(model_name: str) -> List[str]:
+    normalized = str(model_name or "").strip().lower()
+    if any(marker in normalized for marker in ("flux", "sourceful/", "recraft", "playground")):
+        return ["image"]
+    return ["image", "text"]
+
+
+def _openrouter_image_config(size: str, quality: str) -> Dict[str, str]:
+    config: Dict[str, str] = {}
+    aspect_ratio = _image_size_to_aspect_ratio(size)
+    if aspect_ratio:
+        config["aspect_ratio"] = aspect_ratio
+    return config
+
+
+def _openrouter_error(payload: Any, status_code: int, model_name: str) -> RuntimeError:
+    message = ""
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            message = str(error.get("message") or "").strip()
+        if not message:
+            message = str(payload.get("message") or "").strip()
+    if not message:
+        message = f"OpenRouter image request failed with HTTP {status_code}"
+    return RuntimeError(f"{message} (model={model_name})")
+
+
+def _openrouter_image_request_body(
+    prompt: str,
+    model_name: str,
+    *,
+    size: str,
+    quality: str,
+) -> Dict[str, Any]:
+    modalities = _openrouter_image_modalities(model_name)
+    body: Dict[str, Any] = {
+        "model": model_name,
+        "messages": [{"role": "user", "content": prompt}],
+        "modalities": modalities,
+    }
+    image_config = _openrouter_image_config(size, quality)
+    if image_config:
+        body["image_config"] = image_config
+    if "text" in modalities:
+        # Keep output token reservation tiny so image+text models do not request
+        # far more credits than needed for a single generated image.
+        body["max_tokens"] = 64
+    return body
+
+
+def _openrouter_response_to_images(payload: Any) -> List[str]:
+    if not isinstance(payload, dict):
+        return []
+
+    choices = payload.get("choices") or []
+    if not isinstance(choices, list) or not choices:
+        return []
+
+    choice = choices[0] if isinstance(choices[0], dict) else {}
+    message = choice.get("message") or choice.get("delta") or {}
+    if not isinstance(message, dict):
+        return []
+
+    images: List[str] = []
+    for item in message.get("images") or []:
+        if not isinstance(item, dict):
+            continue
+        image_url = item.get("image_url") or item.get("imageUrl") or {}
+        if isinstance(image_url, dict):
+            url = str(image_url.get("url") or "").strip()
+        else:
+            url = str(image_url or "").strip()
+        if url:
+            images.append(url)
+    return images
+
+
 def _normalize_image_mime_type(mime_type: Optional[str]) -> str:
     normalized = str(mime_type or "").strip().lower()
     if normalized.startswith("image/"):
         return normalized
     return "image/png"
+
+
+def _looks_like_base64_image_payload(value: str) -> bool:
+    candidate = "".join(str(value or "").split())
+    if len(candidate) < 64:
+        return False
+    return bool(re.fullmatch(r"[A-Za-z0-9+/=]+", candidate))
+
+
+def normalize_image_asset(value: Any) -> Optional[str]:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+    lowered = candidate.lower()
+    if lowered.startswith("data:image/"):
+        return candidate
+    if lowered.startswith("data:"):
+        return None
+    if lowered.startswith(("http://", "https://")):
+        parsed = urlparse(candidate)
+        if parsed.scheme in {"http", "https"} and parsed.netloc and not any(ch.isspace() for ch in candidate):
+            return candidate
+        return None
+    if _looks_like_base64_image_payload(candidate):
+        return f"data:image/png;base64,{candidate}"
+    return None
+
+
+def sanitize_image_assets(images: List[Any], limit: Optional[int] = None) -> List[str]:
+    sanitized: List[str] = []
+    seen: set[str] = set()
+    max_items = None if limit is None else max(0, int(limit))
+
+    for raw_image in images or []:
+        candidate = normalize_image_asset(raw_image)
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        sanitized.append(candidate)
+        if max_items is not None and len(sanitized) >= max_items:
+            break
+
+    return sanitized
 
 
 def _image_bytes_to_data_url(image_bytes: bytes, mime_type: Optional[str] = None) -> str:
@@ -423,6 +998,8 @@ async def _generate_image_with_openai(
     cleaned_prompt: str,
     size: str = "1024x1024",
     n: int = 1,
+    quality: str = "standard",
+    style: str = "vivid",
 ) -> List[str]:
     openai_key = _openai_api_key()
     if not openai_key:
@@ -440,7 +1017,9 @@ async def _generate_image_with_openai(
         "response_format": "b64_json",
     }
     if model_name == "dall-e-3":
-        request_args["quality"] = getattr(settings, "OPENAI_IMAGE_QUALITY", "hd") or "hd"
+        request_args["quality"] = quality or getattr(settings, "OPENAI_IMAGE_QUALITY", "hd") or "hd"
+        if style in {"vivid", "natural"}:
+            request_args["style"] = style
     response = await client.images.generate(**request_args)
     return [
         item.b64_json
@@ -490,6 +1069,71 @@ async def _generate_image_with_google(
     return []
 
 
+async def _generate_image_with_openrouter(
+    cleaned_prompt: str,
+    size: str = "1024x1024",
+    n: int = 1,
+    quality: str = "standard",
+) -> List[str]:
+    api_key = _openrouter_api_key()
+    if not api_key:
+        return []
+
+    requested_images = max(1, min(int(n or 1), 4))
+    endpoint = f"{str(getattr(settings, 'OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1')).rstrip('/')}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:3000",
+        "X-Title": getattr(settings, "APP_NAME", "NOVA AI"),
+    }
+
+    images: List[str] = []
+    last_error: Optional[Exception] = None
+
+    async with httpx.AsyncClient(timeout=_image_request_timeout_seconds()) as client:
+        for model_name in _openrouter_image_models():
+            images = []
+            for _ in range(requested_images):
+                response = await client.post(
+                    endpoint,
+                    headers=headers,
+                    json=_openrouter_image_request_body(
+                        cleaned_prompt,
+                        model_name,
+                        size=size,
+                        quality=quality,
+                    ),
+                )
+
+                try:
+                    payload: Any = response.json()
+                except ValueError:
+                    payload = {"error": {"message": response.text}}
+
+                if response.status_code >= 400:
+                    last_error = _openrouter_error(payload, response.status_code, model_name)
+                    break
+
+                generated = _openrouter_response_to_images(payload)
+                if not generated:
+                    last_error = RuntimeError(f"OpenRouter returned no images (model={model_name})")
+                    break
+
+                images.extend(generated)
+                if len(images) >= requested_images:
+                    return images[:requested_images]
+
+            if images:
+                return images[:requested_images]
+
+    if images:
+        return images[:requested_images]
+    if last_error is not None:
+        raise last_error
+    return []
+
+
 async def _edit_image_with_google(
     prompt: str,
     image_bytes: bytes,
@@ -524,6 +1168,62 @@ async def _edit_image_with_google(
                     return images
             except Exception as exc:
                 last_error = exc
+
+    if last_error is not None:
+        raise last_error
+    return []
+
+
+async def _edit_image_with_openrouter(
+    prompt: str,
+    image_bytes: bytes,
+    mime_type: str = "image/png",
+) -> List[str]:
+    api_key = _openrouter_api_key()
+    if not api_key:
+        return []
+
+    endpoint = f"{str(getattr(settings, 'OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1')).rstrip('/')}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:3000",
+        "X-Title": getattr(settings, "APP_NAME", "NOVA AI"),
+    }
+    data_url = _image_bytes_to_data_url(image_bytes, mime_type)
+
+    async with httpx.AsyncClient(timeout=_image_request_timeout_seconds()) as client:
+        last_error: Optional[Exception] = None
+        for model_name in _openrouter_image_models():
+            body = _openrouter_image_request_body(prompt, model_name, size="1024x1024", quality="standard")
+            body["messages"] = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
+            ]
+            response = await client.post(
+                endpoint,
+                headers=headers,
+                json=body,
+            )
+
+            try:
+                payload: Any = response.json()
+            except ValueError:
+                payload = {"error": {"message": response.text}}
+
+            if response.status_code >= 400:
+                last_error = _openrouter_error(payload, response.status_code, model_name)
+                continue
+
+            images = _openrouter_response_to_images(payload)
+            if images:
+                return images
+            last_error = RuntimeError(f"OpenRouter returned no images (model={model_name})")
 
     if last_error is not None:
         raise last_error
@@ -740,9 +1440,9 @@ async def _stream_google(
     if not api_key:
         raise RuntimeError("Missing GOOGLE_API_KEY or GEMINI_API_KEY")
 
-    model_name = model or _DEFAULT_GEMINI_MODEL
+    model_name = model or getattr(settings, "GEMINI_CHAT_MODEL", "") or _DEFAULT_GEMINI_MODEL
     if not model_name.startswith("gemini-"):
-        model_name = _DEFAULT_GEMINI_MODEL
+        model_name = getattr(settings, "GEMINI_CHAT_MODEL", "") or _DEFAULT_GEMINI_MODEL
 
     contents, system_instruction = _messages_to_gemini(messages)
     config = types.GenerateContentConfig(
@@ -793,7 +1493,7 @@ async def _stream_groq(
             json=payload,
         ) as response:
             if response.status_code >= 400:
-                raise RuntimeError(f"Groq HTTP {response.status_code}: {response.text}")
+                raise RuntimeError(await _stream_error_message(response, "Groq"))
             async for line in response.aiter_lines():
                 if not line or not line.startswith("data:"):
                     continue
@@ -891,7 +1591,7 @@ async def _stream_ollama(
             json=payload,
         ) as response:
             if response.status_code >= 400:
-                raise RuntimeError(f"Ollama HTTP {response.status_code}: {response.text}")
+                raise RuntimeError(await _stream_error_message(response, "Ollama"))
             async for line in response.aiter_lines():
                 if not line:
                     continue
@@ -918,7 +1618,7 @@ async def _stream_openai(
 
     client = AsyncOpenAI(api_key=api_key, timeout=_request_timeout_seconds())
     stream = await client.chat.completions.create(
-        model=model or getattr(settings, "OPENAI_CHAT_MODEL", "gpt-4-turbo-preview"),
+        model=model or getattr(settings, "OPENAI_CHAT_MODEL", "gpt-4o"),
         messages=messages,
         stream=True,
         temperature=temperature if temperature is not None else _default_temperature(),
@@ -956,11 +1656,38 @@ def _provider_ready(provider: str) -> bool:
     return False
 
 
-def _provider_chain(provider: Optional[str]) -> List[str]:
-    requested = (provider or _resolve_provider()).lower().strip()
-    if provider:
-        return [requested]
-    return [requested] + [item for item in _FALLBACK_CHAIN if item != requested]
+def _provider_available(provider: str) -> bool:
+    return _provider_ready(provider) and not _provider_temporarily_disabled(provider)
+
+
+def _provider_chain(provider: Optional[str], use_case: Optional[str] = None) -> List[str]:
+    explicit_provider = (provider or "").lower().strip()
+    if explicit_provider:
+        return [explicit_provider]
+
+    configured_provider = _configured_provider_override()
+    if configured_provider:
+        return [configured_provider] + [item for item in _FALLBACK_CHAIN if item != configured_provider]
+
+    preferred_chain = _provider_chain_for_use_case(use_case)
+    if use_case:
+        return preferred_chain
+
+    requested = _resolve_provider().lower().strip()
+    if requested in preferred_chain:
+        return [requested] + [item for item in preferred_chain if item != requested]
+    return preferred_chain
+
+
+def describe_default_provider_stack() -> List[Dict[str, Any]]:
+    return [
+        {
+            "use_case": use_case,
+            "label": _TASK_LABELS.get(use_case, use_case.replace("_", " ").title()),
+            "providers": providers,
+        }
+        for use_case, providers in _TASK_PROVIDER_PREFERENCES.items()
+    ]
 
 
 async def stream_direct(
@@ -969,11 +1696,14 @@ async def stream_direct(
     model: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
+    use_case: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     key = (provider or "").lower().strip()
     fn = _PROVIDER_STREAM_MAP.get(key)
     if fn is None:
         raise RuntimeError(f"Unsupported provider: {provider}")
+    if _provider_temporarily_disabled(key):
+        raise RuntimeError(f"Provider temporarily unavailable: {key}")
     if not _provider_ready(key):
         raise RuntimeError(f"Provider not configured: {key}")
 
@@ -981,7 +1711,7 @@ async def stream_direct(
     if not normalized_messages:
         raise RuntimeError("No valid messages were provided to the AI service")
 
-    resolved_model = model or _provider_default_model(key)
+    resolved_model = model or _provider_default_model(key, use_case)
     resolved_temperature = temperature if temperature is not None else _default_temperature()
     resolved_max_tokens = max_tokens or _default_max_tokens()
     _log_request(key, resolved_model, normalized_messages, resolved_temperature, resolved_max_tokens)
@@ -1001,9 +1731,10 @@ async def direct_completion(
     model: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
+    use_case: Optional[str] = None,
 ) -> str:
     tokens: List[str] = []
-    async for token in stream_direct(messages, provider, model, temperature, max_tokens):
+    async for token in stream_direct(messages, provider, model, temperature, max_tokens, use_case=use_case):
         tokens.append(token)
     text = "".join(tokens).strip()
     if not text:
@@ -1018,21 +1749,24 @@ async def _stream_with_fallback(
     model: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
+    use_case: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     normalized_messages = _normalize_messages(messages)
     if not normalized_messages:
         raise RuntimeError("No valid messages were provided to the AI service")
 
-    chain = _provider_chain(provider)
-    ready_chain = [item for item in chain if _provider_ready(item)]
+    chain = _provider_chain(provider, use_case=use_case)
+    ready_chain = [item for item in chain if _provider_available(item)]
     if not ready_chain:
         if provider:
+            if _provider_temporarily_disabled(provider):
+                raise RuntimeError(f"Provider temporarily unavailable: {provider}")
             raise RuntimeError(f"Provider not configured: {provider}")
         logger.warning("No configured AI providers were available")
         yield _OFFLINE_TEXT
         return
 
-    requested_provider = (provider or _resolve_provider()).lower().strip()
+    requested_provider = (provider or _configured_provider_override() or _resolve_provider()).lower().strip()
     errors: List[str] = []
 
     for current_provider in ready_chain:
@@ -1041,7 +1775,15 @@ async def _stream_with_fallback(
             errors.append(f"{current_provider}: unsupported provider")
             continue
 
-        model_for_provider = _model_for_provider(current_provider, requested_provider, model) or _provider_default_model(current_provider)
+        model_for_provider = (
+            _model_for_provider(current_provider, requested_provider, model)
+            or (
+                _configured_model_override()
+                if current_provider == requested_provider and _configured_provider_override() == requested_provider
+                else None
+            )
+            or _provider_default_model(current_provider, use_case)
+        )
         resolved_temperature = temperature if temperature is not None else _default_temperature()
         resolved_max_tokens = max_tokens or _default_max_tokens()
 
@@ -1075,6 +1817,7 @@ async def _stream_with_fallback(
             errors.append(warning)
         except Exception as exc:
             _log_failure(current_provider, model_for_provider, exc)
+            _temporarily_disable_provider(current_provider, exc)
             errors.append(f"{current_provider}: {exc}")
             if chunks:
                 partial = "".join(chunks).strip()
@@ -1101,9 +1844,10 @@ async def _complete_non_stream(
     model: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
+    use_case: Optional[str] = None,
 ) -> str:
     tokens: List[str] = []
-    async for token in _stream_with_fallback(messages, provider, model, temperature, max_tokens):
+    async for token in _stream_with_fallback(messages, provider, model, temperature, max_tokens, use_case=use_case):
         tokens.append(token)
     text = "".join(tokens).strip()
     if not text:
@@ -1120,12 +1864,13 @@ class AIService:
         temperature: float = 0.3,
         max_tokens: int = 2000,
         provider: Optional[str] = None,
+        use_case: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         if stream:
-            async for token in _stream_with_fallback(messages, provider, model, temperature, max_tokens):
+            async for token in _stream_with_fallback(messages, provider, model, temperature, max_tokens, use_case=use_case):
                 yield token
         else:
-            result = await _complete_non_stream(messages, provider, model, temperature, max_tokens)
+            result = await _complete_non_stream(messages, provider, model, temperature, max_tokens, use_case=use_case)
             yield result
 
     async def chat_stream(
@@ -1135,8 +1880,9 @@ class AIService:
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        use_case: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
-        async for token in _stream_with_fallback(messages, provider, model, temperature, max_tokens):
+        async for token in _stream_with_fallback(messages, provider, model, temperature, max_tokens, use_case=use_case):
             yield token
 
     async def generate_code(self, prompt: str, language: str = "python") -> str:
@@ -1150,7 +1896,7 @@ class AIService:
             },
             {"role": "user", "content": prompt},
         ]
-        return await _complete_non_stream(messages)
+        return await _complete_non_stream(messages, use_case="coding")
 
     async def explain_code(self, code: str, language: str = "python") -> str:
         messages = [
@@ -1163,7 +1909,7 @@ class AIService:
             },
             {"role": "user", "content": f"Explain this {language} code:\n\n{code}"},
         ]
-        return await _complete_non_stream(messages)
+        return await _complete_non_stream(messages, use_case="coding")
 
     async def debug_code(self, code: str, error: str = "") -> str:
         prompt = f"Debug this code:\n\n{code}"
@@ -1179,7 +1925,7 @@ class AIService:
             },
             {"role": "user", "content": prompt},
         ]
-        return await _complete_non_stream(messages)
+        return await _complete_non_stream(messages, use_case="coding")
 
     async def optimize_code(self, code: str, language: str = "python") -> str:
         messages = [
@@ -1192,7 +1938,7 @@ class AIService:
             },
             {"role": "user", "content": f"Optimize this code:\n\n{code}"},
         ]
-        return await _complete_non_stream(messages)
+        return await _complete_non_stream(messages, use_case="coding")
 
     async def generate_explanation(
         self,
@@ -1232,7 +1978,8 @@ class AIService:
                 "content": f"Audience: {audience}\nDetail Level: {detail}\nRequest: {prompt}",
             },
         ]
-        return await _complete_non_stream(messages)
+        use_case = "writing" if mode == "summary" else infer_use_case(mode, prompt)
+        return await _complete_non_stream(messages, use_case=use_case)
 
     async def summarize_document(self, text: str) -> str:
         messages = [
@@ -1245,7 +1992,7 @@ class AIService:
             },
             {"role": "user", "content": f"Summarize this document:\n\n{str(text)[:8000]}"},
         ]
-        return await _complete_non_stream(messages)
+        return await _complete_non_stream(messages, use_case="document")
 
     async def answer_question_from_document(
         self,
@@ -1273,6 +2020,7 @@ class AIService:
         return await _complete_non_stream(
             messages,
             max_tokens=_document_answer_max_tokens(question_text),
+            use_case="document",
         )
 
     async def rewrite_document_question(self, question: str) -> str:
@@ -1295,8 +2043,190 @@ class AIService:
         rewritten = await _complete_non_stream(
             messages,
             max_tokens=max(256, min(_default_max_tokens(), 512)),
+            use_case="writing",
         )
         return " ".join((rewritten or "").split()).strip(" '\"")
+
+    async def enhance_image_prompt(
+        self,
+        prompt: str,
+        *,
+        size: str = "1024x1024",
+        quality: str = "standard",
+        style: str = "vivid",
+        provider: Optional[str] = None,
+        prompt_target: str = "auto",
+    ) -> str:
+        cleaned_prompt = _clean_image_prompt(prompt, 2400)
+        if not cleaned_prompt:
+            return ""
+
+        fallback_prompt = _heuristic_image_prompt(
+            cleaned_prompt,
+            size=size,
+            quality=quality,
+            style=style,
+        )
+        enhancer_provider = _resolve_prompt_enhancer_provider(provider)
+        if not enhancer_provider:
+            return fallback_prompt
+
+        target = _normalize_image_prompt_target(prompt_target)
+        messages = [
+            {
+                "role": "system",
+                "content": _with_presentation_style(
+                    "Rewrite the user's image idea into one strong, production-ready image prompt. "
+                    "Preserve the user's subject, count, mood, requested text, brand names, and intent. "
+                    "Add concrete composition, lighting, background, materials, and camera cues only when helpful. "
+                    "Avoid adding captions, logos, watermarks, or extra objects unless the user explicitly asked for them. "
+                    "Return only the final prompt with no bullets, no title, and no explanation. "
+                    f"{_IMAGE_PROMPT_TARGET_GUIDANCE.get(target, _IMAGE_PROMPT_TARGET_GUIDANCE['auto'])} "
+                    f"The output should fit a {_image_size_to_aspect_ratio(size)} composition and reflect a {style} style with {quality} quality."
+                ),
+            },
+            {"role": "user", "content": cleaned_prompt},
+        ]
+
+        try:
+            rewritten = await _complete_non_stream(
+                messages,
+                provider=enhancer_provider,
+                temperature=0.4,
+                max_tokens=max(256, min(_default_max_tokens(), 450)),
+                use_case="image_prompting",
+            )
+            normalized = _clean_image_prompt(str(rewritten or "").strip(" '\""), 2400)
+            return normalized or fallback_prompt
+        except Exception as exc:
+            logger.warning(
+                "Image prompt enhancement failed provider=%s prompt=%s error=%s",
+                enhancer_provider,
+                cleaned_prompt[:180],
+                exc,
+            )
+            return fallback_prompt
+
+    async def generate_image_result(
+        self,
+        prompt: str,
+        *,
+        size: str = "1024x1024",
+        n: int = 1,
+        quality: str = "standard",
+        style: str = "vivid",
+        provider: Optional[str] = None,
+        enhance_prompt: bool = True,
+        prompt_target: str = "auto",
+        raise_on_error: bool = False,
+    ) -> Dict[str, Any]:
+        cleaned_prompt = _clean_image_prompt(prompt)
+        if not cleaned_prompt:
+            return {
+                "prompt": "",
+                "revised_prompt": "",
+                "provider": None,
+                "provider_label": None,
+                "images": [],
+            }
+
+        candidate_providers = _resolve_image_provider_chain(provider)
+        resolved_provider = candidate_providers[0] if candidate_providers else None
+        revised_prompt = cleaned_prompt
+        if enhance_prompt:
+            revised_prompt = await self.enhance_image_prompt(
+                cleaned_prompt,
+                size=size,
+                quality=quality,
+                style=style,
+                provider=resolved_provider or provider,
+                prompt_target=prompt_target,
+            )
+
+        generation_prompt = _image_generation_prompt_for_provider(
+            revised_prompt or cleaned_prompt,
+            provider=resolved_provider or "",
+            size=size,
+            quality=quality,
+            style=style,
+        )
+
+        if not resolved_provider:
+            logger.info("Image generation skipped because no available image provider is ready")
+            return {
+                "prompt": cleaned_prompt,
+                "revised_prompt": revised_prompt or cleaned_prompt,
+                "provider": None,
+                "provider_label": None,
+                "images": [],
+            }
+
+        last_error: Optional[Exception] = None
+        provider_errors: List[tuple[str, Exception]] = []
+
+        for candidate_provider in candidate_providers:
+            generation_prompt = _image_generation_prompt_for_provider(
+                revised_prompt or cleaned_prompt,
+                provider=candidate_provider,
+                size=size,
+                quality=quality,
+                style=style,
+            )
+            try:
+                if candidate_provider == "google":
+                    images = await _generate_image_with_google(generation_prompt, size=size, n=n)
+                elif candidate_provider == "openrouter":
+                    images = await _generate_image_with_openrouter(
+                        generation_prompt,
+                        size=size,
+                        n=n,
+                        quality=quality,
+                    )
+                else:
+                    images = await _generate_image_with_openai(
+                        generation_prompt,
+                        size=size,
+                        n=n,
+                        quality=quality,
+                        style=style,
+                    )
+
+                images = sanitize_image_assets(images, limit=n)
+                if images:
+                    return {
+                        "prompt": cleaned_prompt,
+                        "revised_prompt": revised_prompt or cleaned_prompt,
+                        "provider": candidate_provider,
+                        "provider_label": _IMAGE_PROVIDER_LABELS.get(candidate_provider, candidate_provider.title()),
+                        "images": images,
+                    }
+
+                logger.warning(
+                    "Image API returned no image data provider=%s prompt=%s",
+                    candidate_provider,
+                    generation_prompt[:180],
+                )
+            except Exception as exc:
+                last_error = exc
+                provider_errors.append((candidate_provider, exc))
+                _temporarily_disable_image_provider(candidate_provider, exc)
+                logger.warning(
+                    "Image API failed provider=%s prompt=%s error=%s",
+                    candidate_provider,
+                    generation_prompt[:180],
+                    exc,
+                )
+
+        if raise_on_error and last_error is not None:
+            raise _build_image_provider_failure(provider_errors) from last_error
+
+        return {
+            "prompt": cleaned_prompt,
+            "revised_prompt": revised_prompt or cleaned_prompt,
+            "provider": resolved_provider,
+            "provider_label": _IMAGE_PROVIDER_LABELS.get(resolved_provider, resolved_provider.title()) if resolved_provider else None,
+            "images": [],
+        }
 
     async def analyze_image(
         self,
@@ -1365,7 +2295,7 @@ class AIService:
             },
             {"role": "user", "content": f"Create a {level} learning roadmap for: {topic}"},
         ]
-        roadmap = await _complete_non_stream(messages)
+        roadmap = await _complete_non_stream(messages, use_case="concept")
         return {"topic": topic, "level": level, "roadmap": roadmap}
 
     async def generate_image(
@@ -1373,72 +2303,115 @@ class AIService:
         prompt: str,
         size: str = "1024x1024",
         n: int = 1,
+        quality: str = "standard",
+        style: str = "vivid",
+        provider: Optional[str] = None,
+        enhance_prompt: bool = True,
+        prompt_target: str = "auto",
     ) -> List[str]:
-        cleaned_prompt = " ".join((prompt or "").split()).strip()[:4000]
-        if not cleaned_prompt:
-            return []
+        result = await self.generate_image_result(
+            prompt,
+            size=size,
+            n=n,
+            quality=quality,
+            style=style,
+            provider=provider,
+            enhance_prompt=enhance_prompt,
+            prompt_target=prompt_target,
+        )
+        return list(result.get("images") or [])
 
-        provider = _resolve_image_provider()
-        if not provider:
-            logger.warning("Image generation skipped because no supported image provider is configured")
-            return []
-
-        try:
-            if provider == "google":
-                images = await _generate_image_with_google(cleaned_prompt, size=size, n=n)
-            else:
-                images = await _generate_image_with_openai(cleaned_prompt, size=size, n=n)
-
-            if not images:
-                logger.warning(
-                    "Image API returned no image data provider=%s prompt=%s",
-                    provider,
-                    cleaned_prompt[:180],
-                )
-            return images
-        except Exception as exc:
-            logger.warning(
-                "Image API failed provider=%s prompt=%s error=%s",
-                provider,
-                cleaned_prompt[:180],
-                exc,
-            )
-            return []
+    def has_available_image_provider(self, provider: Optional[str] = None) -> bool:
+        return bool(_resolve_image_provider_chain(provider))
 
     async def edit_image(
         self,
         prompt: str,
         image_bytes: bytes,
         mime_type: str = "image/png",
+        provider: Optional[str] = None,
     ) -> List[str]:
         cleaned_prompt = " ".join((prompt or "").split()).strip()[:4000]
         if not image_bytes:
             return []
 
-        provider = _resolve_image_provider()
-        if not provider:
-            logger.warning("Image editing skipped because no supported image provider is configured")
+        candidate_providers = _resolve_image_provider_chain(provider)
+        if not candidate_providers:
+            logger.info("Image editing skipped because no available image provider is ready")
             return []
 
         edit_prompt = cleaned_prompt or "Create a polished new image inspired by this upload."
 
-        try:
-            if provider == "google":
-                images = await _edit_image_with_google(edit_prompt, image_bytes, mime_type=mime_type)
-            else:
-                images = await _edit_image_with_openai(edit_prompt, image_bytes)
+        last_error: Optional[Exception] = None
+        provider_errors: List[tuple[str, Exception]] = []
 
-            if not images:
-                logger.warning("Image edit returned no data provider=%s prompt=%s", provider, edit_prompt[:180])
-            return images
-        except Exception as exc:
-            logger.warning(
-                "Image edit failed provider=%s prompt=%s error=%s",
-                provider,
-                edit_prompt[:180],
-                exc,
-            )
-            return []
+        for candidate_provider in candidate_providers:
+            try:
+                if candidate_provider == "google":
+                    images = sanitize_image_assets(
+                        await _edit_image_with_google(edit_prompt, image_bytes, mime_type=mime_type)
+                    )
+                elif candidate_provider == "openrouter":
+                    images = sanitize_image_assets(
+                        await _edit_image_with_openrouter(edit_prompt, image_bytes, mime_type=mime_type)
+                    )
+                else:
+                    images = sanitize_image_assets(
+                        await _edit_image_with_openai(edit_prompt, image_bytes)
+                    )
+
+                if images:
+                    return images
+                logger.warning("Image edit returned no data provider=%s prompt=%s", candidate_provider, edit_prompt[:180])
+            except Exception as exc:
+                last_error = exc
+                provider_errors.append((candidate_provider, exc))
+                _temporarily_disable_image_provider(candidate_provider, exc)
+                logger.warning(
+                    "Image edit failed provider=%s prompt=%s error=%s",
+                    candidate_provider,
+                    edit_prompt[:180],
+                    exc,
+                )
+        if provider_errors:
+            raise _build_image_provider_failure(provider_errors) from last_error
+        return []
+
+    async def get_available_image_providers(self) -> List[Dict[str, Any]]:
+        providers: List[Dict[str, Any]] = [
+            {
+                "id": "auto",
+                "name": "Auto",
+                "available": bool(_resolve_image_provider()),
+                "description": "Default image stack: Gemini first, then OpenRouter, then ChatGPT.",
+            }
+        ]
+
+        providers.append(
+            {
+                "id": "google",
+                "name": "Gemini",
+                "available": _image_provider_available("google"),
+                "description": "Default for image generation, search-backed prompts, and fast image work.",
+            }
+        )
+        providers.append(
+            {
+                "id": "openrouter",
+                "name": "OpenRouter",
+                "available": _image_provider_available("openrouter"),
+                "description": "Image fallback router using your OpenRouter credits and model access.",
+            }
+        )
+        providers.append(
+            {
+                "id": "openai",
+                "name": "ChatGPT",
+                "available": _image_provider_available("openai"),
+                "description": "Direct OpenAI image generation fallback.",
+            }
+        )
+        return providers
 
     async def get_available_providers(self) -> List[Dict]:
         providers = []
@@ -1453,7 +2426,8 @@ class AIService:
                 {
                     "id": "openai",
                     "name": "OpenAI",
-                    "models": [model for model in dict.fromkeys(openai_models) if model] or ["gpt-4-turbo-preview"],
+                    "models": [model for model in dict.fromkeys(openai_models) if model] or ["gpt-4o"],
+                    "recommended_for": ["Explaining concepts", "Image generation fallback", "OpenAI coding fallback"],
                 }
             )
 
@@ -1463,15 +2437,22 @@ class AIService:
                     "id": "deepseek",
                     "name": "DeepSeek",
                     "models": ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
+                    "recommended_for": ["Budget option", "Concept explanations"],
                 }
             )
 
         if _google_api_key():
+            google_models = [
+                getattr(settings, "GEMINI_CHAT_MODEL", ""),
+                "gemini-2.5-flash",
+                "gemini-2.5-pro",
+            ]
             providers.append(
                 {
                     "id": "google",
                     "name": "Gemini (Google)",
-                    "models": ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"],
+                    "models": [model for model in dict.fromkeys(google_models) if model],
+                    "recommended_for": ["Research / search", "Speed & large files", "Image generation"],
                 }
             )
 
@@ -1481,6 +2462,7 @@ class AIService:
                     "id": "groq",
                     "name": "Groq",
                     "models": ["llama-3.3-70b-versatile", "llama3-8b-8192", "mixtral-8x7b-32768", "gemma2-9b-it"],
+                    "recommended_for": ["Fast fallback"],
                 }
             )
 
@@ -1490,10 +2472,18 @@ class AIService:
                     "id": "anthropic",
                     "name": "Claude",
                     "models": ["claude-opus-4-5", "claude-sonnet-4-5", "claude-3-sonnet-20240229", "claude-3-haiku-20240307"],
+                    "recommended_for": ["Coding", "Writing", "Deep reasoning fallback"],
                 }
             )
 
-        providers.append({"id": "ollama", "name": "Ollama (Local)", "models": ["llama3", "mistral", "codellama"]})
+        providers.append(
+            {
+                "id": "ollama",
+                "name": "Ollama (Local)",
+                "models": ["llama3", "mistral", "codellama"],
+                "recommended_for": ["Offline fallback"],
+            }
+        )
         return providers
 
 
@@ -1513,8 +2503,9 @@ async def stream_chat(
     provider: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
+    use_case: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
-    async for token in _stream_with_fallback(messages, provider, model, temperature, max_tokens):
+    async for token in _stream_with_fallback(messages, provider, model, temperature, max_tokens, use_case=use_case):
         yield token
 
 

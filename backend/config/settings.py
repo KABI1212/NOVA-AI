@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     APP_HOST: str = "127.0.0.1"
     APP_PORT: int = 8000
+    UVICORN_ACCESS_LOG: bool = False
 
     DATABASE_URL: str = "mongodb://localhost:27017/nova_ai"
     MONGODB_DB_NAME: str = ""
@@ -31,9 +32,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
     OPENAI_API_KEY: str = ""
-    OPENAI_CHAT_MODEL: str = "gpt-4-turbo-preview"
-    OPENAI_CODE_MODEL: str = "gpt-4-turbo-preview"
-    OPENAI_EXPLAIN_MODEL: str = "gpt-4-turbo-preview"
+    OPENAI_CHAT_MODEL: str = "gpt-4o"
+    OPENAI_FAST_MODEL: str = "gpt-4o-mini"
+    OPENAI_CODE_MODEL: str = "gpt-4o"
+    OPENAI_EXPLAIN_MODEL: str = "gpt-4o"
+    GEMINI_CHAT_MODEL: str = "gemini-2.5-flash"
     OPENAI_IMAGE_MODEL: str = "dall-e-3"
     OPENAI_IMAGE_QUALITY: str = "hd"
     GEMINI_IMAGE_MODEL: str = "gemini-2.5-flash-image"
@@ -51,18 +54,22 @@ class Settings(BaseSettings):
 
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    OPENROUTER_IMAGE_MODEL: str = "sourceful/riverflow-v2-fast-preview"
 
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_NUM_PREDICT: int = 512
     OLLAMA_NUM_CTX: int = 2048
 
     AI_PROVIDER: str = ""
+    AI_IMAGE_PROVIDER: str = ""
+    IMAGE_PROMPT_ENHANCER_PROVIDER: str = ""
     AI_MODEL: str = ""
     AI_TEMPERATURE: float = 0.3
     AI_MAX_TOKENS: int = 2048
+    AI_FAST_MAX_TOKENS: int = 320
     AI_REQUEST_TIMEOUT_SECONDS: int = 60
     AI_IMAGE_REQUEST_TIMEOUT_SECONDS: int = 180
-    AI_DEBUG_LOGGING: bool = True
+    AI_DEBUG_LOGGING: bool = False
     AI_LOG_PREVIEW_CHARS: int = 400
 
     CORS_ORIGINS: str = (
@@ -75,6 +82,7 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     REDIS_URL: str = "redis://localhost:6379"
     RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_WARN_ON_MEMORY_FALLBACK: bool = False
     CHAT_RATE_LIMIT_REQUESTS: int = 20
     CHAT_RATE_LIMIT_WINDOW_SECONDS: int = 60
     IMAGE_RATE_LIMIT_REQUESTS: int = 10
@@ -82,6 +90,7 @@ class Settings(BaseSettings):
     CONVERSATION_SUMMARY_MIN_MESSAGES: int = 8
     CONVERSATION_SUMMARY_REFRESH_INTERVAL: int = 4
     CONVERSATION_SUMMARY_RECENT_MESSAGES: int = 18
+    SUPPRESS_32BIT_CRYPTO_WARNING: bool = True
 
     VECTOR_DB_TYPE: str = "lexical"
     PINECONE_API_KEY: str = ""

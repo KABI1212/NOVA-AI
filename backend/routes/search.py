@@ -95,6 +95,7 @@ async def search_chat(
                     [{"role": "system", "content": system_prompt}, *messages],
                     model=request.model,
                     provider=request.provider,
+                    use_case="research",
                 ):
                     full_response += chunk
                     yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"

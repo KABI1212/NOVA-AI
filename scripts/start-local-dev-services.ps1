@@ -28,7 +28,7 @@ try {
     Write-Host ""
     Write-Host "Next commands:" -ForegroundColor Cyan
     Write-Host "  cd `"$repoRoot\backend`""
-    Write-Host "  .\venv\Scripts\Activate.ps1"
+    Write-Host "  .\venv314\Scripts\Activate.ps1"
     Write-Host "  python main.py"
     Write-Host ""
     Write-Host "Useful checks:" -ForegroundColor Cyan

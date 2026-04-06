@@ -1,1 +1,5 @@
-Generic single-database configuration.
+Legacy placeholder only.
+
+NOVA AI currently uses MongoDB for application data. Collections and indexes are
+created automatically in `config.database.init_db()`, so there are no active SQL
+revisions in this directory.

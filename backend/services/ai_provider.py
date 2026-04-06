@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -26,9 +27,23 @@ PROVIDERS = {
     },
 }
 
+# Retry config
+_RETRY_ATTEMPTS = 3
+_RETRY_BACKOFF_BASE = 1.5  # seconds; doubles each attempt
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+# ---------------------------------------------------------------------------
+# Settings helpers
+# ---------------------------------------------------------------------------
 
 def _default_temperature() -> float:
     value = float(getattr(settings, "AI_TEMPERATURE", 0.3) or 0.3)
+    return max(0.0, min(value, 1.0))
+
+
+def _default_top_p() -> float:
+    value = float(getattr(settings, "AI_TOP_P", 1.0) or 1.0)
     return max(0.0, min(value, 1.0))
 
 
@@ -37,14 +52,37 @@ def _default_max_tokens() -> int:
     return max(128, value)
 
 
-def _request_timeout_seconds() -> int:
-    return max(10, int(getattr(settings, "AI_REQUEST_TIMEOUT_SECONDS", 60) or 60))
+def _connect_timeout_seconds() -> float:
+    return max(5.0, float(getattr(settings, "AI_CONNECT_TIMEOUT_SECONDS", 10) or 10))
+
+
+def _read_timeout_seconds() -> float:
+    """
+    Separate read timeout used for streaming to avoid killing long responses.
+    For non-streaming this is the full request timeout.
+    """
+    return max(10.0, float(getattr(settings, "AI_REQUEST_TIMEOUT_SECONDS", 60) or 60))
+
+
+def _stream_read_timeout_seconds() -> float:
+    return max(30.0, float(getattr(settings, "AI_STREAM_TIMEOUT_SECONDS", 120) or 120))
 
 
 def _preview_text(text: str) -> str:
     limit = int(getattr(settings, "AI_LOG_PREVIEW_CHARS", 400) or 400)
     return " ".join((text or "").split())[:limit]
 
+
+def _debug_logging_enabled() -> bool:
+    return bool(
+        getattr(settings, "AI_DEBUG_LOGGING", False)
+        or getattr(settings, "DEBUG", False)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Message helpers
+# ---------------------------------------------------------------------------
 
 def _normalize_messages(messages: List[Dict[str, str]] | str) -> List[Dict[str, str]]:
     if isinstance(messages, str):
@@ -84,7 +122,10 @@ def _extract_content(data: Dict) -> str:
     if not choices:
         return ""
 
-    choice = choices[0] or {}
+    choice = choices[0] if isinstance(choices, list) and choices else {}
+    if not isinstance(choice, dict):
+        return ""
+
     message = choice.get("message") or {}
     content = _extract_text_part(message.get("content"))
     if content:
@@ -98,17 +139,44 @@ def _extract_content(data: Dict) -> str:
     return str(choice.get("text", "") or "")
 
 
+def _parse_provider_error(response: httpx.Response) -> str:
+    """
+    Try to extract a human-readable error message from a provider's JSON error
+    response. Falls back to raw text if parsing fails.
+    """
+    try:
+        body = response.json()
+        # OpenAI-compatible: {"error": {"message": "..."}}
+        error = body.get("error") or {}
+        if isinstance(error, dict) and error.get("message"):
+            return error["message"]
+        # Some providers use {"message": "..."}
+        if body.get("message"):
+            return str(body["message"])
+    except Exception:
+        pass
+    return response.text or f"HTTP {response.status_code}"
+
+
+# ---------------------------------------------------------------------------
+# Provider resolution
+# ---------------------------------------------------------------------------
+
 def _resolve_provider(provider: str, model: str) -> Tuple[str, str, Dict[str, str]]:
     key = (provider or "").strip().lower()
     if key not in PROVIDERS:
-        raise HTTPException(status_code=400, detail="Unsupported provider")
+        raise HTTPException(status_code=400, detail=f"Unsupported provider: '{provider}'")
 
     if not model:
         raise HTTPException(status_code=400, detail="Model is required")
 
-    api_key = os.getenv(PROVIDERS[key]["env_key"]) or getattr(settings, PROVIDERS[key]["env_key"], "")
+    api_key = os.getenv(PROVIDERS[key]["env_key"]) or getattr(
+        settings, PROVIDERS[key]["env_key"], ""
+    )
     if not api_key:
-        raise HTTPException(status_code=500, detail=f"Missing API key for provider: {key}")
+        raise HTTPException(
+            status_code=500, detail=f"Missing API key for provider: {key}"
+        )
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -122,8 +190,12 @@ def _resolve_provider(provider: str, model: str) -> Tuple[str, str, Dict[str, st
     return key, PROVIDERS[key]["base_url"], headers
 
 
+# ---------------------------------------------------------------------------
+# Logging helpers (never log headers or API keys)
+# ---------------------------------------------------------------------------
+
 def _log_request(provider: str, model: str, messages: List[Dict[str, str]]):
-    if not (getattr(settings, "AI_DEBUG_LOGGING", False) or getattr(settings, "DEBUG", False)):
+    if not _debug_logging_enabled():
         return
 
     logger.info(
@@ -134,10 +206,10 @@ def _log_request(provider: str, model: str, messages: List[Dict[str, str]]):
         json.dumps(
             [
                 {
-                    "role": message["role"],
-                    "content": _preview_text(message["content"]),
+                    "role": msg["role"],
+                    "content": _preview_text(msg["content"]),
                 }
-                for message in messages
+                for msg in messages
             ],
             ensure_ascii=False,
         ),
@@ -145,7 +217,7 @@ def _log_request(provider: str, model: str, messages: List[Dict[str, str]]):
 
 
 def _log_response(provider: str, model: str, text: str):
-    if not (getattr(settings, "AI_DEBUG_LOGGING", False) or getattr(settings, "DEBUG", False)):
+    if not _debug_logging_enabled():
         return
 
     logger.info(
@@ -157,10 +229,66 @@ def _log_response(provider: str, model: str, text: str):
     )
 
 
+# ---------------------------------------------------------------------------
+# Retry helper
+# ---------------------------------------------------------------------------
+
+async def _post_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: Dict[str, str],
+    body: Dict,
+) -> httpx.Response:
+    """
+    POST with exponential backoff retry for transient provider errors.
+    Raises HTTPException on final failure.
+    """
+    last_exc: Exception | None = None
+
+    for attempt in range(1, _RETRY_ATTEMPTS + 1):
+        try:
+            response = await client.post(url, headers=headers, json=body)
+
+            if response.status_code not in _RETRYABLE_STATUS_CODES:
+                return response
+
+            detail = _parse_provider_error(response)
+            logger.warning(
+                "Provider returned retryable status attempt=%s/%s status=%s detail=%s",
+                attempt,
+                _RETRY_ATTEMPTS,
+                response.status_code,
+                detail,
+            )
+            last_exc = HTTPException(status_code=response.status_code, detail=detail)
+
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            logger.warning(
+                "Provider request error attempt=%s/%s error=%s",
+                attempt,
+                _RETRY_ATTEMPTS,
+                str(exc),
+            )
+            last_exc = exc
+
+        if attempt < _RETRY_ATTEMPTS:
+            await asyncio.sleep(_RETRY_BACKOFF_BASE * (2 ** (attempt - 1)))
+
+    if isinstance(last_exc, HTTPException):
+        raise last_exc
+    raise HTTPException(status_code=503, detail=f"Provider unreachable after {_RETRY_ATTEMPTS} attempts")
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
 async def generate_response(
     provider: str,
     model: str,
     messages: List[Dict[str, str]] | str,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> Dict[str, str]:
     normalized_messages = _normalize_messages(messages)
     if not normalized_messages:
@@ -169,18 +297,24 @@ async def generate_response(
     key, base_url, headers = _resolve_provider(provider, model)
     _log_request(key, model, normalized_messages)
 
-    payload = {
+    body = {
         "model": model,
         "messages": normalized_messages,
-        "temperature": _default_temperature(),
-        "max_tokens": _default_max_tokens(),
+        "temperature": _default_temperature() if temperature is None else temperature,
+        "top_p": _default_top_p(),
+        "max_tokens": _default_max_tokens() if max_tokens is None else max_tokens,
     }
 
-    async with httpx.AsyncClient(timeout=_request_timeout_seconds()) as client:
-        response = await client.post(base_url, headers=headers, json=payload)
+    timeout = httpx.Timeout(connect=_connect_timeout_seconds(), read=_read_timeout_seconds(), write=10.0, pool=5.0)
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await _post_with_retry(client, base_url, headers, body)
 
     if response.status_code >= 400:
-        raise HTTPException(status_code=response.status_code, detail=response.text)
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=_parse_provider_error(response),
+        )
 
     data = response.json()
     content = _extract_content(data).strip()
@@ -199,6 +333,8 @@ async def stream_response(
     provider: str,
     model: str,
     messages: List[Dict[str, str]] | str,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> AsyncGenerator[str, None]:
     normalized_messages = _normalize_messages(messages)
     if not normalized_messages:
@@ -207,41 +343,65 @@ async def stream_response(
     key, base_url, headers = _resolve_provider(provider, model)
     _log_request(key, model, normalized_messages)
 
-    payload = {
+    body = {
         "model": model,
         "messages": normalized_messages,
-        "temperature": _default_temperature(),
-        "max_tokens": _default_max_tokens(),
+        "temperature": _default_temperature() if temperature is None else temperature,
+        "top_p": _default_top_p(),
+        "max_tokens": _default_max_tokens() if max_tokens is None else max_tokens,
         "stream": True,
     }
 
+    # Use a longer read timeout for streaming to avoid premature disconnection
+    timeout = httpx.Timeout(
+        connect=_connect_timeout_seconds(),
+        read=_stream_read_timeout_seconds(),
+        write=10.0,
+        pool=5.0,
+    )
+
     full_response = ""
-    async with httpx.AsyncClient(timeout=_request_timeout_seconds()) as client:
-        async with client.stream("POST", base_url, headers=headers, json=payload) as response:
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream("POST", base_url, headers=headers, json=body) as response:
             if response.status_code >= 400:
-                raise HTTPException(status_code=response.status_code, detail=response.text)
+                error_body = await response.aread()
+                try:
+                    error_detail = _parse_provider_error(
+                        httpx.Response(response.status_code, content=error_body)
+                    )
+                except Exception:
+                    error_detail = error_body.decode(errors="replace")
+                raise HTTPException(status_code=response.status_code, detail=error_detail)
 
             async for line in response.aiter_lines():
                 if not line or not line.startswith("data:"):
                     continue
 
-                data = line.replace("data:", "", 1).strip()
-                if data == "[DONE]":
+                raw = line.removeprefix("data:").strip()
+                if raw == "[DONE]":
                     break
 
                 try:
-                    payload_data = json.loads(data)
+                    chunk = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
 
-                choices = payload_data.get("choices") or [{}]
-                choice = choices[0] or {}
+                choices = chunk.get("choices")
+                if not choices or not isinstance(choices, list):
+                    continue
+
+                choice = choices[0]
+                if not isinstance(choice, dict):
+                    continue
+
+                # Prefer delta (streaming), fall back to message (some providers)
                 delta = choice.get("delta") or {}
                 content = _extract_text_part(delta.get("content"))
 
                 if not content:
-                    message_payload = choice.get("message") or {}
-                    content = _extract_text_part(message_payload.get("content"))
+                    message_chunk = choice.get("message") or {}
+                    content = _extract_text_part(message_chunk.get("content"))
 
                 if content:
                     full_response += content

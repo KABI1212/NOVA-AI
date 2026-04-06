@@ -1,16 +1,21 @@
 // @ts-nocheck
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ShieldCheck, Send } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Layout from '../components/common/Layout';
 import MessageBubble from '../components/chat/MessageBubble';
 import { explainAPI } from '../services/api';
+import { stopSpeechPlayback } from '../utils/speech';
 
 function ReasoningAssistant() {
   const [question, setQuestion] = useState('');
   const [detail, setDetail] = useState('balanced');
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => () => {
+    stopSpeechPlayback();
+  }, []);
 
   const suggestions = [
     'How should I evaluate a new tech stack for my team?',
@@ -20,6 +25,7 @@ function ReasoningAssistant() {
 
   const handleReason = async () => {
     if (!question.trim() || loading) return;
+    stopSpeechPlayback();
     setLoading(true);
     try {
       const response = await explainAPI.explain({

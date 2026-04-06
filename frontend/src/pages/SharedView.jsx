@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams }           from "react-router-dom";
 import MessageBubble           from "../components/chat/MessageBubble";
 import NovaLogo                from "../components/common/NovaLogo";
@@ -10,11 +10,7 @@ export default function SharedView() {
   const [loading, setLoading]    = useState(true);
   const [error,   setError]      = useState(null);
 
-  useEffect(() => {
-    fetchShared();
-  }, [shareId]);
-
-  const fetchShared = async () => {
+  const fetchShared = useCallback(async () => {
     try {
       const res = await fetch(`/api/share/view/${shareId}`);
 
@@ -30,7 +26,11 @@ export default function SharedView() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [shareId]);
+
+  useEffect(() => {
+    fetchShared();
+  }, [fetchShared]);
 
   if (loading) return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center">
@@ -113,6 +113,7 @@ export default function SharedView() {
             key={i}
             message={msg}
             isStreaming={false}
+            showTts={false}
           />
         ))}
       </div>

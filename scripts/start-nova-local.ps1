@@ -7,6 +7,12 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $backendDir = Join-Path $repoRoot "backend"
 $mongoScript = Join-Path $PSScriptRoot "start-portable-mongo.ps1"
+$pythonCandidates = @(
+    (Join-Path $backendDir "venv314\Scripts\python.exe"),
+    (Join-Path $backendDir "venv64\Scripts\python.exe"),
+    (Join-Path $backendDir "venv\Scripts\python.exe")
+)
+$pythonExe = $pythonCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 
 function Test-TcpPort {
     param(
@@ -40,8 +46,13 @@ if (-not $SkipMongo) {
 }
 
 if (-not (Test-TcpPort -Port 27017)) {
-    Write-Error "MongoDB is not reachable on 127.0.0.1:27017. Start it first or run this script without -SkipMongo."
-    exit 1
+    if ($SkipMongo) {
+        Write-Host "MongoDB is not reachable on 127.0.0.1:27017. Continuing because -SkipMongo was provided." -ForegroundColor Yellow
+    }
+    else {
+        Write-Error "MongoDB is not reachable on 127.0.0.1:27017. Start it first or run this script without -SkipMongo."
+        exit 1
+    }
 }
 
 if (Test-TcpPort -Port 8000) {
@@ -49,11 +60,16 @@ if (Test-TcpPort -Port 8000) {
     exit 0
 }
 
+if (-not $pythonExe) {
+    Write-Error "No backend Python environment was found. Expected one of: backend\\venv314, backend\\venv64, or backend\\venv."
+    exit 1
+}
+
 Push-Location $backendDir
 try {
     Write-Host "Starting NOVA backend at http://localhost:8000" -ForegroundColor Green
     Write-Host "Press Ctrl+C in this window to stop the backend." -ForegroundColor Yellow
-    cmd /c "call venv\Scripts\activate.bat && python main.py"
+    & $pythonExe "main.py"
 }
 finally {
     Pop-Location

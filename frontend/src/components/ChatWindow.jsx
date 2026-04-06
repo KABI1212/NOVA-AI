@@ -1,7 +1,33 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Check, Copy, ExternalLink, Pencil, RotateCcw, Volume2, VolumeX } from "lucide-react";
 
 import MarkdownAnswer from "./common/MarkdownAnswer";
 import TypingIndicator from "./TypingIndicator";
+
+const USER_MESSAGE_SUFFIX_PATTERN = /(?:\s*\+\s*)?\[(?:File|Photo):\s*[^\]]+\]\s*$/i;
+
+async function copyTextToClipboard(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = value;
+  textArea.style.position = "fixed";
+  textArea.style.left = "-9999px";
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textArea);
+}
+
+function getUserQuestionText(message) {
+  const content = String(message?.content || "").trim();
+  const cleaned = content.replace(USER_MESSAGE_SUFFIX_PATTERN, "").trim();
+  return cleaned || content;
+}
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -9,6 +35,61 @@ function getGreeting() {
   if (hour < 18) return "Good afternoon";
   return "Evening";
 }
+
+const HERO_CONTENT = {
+  Chat: {
+    pill: "Free plan - Upgrade",
+    subtitle: "How can I help you today?",
+  },
+  Search: {
+    pill: "Search workspace",
+    subtitle: "Ask for current information, recent updates, or source-backed comparisons right here in chat.",
+  },
+  Code: {
+    pill: "Code workspace",
+    subtitle: "Ask for code generation, debugging, explanations, or refactors without leaving the main chat.",
+  },
+  Explain: {
+    pill: "Explain workspace",
+    subtitle: "Ask for step-by-step explanations and NOVA will break complex ideas down clearly.",
+  },
+  Reasoning: {
+    pill: "Reasoning workspace",
+    subtitle: "Use this space for tradeoffs, decisions, and more careful structured thinking.",
+  },
+  Knowledge: {
+    pill: "Knowledge workspace",
+    subtitle: "Ask factual questions, summaries, or concept overviews in one continuous conversation.",
+  },
+  Documents: {
+    pill: "Documents workspace",
+    subtitle: "Attach a file in chat and ask NOVA to summarize it, answer questions, or pull study notes from it.",
+  },
+  Learning: {
+    pill: "Learning workspace",
+    subtitle: "Turn the chat into a study coach for roadmaps, practice plans, and guided learning steps.",
+  },
+  Images: {
+    pill: "Images workspace",
+    subtitle: "Describe a visual idea or attach a photo to create or remix images directly from chat.",
+  },
+  Customize: {
+    pill: "Customize workspace",
+    subtitle: "Describe your preferences and NOVA will tailor tone, style, and depth in the next reply.",
+  },
+  Chats: {
+    pill: "Chats workspace",
+    subtitle: "Continue an existing thread from the sidebar or start a fresh conversation here.",
+  },
+  Projects: {
+    pill: "Projects workspace",
+    subtitle: "Use this space for multi-step planning, milestones, drafts, and practical execution help.",
+  },
+  Artifacts: {
+    pill: "Artifacts workspace",
+    subtitle: "Ask for polished outputs like outlines, specs, tables, summaries, and reusable deliverables.",
+  },
+};
 
 function getName() {
   try {
@@ -62,18 +143,106 @@ function MessageImages({ message }) {
   );
 }
 
+function formatSourceDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return parsed.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function getSourceHostname(url) {
+  try {
+    const hostname = new URL(url).hostname || "";
+    return hostname.replace(/^www\./i, "");
+  } catch {
+    return "";
+  }
+}
+
+function getMessageSources(message) {
+  const metaSources = Array.isArray(message?.meta?.sources) ? message.meta.sources : [];
+  return metaSources.filter((item) => item && typeof item === "object" && item.url).slice(0, 3);
+}
+
+function MessageSources({ message }) {
+  const sources = getMessageSources(message);
+  if (!sources.length) {
+    return null;
+  }
+
+  return (
+    <div className="message-sources" aria-label="Web sources">
+      {sources.map((item, index) => {
+        const sourceName = String(item?.source || "").trim() || getSourceHostname(item?.url || "");
+        const sourceMeta = [formatSourceDate(item?.date), sourceName].filter(Boolean).join(" | ");
+        const sourceTitle = String(item?.title || sourceName || "Source").trim() || "Source";
+
+        return (
+          <a
+            key={`${message.id}-source-${index}`}
+            href={item.url}
+            target="_blank"
+            rel="noreferrer"
+            className="message-source-chip"
+            title={sourceTitle}
+          >
+            <span className="message-source-copy">
+              <strong>{sourceTitle}</strong>
+              {sourceMeta ? <span>{sourceMeta}</span> : null}
+            </span>
+            <ExternalLink />
+          </a>
+        );
+      })}
+    </div>
+  );
+}
+
 function ChatWindow({
   messages,
+  activeNav = "Chat",
   isTyping,
   status,
+  regeneratableMessageId = null,
+  onRegenerate,
+  onRewriteQuestion,
+  speechSupported = false,
+  speakingMessageId = null,
+  onSpeak,
 }) {
   const chatRef = useRef(null);
+  const [copiedKey, setCopiedKey] = useState(null);
 
   const hero = useMemo(() => {
     return {
       greeting: `${getGreeting()}, ${getName()}`,
     };
   }, []);
+  const heroContent = HERO_CONTENT[activeNav] || HERO_CONTENT.Chat;
+
+  useEffect(() => {
+    if (!copiedKey) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setCopiedKey(null);
+    }, 1800);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [copiedKey]);
 
   useEffect(() => {
     if (!chatRef.current) {
@@ -85,7 +254,7 @@ function ChatWindow({
   if (!messages.length) {
     return (
       <div className="hero-wrap">
-        <div className="plan-pill">Free plan - Upgrade</div>
+        <div className="plan-pill">{heroContent.pill}</div>
         <div className="hero-title">
           <svg className="hero-logo" viewBox="0 0 80 80" fill="none" aria-hidden="true">
             <g transform="translate(40,40)">
@@ -112,7 +281,7 @@ function ChatWindow({
           </svg>
           {hero.greeting}
         </div>
-        <div className="hero-sub">How can I help you today?</div>
+        <div className="hero-sub">{heroContent.subtitle}</div>
         <div className="sts">{status}</div>
       </div>
     );
@@ -124,6 +293,24 @@ function ChatWindow({
         <div className="chat-inner">
           {messages.map((message) => {
             const isUser = message.role === "user";
+            const isSpeaking = !isUser && speakingMessageId === message.id;
+            const canSpeak = !isUser && speechSupported && Boolean(String(message?.content || "").trim());
+            const copyStateKey = `${isUser ? "question" : "answer"}:${message.id}`;
+            const isCopied = copiedKey === copyStateKey;
+            const canRegenerate = !isUser && regeneratableMessageId === message.id && typeof onRegenerate === "function";
+            const handleCopy = async () => {
+              const textToCopy = isUser ? getUserQuestionText(message) : String(message?.content || "").trim();
+              if (!textToCopy) {
+                return;
+              }
+
+              try {
+                await copyTextToClipboard(textToCopy);
+                setCopiedKey(copyStateKey);
+              } catch {
+                setCopiedKey(null);
+              }
+            };
 
             return (
               <div key={message.id} className={`msg ${isUser ? "u" : "a"}`}>
@@ -142,8 +329,75 @@ function ChatWindow({
                   )}
                 </div>
 
+                {!isUser ? <MessageSources message={message} /> : null}
+
+                {isUser ? (
+                  <div className="message-actions user" aria-label="Question actions">
+                    <button
+                      className={`message-action${isCopied ? " active" : ""}`}
+                      type="button"
+                      title={isCopied ? "Question copied" : "Copy question"}
+                      aria-label={isCopied ? "Question copied" : "Copy question"}
+                      onClick={handleCopy}
+                    >
+                      {isCopied ? <Check /> : <Copy />}
+                    </button>
+                    <button
+                      className="message-action"
+                      type="button"
+                      title="Rewrite question"
+                      aria-label="Rewrite question"
+                      onClick={() => onRewriteQuestion?.(message)}
+                    >
+                      <Pencil />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="message-actions assistant" aria-label="Answer actions">
+                    <button
+                      className={`message-action${isCopied ? " active" : ""}`}
+                      type="button"
+                      title={isCopied ? "Answer copied" : "Copy answer"}
+                      aria-label={isCopied ? "Answer copied" : "Copy answer"}
+                      onClick={handleCopy}
+                    >
+                      {isCopied ? <Check /> : <Copy />}
+                    </button>
+                    <button
+                      className={`message-action${isSpeaking ? " active negative speaking" : ""}${canSpeak ? "" : " disabled"}`}
+                      type="button"
+                      title={isSpeaking ? "Stop reading answer" : "Read answer aloud"}
+                      aria-label={isSpeaking ? "Stop reading answer" : "Read answer aloud"}
+                      onClick={() => onSpeak?.(message)}
+                      disabled={!canSpeak}
+                    >
+                      {isSpeaking ? <VolumeX /> : <Volume2 />}
+                    </button>
+                    <button
+                      className={`message-action${canRegenerate ? "" : " disabled"}`}
+                      type="button"
+                      title={canRegenerate ? "Regenerate answer" : "Only the latest AI answer can be regenerated"}
+                      aria-label={canRegenerate ? "Regenerate answer" : "Only the latest AI answer can be regenerated"}
+                      onClick={() => onRegenerate?.(message.id)}
+                      disabled={!canRegenerate}
+                    >
+                      <RotateCcw />
+                    </button>
+                  </div>
+                )}
+
                 {!isUser ? (
                   <>
+                    {isSpeaking ? (
+                      <div className="assistant-speaking" aria-live="polite">
+                        <span className="assistant-speaking-bars" aria-hidden="true">
+                          <span />
+                          <span />
+                          <span />
+                        </span>
+                        <span>Reading answer</span>
+                      </div>
+                    ) : null}
                     <div className="assistant-brand" aria-hidden="true">
                       <svg className="assistant-logo" viewBox="0 0 80 80" fill="none">
                         <g transform="translate(40,40)">

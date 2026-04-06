@@ -1,7 +1,7 @@
 export const CHAT_COMPOSER_PRESETS = [
   {
     id: "create_image",
-    emoji: "âœ¨",
+    emoji: "\u2728",
     label: "Create image",
     description: "Generate visuals or remix an attached photo",
     forceMode: "image",
@@ -11,7 +11,7 @@ export const CHAT_COMPOSER_PRESETS = [
   },
   {
     id: "thinking",
-    emoji: "ðŸ§ ",
+    emoji: "\uD83E\uDDE0",
     label: "Thinking",
     description: "Take a little more time and reason carefully",
     forceMode: null,
@@ -21,7 +21,7 @@ export const CHAT_COMPOSER_PRESETS = [
   },
   {
     id: "deep_research",
-    emoji: "ðŸ”Ž",
+    emoji: "\uD83D\uDD0E",
     label: "Deep research",
     description: "Search widely, compare sources, and cite clearly",
     forceMode: "search",
@@ -31,7 +31,7 @@ export const CHAT_COMPOSER_PRESETS = [
   },
   {
     id: "shopping_research",
-    emoji: "ðŸ›ï¸",
+    emoji: "\uD83D\uDECD\uFE0F",
     label: "Shopping research",
     description: "Compare products, features, and tradeoffs",
     forceMode: "search",
@@ -46,46 +46,46 @@ export const DEFAULT_CHAT_PLACEHOLDER = "Ask anything";
 export const CHAT_COMPOSER_MENU = [
   {
     id: "attach",
-    emoji: "ðŸ“Ž",
+    emoji: "\uD83D\uDCCE",
     label: "Add photos & files",
     description: "Upload documents now, or attach a photo to remix",
   },
   {
     id: "create_image",
-    emoji: "âœ¨",
+    emoji: "\u2728",
     label: "Create image",
     description: "Generate original images or edit an uploaded photo",
   },
   {
     id: "thinking",
-    emoji: "ðŸ§ ",
+    emoji: "\uD83E\uDDE0",
     label: "Thinking",
     description: "Slow down a bit for tougher questions",
   },
   {
     id: "deep_research",
-    emoji: "ðŸ”Ž",
+    emoji: "\uD83D\uDD0E",
     label: "Deep research",
     description: "Run a broader, citation-friendly web search",
   },
   {
     id: "shopping_research",
-    emoji: "ðŸ›ï¸",
+    emoji: "\uD83D\uDECD\uFE0F",
     label: "Shopping research",
     description: "Find best buys, compare specs, and rank choices",
   },
   {
     id: "more",
-    emoji: "âž•",
+    emoji: "\u2795",
     label: "More",
     description: "Open extra tools and quick settings",
   },
 ];
 
 export const QUICK_START_CHIPS = [
-  { label: "ðŸ¤– Compare top AIs", text: "Compare ChatGPT, Claude, Gemini, and DeepSeek for real work." },
-  { label: "ðŸ§  Best Claude features", text: "What are the strongest Claude features right now?" },
-  { label: "ðŸ“„ Summarize a document", text: "Summarize this document in simple language and highlight the key points." },
-  { label: "ðŸ›ï¸ Best laptop under $1000", text: "Find the best laptops under $1000 and compare them by value." },
-  { label: "ðŸŽ¨ Create a hero image", text: "Create a cinematic hero image idea for NOVA AI." },
+  { label: "\uD83E\uDD16 Compare top AIs", text: "Compare ChatGPT, Claude, Gemini, and DeepSeek for real work." },
+  { label: "\uD83E\uDDE0 Best Claude features", text: "What are the strongest Claude features right now?" },
+  { label: "\uD83D\uDCC4 Summarize a document", text: "Summarize this document in simple language and highlight the key points." },
+  { label: "\uD83D\uDECD\uFE0F Best laptop under $1000", text: "Find the best laptops under $1000 and compare them by value." },
+  { label: "\uD83C\uDFA8 Create a hero image", text: "Create a cinematic hero image idea for NOVA AI." },
 ];

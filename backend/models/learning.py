@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
-
-from models.base import Field, MongoModel
+from models.base import Field, MongoModel, utc_now
 
 
 class LearningProgress(MongoModel):
@@ -18,8 +16,8 @@ class LearningProgress(MongoModel):
     current_level = Field(default="beginner")
     notes = Field(default=None)
     is_active = Field(default=True)
-    created_at = Field(default_factory=datetime.utcnow)
-    updated_at = Field(default_factory=datetime.utcnow)
+    created_at = Field(default_factory=utc_now)
+    updated_at = Field(default_factory=utc_now)
 
     def __repr__(self) -> str:
         return f"<LearningProgress {self.topic}>"

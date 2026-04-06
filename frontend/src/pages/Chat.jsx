@@ -1,15 +1,17 @@
 ﻿// @ts-nocheck
 import React, { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import "../index.css";
-import ChatInput from "../components/ChatInput";
+import ChatInput from "../components/chat/ChatInput";
 import ChatWindow from "../components/ChatWindow";
 import MouseSpark from "../components/MouseSpark";
-import Sidebar from "../components/Sidebar";
+import Sidebar from "../components/chat/Sidebar";
+import Settings from "../components/Settings";
 import Topbar from "../components/Topbar";
 import { chatAPI, documentAPI, imageAPI } from "../services/api";
+import { speakText, speechSupported as browserSpeechSupported, stopSpeechPlayback } from "../utils/speech";
 import { useAuthStore } from "../utils/store";
 
 const API_BASE = (import.meta.env.VITE_API_URL || "").trim();
@@ -42,10 +44,37 @@ const ACTIVE_NAV_TO_MODE = {
   Chat: "chat",
   Search: "search",
   Code: "code",
+  Explain: "chat",
+  Reasoning: "chat",
+  Knowledge: "chat",
+  Documents: "chat",
+  Learning: "chat",
+  Images: "chat",
   Customize: "chat",
   Chats: "chat",
   Projects: "chat",
   Artifacts: "chat",
+};
+const DEFAULT_CHAT_NAV = "Chat";
+const CHAT_NAV_VALUES = new Set([
+  DEFAULT_CHAT_NAV,
+  "Search",
+  "Code",
+  "Explain",
+  "Reasoning",
+  "Knowledge",
+  "Documents",
+  "Learning",
+  "Images",
+  "Customize",
+  "Chats",
+  "Projects",
+  "Artifacts",
+]);
+
+const normalizeChatNav = (value) => {
+  const normalized = String(value || "").trim();
+  return CHAT_NAV_VALUES.has(normalized) ? normalized : DEFAULT_CHAT_NAV;
 };
 
 const createMessage = (role, content, conversationId = null, extra = {}) => ({
@@ -59,12 +88,67 @@ const createMessage = (role, content, conversationId = null, extra = {}) => ({
   ...extra,
 });
 
+const MESSAGE_REWRITE_SUFFIX_PATTERN = /(?:\s*\+\s*)?\[(?:File|Photo):\s*[^\]]+\]\s*$/i;
+
+const getEditableQuestionText = (message) => {
+  const content = String(message?.content || "").trim();
+  const cleaned = content.replace(MESSAGE_REWRITE_SUFFIX_PATTERN, "").trim();
+  return cleaned || content;
+};
+
 const normalizeConversation = (conversation) => ({
   id: conversation?.id,
   title: conversation?.title?.trim() || "New Chat",
+  preview: conversation?.preview?.trim?.() ? conversation.preview.trim() : "",
   created_at: conversation?.created_at || null,
   updated_at: conversation?.updated_at || null,
 });
+
+const slugifyConversationTitle = (value) =>
+  String(value || "nova-chat")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60) || "nova-chat";
+
+const buildConversationExport = (title, messages) => {
+  const exportDate = new Date();
+  const lines = [
+    `# ${title || "NOVA Chat"}`,
+    "",
+    `Exported: ${exportDate.toLocaleString()}`,
+    "",
+  ];
+
+  messages.forEach((message, index) => {
+    const role = message?.role === "assistant" ? "NOVA AI" : "User";
+    const content = String(message?.content || "").trim() || "(No text)";
+    lines.push(`## ${role} ${index + 1}`);
+    lines.push("");
+    lines.push(content);
+
+    if (Array.isArray(message?.meta?.sources) && message.meta.sources.length) {
+      lines.push("");
+      lines.push("Sources:");
+      message.meta.sources.forEach((source) => {
+        const titleText = String(source?.title || source?.source || source?.url || "Source").trim();
+        const urlText = String(source?.url || "").trim();
+        if (urlText) {
+          lines.push(`- ${titleText}: ${urlText}`);
+        }
+      });
+    }
+
+    if (Array.isArray(message?.images) && message.images.length) {
+      lines.push("");
+      lines.push(`Images attached in app: ${message.images.length}`);
+    }
+
+    lines.push("");
+  });
+
+  return lines.join("\n").trim();
+};
 
 const resolveDocumentContext = (meta) => {
   const rawId = meta?.document_id;
@@ -122,22 +206,18 @@ const extractDocumentContextFromMessages = (messageList = []) => {
 const NAV_TO_INSTRUCTION = {
   Chat: [],
   Search: ["[Note: reference the most current info available]"],
+  Explain: ["[Explain mode: answer step by step, use plain language first, then add detail where it helps.]"],
+  Reasoning: ["[Reasoning mode: think carefully about tradeoffs, assumptions, and safer next steps before answering.]"],
+  Knowledge: ["[Knowledge mode: answer like a strong tutor, organize ideas clearly, and include examples when useful.]"],
+  Documents: ["[Documents mode: expect uploaded files, summarize them clearly, and answer from the file context first.]"],
+  Learning: ["[Learning mode: structure the answer as a practical learning path with milestones, sequence, and next steps.]"],
+  Images: ["[Images mode: help with creating, refining, or remixing visual prompts and image outputs.]"],
   Customize: ["[Personalize the answer to the user's preferences when helpful]"],
   Chats: ["[Answer conversationally and clearly]"],
   Projects: ["[Break complex work into clear practical steps when useful]"],
   Artifacts: ["[Structure outputs so they can be reused as deliverables]"],
   Code: ["[Code mode: use markdown code blocks with language labels for all code]"],
 };
-
-const markdownToSpeechText = (value) =>
-  String(value || "")
-    .replace(/```[\s\S]*?```/g, " Code block omitted. ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
-    .replace(/https?:\/\/\S+/g, "")
-    .replace(/[#>*_~|-]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
 
 const getResponseImages = (payload) => ({
   promptImages: Array.isArray(payload?.prompt_images) ? payload.prompt_images : [],
@@ -147,6 +227,11 @@ const getResponseImages = (payload) => ({
       ? payload.images
       : [],
 });
+
+const getResponseSources = (payload) =>
+  Array.isArray(payload?.sources)
+    ? payload.sources.filter((item) => item && typeof item === "object" && item.url)
+    : [];
 
 const buildProgressStatus = ({
   text,
@@ -228,19 +313,6 @@ const getStoredModelKey = () => {
   }
 
   return window.localStorage.getItem(MODEL_STORAGE_KEY)?.trim() || AUTO_MODEL_KEY;
-};
-
-const getStoredToggle = (key, fallback = false) => {
-  if (typeof window === "undefined") {
-    return fallback;
-  }
-
-  const value = window.localStorage.getItem(key);
-  if (value === null) {
-    return fallback;
-  }
-
-  return value === "true";
 };
 
 const looksLikeImageRequest = (value) => {
@@ -339,7 +411,7 @@ const readSseEvents = async (response, onEvent) => {
     }
   };
 
-  while (true) {
+  for (;;) {
     const { done, value } = await reader.read();
     if (done) {
       break;
@@ -359,12 +431,17 @@ const readSseEvents = async (response, onEvent) => {
 
 function Chat() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const logout = useAuthStore((state) => state.logout);
+  const requestedNav = searchParams.get("nav");
+  const requestedPresetId = searchParams.get("preset");
+  const initialActiveNav = normalizeChatNav(requestedNav);
 
   const [messages, setMessages] = useState([]);
   const [conversations, setConversations] = useState([]);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [activeNav, setActiveNav] = useState("Chat");
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [activeNav, setActiveNav] = useState(initialActiveNav);
   const [input, setInput] = useState("");
   const [status, setStatus] = useState("");
   const [isTyping, setIsTyping] = useState(false);
@@ -372,12 +449,9 @@ function Chat() {
   const [currentConversationId, setCurrentConversationId] = useState(null);
   const [speechSupported, setSpeechSupported] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState(null);
-  const [generatePromptImage, setGeneratePromptImage] = useState(() =>
-    getStoredToggle(PROMPT_IMAGE_STORAGE_KEY, false)
-  );
-  const [generateAnswerImage, setGenerateAnswerImage] = useState(() =>
-    getStoredToggle(ANSWER_IMAGE_STORAGE_KEY, false)
-  );
+  const [generatePromptImage, setGeneratePromptImage] = useState(false);
+  const [generateAnswerImage, setGenerateAnswerImage] = useState(false);
+  const [imageGenerationAvailable, setImageGenerationAvailable] = useState(true);
   const [activeDocumentContext, setActiveDocumentContext] = useState(null);
   const [availableProviders, setAvailableProviders] = useState([]);
   const [selectedModelKey, setSelectedModelKey] = useState(getStoredModelKey);
@@ -392,6 +466,23 @@ function Chat() {
     () => modelOptions.find((option) => option.id === selectedModelKey) || modelOptions[0],
     [modelOptions, selectedModelKey]
   );
+  const currentConversationTitle = useMemo(() => {
+    const activeConversation = conversations.find(
+      (conversation) => conversation.id === currentConversationId
+    );
+    if (activeConversation?.title) {
+      return activeConversation.title;
+    }
+
+    const firstUserMessage = messages.find((message) => message.role === "user")?.content?.trim() || "";
+    if (!firstUserMessage) {
+      return "New Chat";
+    }
+
+    return firstUserMessage.length > 60
+      ? `${firstUserMessage.slice(0, 57)}...`
+      : firstUserMessage;
+  }, [conversations, currentConversationId, messages]);
   const regeneratableMessageId = useMemo(() => {
     if (!currentConversationId) {
       return null;
@@ -407,16 +498,36 @@ function Chat() {
   }, [logout, navigate]);
 
   useEffect(() => {
+    const nextNav = normalizeChatNav(requestedNav);
+    setActiveNav((current) => (current === nextNav ? current : nextNav));
+  }, [requestedNav]);
+
+  const handleNavChange = useCallback(
+    (nextNav) => {
+      const normalizedNav = normalizeChatNav(nextNav);
+      setActiveNav(normalizedNav);
+
+      const nextParams = new URLSearchParams(searchParams);
+      if (normalizedNav === DEFAULT_CHAT_NAV) {
+        nextParams.delete("nav");
+      } else {
+        nextParams.set("nav", normalizedNav);
+      }
+
+      setSearchParams(nextParams, { replace: true });
+    },
+    [searchParams, setSearchParams]
+  );
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return undefined;
     }
 
-    setSpeechSupported(Boolean(window.speechSynthesis));
+    setSpeechSupported(browserSpeechSupported());
 
     return () => {
-      if (window.speechSynthesis) {
-        window.speechSynthesis.cancel();
-      }
+      stopSpeechPlayback();
     };
   }, []);
 
@@ -433,16 +544,9 @@ function Chat() {
       return;
     }
 
-    window.localStorage.setItem(PROMPT_IMAGE_STORAGE_KEY, String(generatePromptImage));
-  }, [generatePromptImage]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    window.localStorage.setItem(ANSWER_IMAGE_STORAGE_KEY, String(generateAnswerImage));
-  }, [generateAnswerImage]);
+    window.localStorage.removeItem(PROMPT_IMAGE_STORAGE_KEY);
+    window.localStorage.removeItem(ANSWER_IMAGE_STORAGE_KEY);
+  }, []);
 
   useEffect(() => {
     if (!modelOptions.some((option) => option.id === selectedModelKey)) {
@@ -451,53 +555,33 @@ function Chat() {
   }, [modelOptions, selectedModelKey]);
 
   const stopSpeaking = useCallback(() => {
-    if (typeof window === "undefined" || !window.speechSynthesis) {
-      return;
-    }
-
-    window.speechSynthesis.cancel();
+    stopSpeechPlayback();
     setSpeakingMessageId(null);
   }, []);
 
   const speakAssistantMessage = useCallback(
     (message) => {
-      if (typeof window === "undefined" || !window.speechSynthesis || !message?.content) {
+      if (!message?.content) {
         return false;
       }
 
-      const spokenText = markdownToSpeechText(message.content);
-      if (!spokenText) {
-        return false;
+      const started = speakText(message.content, {
+        onStart: () => {
+          setSpeakingMessageId(message.id);
+        },
+        onEnd: () => {
+          setSpeakingMessageId((current) => (current === message.id ? null : current));
+        },
+        onError: () => {
+          setSpeakingMessageId((current) => (current === message.id ? null : current));
+        },
+      });
+
+      if (!started) {
+        setSpeakingMessageId(null);
       }
 
-      window.speechSynthesis.cancel();
-
-      const utterance = new SpeechSynthesisUtterance(spokenText);
-      utterance.rate = 1;
-      utterance.pitch = 1;
-
-      const voices = window.speechSynthesis.getVoices?.() || [];
-      const preferredVoice =
-        voices.find((voice) => voice.lang?.toLowerCase().startsWith("en-in")) ||
-        voices.find((voice) => voice.lang?.toLowerCase().startsWith("en")) ||
-        voices[0];
-
-      if (preferredVoice) {
-        utterance.voice = preferredVoice;
-      }
-
-      setSpeakingMessageId(message.id);
-
-      utterance.onend = () => {
-        setSpeakingMessageId((current) => (current === message.id ? null : current));
-      };
-
-      utterance.onerror = () => {
-        setSpeakingMessageId((current) => (current === message.id ? null : current));
-      };
-
-      window.speechSynthesis.speak(utterance);
-      return true;
+      return started;
     },
     []
   );
@@ -535,6 +619,24 @@ function Chat() {
       startTransition(() => {
         setAvailableProviders([]);
       });
+    }
+  }, [handleUnauthorized]);
+
+  const loadImageProviders = useCallback(async () => {
+    try {
+      const response = await imageAPI.getProviders();
+      const providers = Array.isArray(response?.data?.providers) ? response.data.providers : [];
+      const hasWorkingImageProvider = providers.some(
+        (provider) => provider?.id && provider.id !== "auto" && provider.available
+      );
+
+      startTransition(() => {
+        setImageGenerationAvailable(hasWorkingImageProvider);
+      });
+    } catch (error) {
+      if (error?.response?.status === 401 || error?.response?.status === 403) {
+        handleUnauthorized();
+      }
     }
   }, [handleUnauthorized]);
 
@@ -609,7 +711,6 @@ function Chat() {
           : [];
 
         startTransition(() => {
-          setActiveNav("Chat");
           setCurrentConversationId(conversation?.id || conversationId);
           setMessages(loadedMessages);
           setActiveDocumentContext(extractDocumentContextFromMessages(loadedMessages));
@@ -634,6 +735,19 @@ function Chat() {
     loadProviders();
   }, [loadProviders]);
 
+  useEffect(() => {
+    loadImageProviders();
+  }, [loadImageProviders]);
+
+  useEffect(() => {
+    if (imageGenerationAvailable) {
+      return;
+    }
+
+    setGeneratePromptImage(false);
+    setGenerateAnswerImage(false);
+  }, [imageGenerationAvailable]);
+
   const handleToggleSidebar = () => {
     setIsSidebarCollapsed((previous) => !previous);
   };
@@ -645,8 +759,49 @@ function Chat() {
     setStatus("");
     setCurrentConversationId(null);
     setActiveDocumentContext(null);
-    setActiveNav("Chat");
+    handleNavChange(DEFAULT_CHAT_NAV);
   };
+
+  const handleOpenSettings = () => {
+    setIsSettingsOpen(true);
+  };
+
+  const handleCloseSettings = () => {
+    setIsSettingsOpen(false);
+  };
+
+  const handleExportChat = useCallback(() => {
+    const exportableMessages = messages.filter(
+      (message) =>
+        String(message?.content || "").trim() ||
+        (Array.isArray(message?.images) && message.images.length)
+    );
+
+    if (!exportableMessages.length) {
+      toast.error("There is no chat to export yet.");
+      return;
+    }
+
+    if (typeof window === "undefined") {
+      toast.error("Chat export is only available in the browser.");
+      return;
+    }
+
+    const exportTitle = currentConversationTitle || "NOVA Chat";
+    const fileName = `${slugifyConversationTitle(exportTitle)}.md`;
+    const exportContent = buildConversationExport(exportTitle, exportableMessages);
+    const blob = new Blob([exportContent], { type: "text/markdown;charset=utf-8" });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+    toast.success("Chat exported successfully.");
+  }, [currentConversationTitle, messages]);
 
   const handleDeleteConversation = useCallback(
     async (conversationId) => {
@@ -680,6 +835,52 @@ function Chat() {
     [currentConversationId, handleUnauthorized, stopSpeaking]
   );
 
+  const handleRenameConversation = useCallback(
+    async (conversationId, nextTitle) => {
+      if (!conversationId) {
+        return;
+      }
+
+      const title = String(nextTitle || "").trim();
+      if (!title) {
+        toast.error("Conversation title cannot be empty.");
+        return;
+      }
+
+      try {
+        const response = await chatAPI.updateConversation(conversationId, { title });
+        const updatedConversation = normalizeConversation(response?.data || { id: conversationId, title });
+
+        startTransition(() => {
+          setConversations((previous) => {
+            const found = previous.some((conversation) => conversation.id === conversationId);
+            if (!found) {
+              return [updatedConversation, ...previous];
+            }
+
+            return previous.map((conversation) =>
+              conversation.id === conversationId
+                ? { ...conversation, ...updatedConversation }
+                : conversation
+            );
+          });
+        });
+
+        toast.success(response?.data?.message || "Conversation renamed.");
+      } catch (error) {
+        if (error?.response?.status === 401 || error?.response?.status === 403) {
+          handleUnauthorized();
+          return;
+        }
+
+        toast.error(
+          error?.response?.data?.detail || "Could not rename this conversation right now."
+        );
+      }
+    },
+    [handleUnauthorized]
+  );
+
   const handleSend = useCallback(
     async (payload) => {
       const isStructuredPayload = payload && typeof payload === "object" && !Array.isArray(payload);
@@ -698,6 +899,8 @@ function Chat() {
         trimmed = "Describe this image clearly.";
       }
       const displayValue = String(displayText || trimmed).trim();
+      const effectiveGeneratePromptImage = imageGenerationAvailable && generatePromptImage;
+      const effectiveGenerateAnswerImage = imageGenerationAvailable && generateAnswerImage;
       let attachedImageDataUrl = null;
 
       if (!trimmed || isTyping || isConversationLoading) {
@@ -712,8 +915,8 @@ function Chat() {
       const optimisticUserMessage = createMessage("user", displayValue || trimmed, currentConversationId, {
         images: attachedImageDataUrl ? [attachedImageDataUrl] : [],
         meta: {
-          generate_prompt_image: generatePromptImage,
-          generate_answer_image: generateAnswerImage,
+          generate_prompt_image: effectiveGeneratePromptImage,
+          generate_answer_image: effectiveGenerateAnswerImage,
           ...(presetLabel ? { quick_mode: presetLabel } : {}),
           ...(attachedFile?.name && !hasImageAttachment ? { document_name: attachedFile.name } : {}),
           ...(hasImageAttachment ? { attachment_kind: "image" } : {}),
@@ -736,8 +939,8 @@ function Chat() {
             text: trimmed,
             isSearch: forceMode === "search" || activeNav === "Search",
             isImage: predictedImageRequest,
-            generatePromptImage,
-            generateAnswerImage,
+            generatePromptImage: effectiveGeneratePromptImage,
+            generateAnswerImage: effectiveGenerateAnswerImage,
           })
         );
       }
@@ -765,15 +968,13 @@ function Chat() {
             throw new Error(imageError || "Image generation returned no images.");
           }
 
-          setMessages((previous) => [
-            ...previous,
-            createMessage(
-              "assistant",
-              "## **✨ Image Ready**\nHere is the image generated from your prompt.",
-              currentConversationId,
-              { images }
-            ),
-          ]);
+          const assistantMessage = createMessage(
+            "assistant",
+            "## **✨ Image Ready**\nHere is the image generated from your prompt.",
+            currentConversationId,
+            { images }
+          );
+          setMessages((previous) => [...previous, assistantMessage]);
           return;
         }
 
@@ -796,6 +997,17 @@ function Chat() {
             throw new Error("Image editing returned no images.");
           }
 
+          const assistantMessage = createMessage(
+            "assistant",
+            trimmed
+              ? "## **✨ Image Remix Ready**\nI used your uploaded photo and prompt to create a fresh visual."
+              : "## **✨ Image Remix Ready**\nI created a fresh visual from your uploaded photo.",
+            currentConversationId,
+            {
+              images,
+            }
+          );
+
           setActiveDocumentContext(null);
           setMessages((previous) => {
             const updated = previous.map((message) =>
@@ -812,18 +1024,7 @@ function Chat() {
                 : message
             );
 
-            updated.push(
-              createMessage(
-                "assistant",
-                trimmed
-                  ? "## **✨ Image Remix Ready**\nI used your uploaded photo and prompt to create a fresh visual."
-                  : "## **✨ Image Remix Ready**\nI created a fresh visual from your uploaded photo.",
-                currentConversationId,
-                {
-                  images,
-                }
-              )
-            );
+            updated.push(assistantMessage);
 
             return updated;
           });
@@ -850,8 +1051,8 @@ function Chat() {
             text: trimmed,
             isSearch: requestMode === "search",
             isImage: requestMode === "image",
-            generatePromptImage,
-            generateAnswerImage,
+            generatePromptImage: effectiveGeneratePromptImage,
+            generateAnswerImage: effectiveGenerateAnswerImage,
           })
         );
 
@@ -891,8 +1092,8 @@ function Chat() {
             conversation_id: currentConversationId,
             ...(documentContext?.id ? { document_id: documentContext.id } : {}),
             ...selectedProvider,
-            generate_prompt_image: generatePromptImage,
-            generate_answer_image: generateAnswerImage,
+            generate_prompt_image: effectiveGeneratePromptImage,
+            generate_answer_image: effectiveGenerateAnswerImage,
             ...(attachedImageDataUrl
               ? {
                   image_b64: attachedImageDataUrl.includes(",")
@@ -931,6 +1132,15 @@ function Chat() {
           const nextConversationId = data?.conversation_id || currentConversationId;
           const reply = data?.answer || data?.message || data?.response || "NOVA AI: ...";
           const { promptImages, answerImages } = getResponseImages(data);
+          const answerSources = getResponseSources(data);
+          const assistantMessage =
+            reply || answerImages.length
+              ? createMessage("assistant", reply, nextConversationId, {
+                  id: assistantMessageId,
+                  images: answerImages,
+                  meta: answerSources.length ? { sources: answerSources } : null,
+                })
+              : null;
 
           if (nextConversationId) {
             setCurrentConversationId(nextConversationId);
@@ -956,13 +1166,8 @@ function Chat() {
                 : message
             );
 
-            if (reply || answerImages.length) {
-              updated.push(
-                createMessage("assistant", reply, nextConversationId, {
-                  id: assistantMessageId,
-                  images: answerImages,
-                })
-              );
+            if (assistantMessage) {
+              updated.push(assistantMessage);
             }
 
             return updated;
@@ -1027,6 +1232,15 @@ function Chat() {
           streamedReply ||
           "NOVA AI: ...";
         const { promptImages, answerImages } = getResponseImages(finalPayload);
+        const answerSources = getResponseSources(finalPayload);
+        const assistantMessage =
+          reply || answerImages.length
+            ? createMessage("assistant", reply, nextConversationId, {
+                id: assistantMessageId,
+                images: answerImages,
+                meta: answerSources.length ? { sources: answerSources } : null,
+              })
+            : null;
 
         if (nextConversationId) {
           setCurrentConversationId(nextConversationId);
@@ -1056,20 +1270,13 @@ function Chat() {
             (message) => message.id === assistantMessageId
           );
           if (assistantIndex === -1) {
-            if (reply || answerImages.length) {
-              updated.push(
-                createMessage("assistant", reply, nextConversationId, {
-                  id: assistantMessageId,
-                  images: answerImages,
-                })
-              );
+            if (assistantMessage) {
+              updated.push(assistantMessage);
             }
-          } else {
+          } else if (assistantMessage) {
             updated[assistantIndex] = {
               ...updated[assistantIndex],
-              conversation_id: nextConversationId,
-              content: reply,
-              images: answerImages,
+              ...assistantMessage,
             };
           }
 
@@ -1117,6 +1324,7 @@ function Chat() {
       currentConversationId,
       handleUnauthorized,
       activeNav,
+      imageGenerationAvailable,
       isConversationLoading,
       isTyping,
       loadConversations,
@@ -1148,6 +1356,7 @@ function Chat() {
       const lastUserContent = [...messages]
         .reverse()
         .find((message) => message.role === "user")?.content || "";
+      const effectiveGenerateAnswerImage = imageGenerationAvailable && generateAnswerImage;
       const requestMode = documentContext?.id
         ? "documents"
         : resolvedMode === "chat" && looksLikeImageRequest(lastUserContent)
@@ -1158,7 +1367,7 @@ function Chat() {
         buildProgressStatus({
           isSearch: requestMode === "search",
           isImage: requestMode === "image",
-          generateAnswerImage,
+          generateAnswerImage: effectiveGenerateAnswerImage,
           regenerate: true,
         })
       );
@@ -1176,12 +1385,28 @@ function Chat() {
                 model: selectedModelOption.model,
               }
             : {}),
-          generate_answer_image: generateAnswerImage,
+          generate_answer_image: effectiveGenerateAnswerImage,
         });
         const data = response?.data || {};
         const nextConversationId = data?.conversation_id || currentConversationId;
         const reply = data?.answer || data?.message || data?.response || "";
         const { promptImages, answerImages } = getResponseImages(data);
+        const answerSources = getResponseSources(data);
+        const assistantMessage =
+          reply || answerImages.length
+            ? createMessage("assistant", reply, nextConversationId, {
+                images: answerImages,
+                meta: {
+                  ...(documentContext?.id
+                    ? {
+                        document_id: documentContext.id,
+                        document_name: documentContext.name,
+                      }
+                    : {}),
+                  ...(answerSources.length ? { sources: answerSources } : {}),
+                },
+              })
+            : null;
 
         if (nextConversationId) {
           setCurrentConversationId(nextConversationId);
@@ -1208,18 +1433,8 @@ function Chat() {
               }
             }
 
-            if (reply || answerImages.length) {
-              updated.push(
-                createMessage("assistant", reply, nextConversationId, {
-                  images: answerImages,
-                  meta: documentContext?.id
-                    ? {
-                        document_id: documentContext.id,
-                        document_name: documentContext.name,
-                      }
-                    : null,
-                })
-              );
+            if (assistantMessage) {
+              updated.push(assistantMessage);
             }
 
             return updated;
@@ -1251,6 +1466,7 @@ function Chat() {
       activeDocumentContext,
       currentConversationId,
       handleUnauthorized,
+      imageGenerationAvailable,
       isConversationLoading,
       isTyping,
       loadConversations,
@@ -1263,6 +1479,43 @@ function Chat() {
     ]
   );
 
+  const handleRewriteQuestion = useCallback(
+    (message) => {
+      const rewrittenInput = getEditableQuestionText(message);
+      if (!rewrittenInput) {
+        toast.error("That question could not be loaded for editing.");
+        return;
+      }
+
+      stopSpeaking();
+      setInput(rewrittenInput);
+
+      const messageDocumentContext = resolveDocumentContext(message?.meta);
+      if (messageDocumentContext?.id) {
+        setActiveDocumentContext(messageDocumentContext);
+      }
+
+      setStatus("");
+      window.setTimeout(() => {
+        const textarea = document.querySelector(".input-field");
+        if (!(textarea instanceof HTMLTextAreaElement)) {
+          return;
+        }
+
+        textarea.focus();
+        const cursorPosition = textarea.value.length;
+        try {
+          textarea.setSelectionRange(cursorPosition, cursorPosition);
+        } catch {
+          // Ignore cursor placement issues from browser-specific textarea implementations.
+        }
+      }, 0);
+
+      toast.success("Question added back to the input. Edit it and send.");
+    },
+    [stopSpeaking]
+  );
+
   return (
     <>
       <MouseSpark />
@@ -1270,21 +1523,31 @@ function Chat() {
         <Sidebar
           collapsed={isSidebarCollapsed}
           activeNav={activeNav}
-          onNavChange={setActiveNav}
+          onNavChange={handleNavChange}
           onNewChat={handleNewChat}
           conversations={conversations}
           selectedConversationId={currentConversationId}
           onSelectConversation={loadConversation}
+          onRenameConversation={handleRenameConversation}
           onDeleteConversation={handleDeleteConversation}
         />
         <main className="chat-container">
-          <Topbar title={activeNav} onToggleSidebar={handleToggleSidebar} />
+          <Topbar
+            title={activeNav}
+            onToggleSidebar={handleToggleSidebar}
+            conversationId={currentConversationId}
+            conversationTitle={currentConversationTitle}
+            onProfileClick={handleOpenSettings}
+            profileActive={isSettingsOpen}
+          />
           <ChatWindow
             messages={messages}
+            activeNav={activeNav}
             isTyping={isTyping}
             status={status}
             regeneratableMessageId={regeneratableMessageId}
             onRegenerate={handleRegenerate}
+            onRewriteQuestion={handleRewriteQuestion}
             speechSupported={speechSupported}
             speakingMessageId={speakingMessageId}
             onSpeak={handleSpeak}
@@ -1294,13 +1557,31 @@ function Chat() {
             onChange={setInput}
             onSend={handleSend}
             disabled={isTyping || isConversationLoading}
+            requestedPresetId={requestedPresetId}
             modelOptions={modelOptions}
             selectedModelKey={selectedModelOption?.id || AUTO_MODEL_KEY}
             onSelectModel={setSelectedModelKey}
-            generatePromptImage={generatePromptImage}
-            generateAnswerImage={generateAnswerImage}
-            onTogglePromptImage={() => setGeneratePromptImage((previous) => !previous)}
-            onToggleAnswerImage={() => setGenerateAnswerImage((previous) => !previous)}
+            generatePromptImage={imageGenerationAvailable && generatePromptImage}
+            generateAnswerImage={imageGenerationAvailable && generateAnswerImage}
+            onTogglePromptImage={() => {
+              if (!imageGenerationAvailable) {
+                return;
+              }
+              setGeneratePromptImage((previous) => !previous);
+            }}
+            onToggleAnswerImage={() => {
+              if (!imageGenerationAvailable) {
+                return;
+              }
+              setGenerateAnswerImage((previous) => !previous);
+            }}
+          />
+          <Settings
+            open={isSettingsOpen}
+            onClose={handleCloseSettings}
+            onNewChat={handleNewChat}
+            onExportChat={handleExportChat}
+            canExportChat={Boolean(messages.length)}
           />
         </main>
       </div>

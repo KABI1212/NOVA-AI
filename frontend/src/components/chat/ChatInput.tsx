@@ -1,38 +1,251 @@
-import React, { useEffect, useRef, useState } from "react";
-import { ArrowUp, Image, Mic, Search } from "lucide-react";
-import { motion } from "framer-motion";
-import TextareaAutosize from "react-textarea-autosize";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
+
+import {
+  CHAT_COMPOSER_MENU,
+  CHAT_COMPOSER_PRESETS,
+  DEFAULT_CHAT_PLACEHOLDER,
+} from "../../constants/chatExperience";
 
 type ToolMode = "search" | "image" | null;
+type AttachmentKind = "image" | "document" | null;
+type LauncherView = "closed" | "main" | "more";
+
+type ModelOption = {
+  id: string;
+  label: string;
+};
+
+type ComposerPreset = {
+  id: string;
+  emoji: string;
+  label: string;
+  description: string;
+  forceMode: ToolMode;
+  promptPrefix: string;
+  placeholder: string;
+};
+
+type ComposerMenuItem = {
+  id: string;
+  emoji: string;
+  label: string;
+  description: string;
+};
+
+export type ChatInputSendPayload = {
+  text: string;
+  displayText?: string;
+  file: File | null;
+  attachmentKind?: AttachmentKind;
+  presetId?: string | null;
+  forceMode?: ToolMode;
+  promptPrefix?: string;
+  presetLabel?: string | null;
+};
 
 interface ChatInputProps {
   value: string;
-  status: string;
-  disabled: boolean;
-  toolMode: ToolMode;
   onChange: (value: string) => void;
-  onSend: (payload: { text: string; file: File | null }) => void;
-  onToolModeChange: (mode: ToolMode) => void;
+  onSend: (payload: ChatInputSendPayload) => void;
+  disabled: boolean;
+  requestedPresetId?: string | null;
+  status?: string;
+  toolMode?: ToolMode;
+  onToolModeChange?: (mode: ToolMode) => void;
+  modelOptions?: ModelOption[];
+  selectedModelKey?: string;
+  onSelectModel?: (key: string) => void;
+  generatePromptImage?: boolean;
+  generateAnswerImage?: boolean;
+  answerImageLocked?: boolean;
+  onTogglePromptImage?: () => void;
+  onToggleAnswerImage?: () => void;
 }
 
-const toolButtons = [
-  { key: "search" as const, label: "Search", icon: Search },
-  { key: "image" as const, label: "Image", icon: Image },
+const PRESET_MAP = Object.fromEntries(
+  (CHAT_COMPOSER_PRESETS as ComposerPreset[]).map((preset) => [preset.id, preset])
+) as Record<string, ComposerPreset>;
+
+const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"];
+const FILE_INPUT_ACCEPT =
+  ".pdf,.txt,.docx,.md,.csv,.json,.py,.js,.jsx,.ts,.tsx,.html,.htm,.css,.xml,.yml,.yaml,.png,.jpg,.jpeg,.webp,.gif,.bmp";
+const QUICK_TOOL_BUTTONS: Array<{ key: Exclude<ToolMode, null>; label: string; emoji: string }> = [
+  { key: "search", label: "Search", emoji: "\u{1F50E}" },
+  { key: "image", label: "Image", emoji: "\u2728" },
 ];
+
+const PHOTO_TILE_ICON = "\u{1F5BC}\uFE0F";
+const FILE_TILE_ICON = "\u{1F4C4}";
+const CHAT_TILE_ICON = "\u{1F4AC}";
+const PROMPT_IMAGE_ICON = "\u{1F3A8}";
+const NOTE_PIN_ICON = "\u{1F4CC}";
+const CLOSE_SYMBOL = "\u00D7";
+const BACK_LABEL = "\u2190 Back";
+
+function isImageFile(file: File | null | undefined) {
+  if (!file) {
+    return false;
+  }
+
+  const fileType = String(file.type || "").toLowerCase();
+  if (fileType.startsWith("image/")) {
+    return true;
+  }
+
+  const name = String(file.name || "").toLowerCase();
+  return IMAGE_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
+
+function formatFileSize(size: number | undefined) {
+  const numericSize = Number(size || 0);
+  if (!Number.isFinite(numericSize) || numericSize <= 0) {
+    return "0 KB";
+  }
+
+  if (numericSize < 1024 * 1024) {
+    return `${(numericSize / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(numericSize / (1024 * 1024)).toFixed(2)} MB`;
+}
 
 export default function ChatInput({
   value,
-  status,
-  disabled,
-  toolMode,
   onChange,
   onSend,
+  disabled,
+  requestedPresetId = null,
+  status = "",
+  toolMode = null,
   onToolModeChange,
+  modelOptions = [],
+  selectedModelKey = "auto",
+  onSelectModel,
+  generatePromptImage = false,
+  generateAnswerImage = false,
+  answerImageLocked = false,
+  onTogglePromptImage,
+  onToggleAnswerImage,
 }: ChatInputProps) {
-  const [isListening, setIsListening] = useState(false);
+  const [attachedFile, setAttachedFile] = useState<File | null>(null);
   const [speechSupported, setSpeechSupported] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [heardText, setHeardText] = useState("");
+  const [showVoiceDraft, setShowVoiceDraft] = useState(false);
+  const [launcherView, setLauncherView] = useState<LauncherView>("closed");
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
+
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const speechPrefixRef = useRef("");
+  const composerRef = useRef<HTMLDivElement | null>(null);
+  const valueRef = useRef(value);
+  const attachedFileRef = useRef<File | null>(attachedFile);
+  const disabledRef = useRef(disabled);
+  const onChangeRef = useRef(onChange);
+  const onSendRef = useRef(onSend);
+  const voiceBaseValueRef = useRef("");
+  const capturedSpeechRef = useRef("");
+  const previewSpeechRef = useRef("");
+
+  const selectedPreset = useMemo(
+    () => (selectedPresetId ? PRESET_MAP[selectedPresetId] || null : null),
+    [selectedPresetId]
+  );
+  const attachedImage = isImageFile(attachedFile);
+  const placeholder = selectedPreset?.placeholder || DEFAULT_CHAT_PLACEHOLDER;
+  const showVoicePanel = isListening || showVoiceDraft;
+  const isSendDisabled = disabled || (!value.trim() && !attachedFile);
+  const voiceButtonTitle = speechSupported
+    ? isListening
+      ? "Stop voice input"
+      : "Start voice input"
+    : "Voice input is not supported in this browser";
+  const helperNote = selectedPreset
+    ? selectedPreset.description
+    : attachedImage
+      ? "Photo uploads now go straight into the image tool for edits or remixes."
+      : status || "Use + to attach a file, launch research, or switch into image mode.";
+
+  useEffect(() => {
+    if (!textareaRef.current) {
+      return;
+    }
+
+    textareaRef.current.style.height = "auto";
+    textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 140)}px`;
+  }, [value]);
+
+  useEffect(() => {
+    valueRef.current = value;
+  }, [value]);
+
+  useEffect(() => {
+    attachedFileRef.current = attachedFile;
+  }, [attachedFile]);
+
+  useEffect(() => {
+    disabledRef.current = disabled;
+  }, [disabled]);
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
+    onSendRef.current = onSend;
+  }, [onSend]);
+
+  useEffect(() => {
+    if (!requestedPresetId) {
+      setSelectedPresetId(null);
+      return;
+    }
+
+    if (PRESET_MAP[requestedPresetId]) {
+      setSelectedPresetId(requestedPresetId);
+    }
+  }, [requestedPresetId]);
+
+  useEffect(() => {
+    if (launcherView === "closed") {
+      return undefined;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (composerRef.current && target instanceof Node && !composerRef.current.contains(target)) {
+        setLauncherView("closed");
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setLauncherView("closed");
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [launcherView]);
+
+  useEffect(() => {
+    if (!disabled || !isListening || !recognitionRef.current) {
+      return;
+    }
+
+    try {
+      recognitionRef.current.stop();
+    } catch {
+      // Ignore stop errors when the recognition session has already ended.
+    }
+  }, [disabled, isListening]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -47,168 +260,515 @@ export default function ChatInput({
     }
 
     setSpeechSupported(true);
+
     const recognition = new SpeechRecognitionCtor();
-    recognition.continuous = true;
-    recognition.interimResults = true;
     recognition.lang = "en-US";
+    recognition.interimResults = true;
+    recognition.continuous = false;
+
     recognition.onresult = (event: SpeechRecognitionEvent) => {
-      let transcript = "";
+      let finalChunk = "";
+      let interimChunk = "";
+
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
-        transcript += event.results[index][0]?.transcript || "";
+        const result = event.results[index];
+        const transcript = result?.[0]?.transcript?.trim();
+
+        if (!transcript) {
+          continue;
+        }
+
+        if (result.isFinal) {
+          finalChunk = [finalChunk, transcript].filter(Boolean).join(" ").trim();
+        } else {
+          interimChunk = [interimChunk, transcript].filter(Boolean).join(" ").trim();
+        }
       }
 
-      const prefix = speechPrefixRef.current.trim();
-      const fragment = transcript.trim();
-      onChange([prefix, fragment].filter(Boolean).join(" ").trim());
+      if (finalChunk) {
+        capturedSpeechRef.current = [capturedSpeechRef.current, finalChunk].filter(Boolean).join(" ").trim();
+      }
+
+      const previewSpoken = [capturedSpeechRef.current, interimChunk].filter(Boolean).join(" ").trim();
+      previewSpeechRef.current = previewSpoken;
+      setHeardText(previewSpoken);
+
+      const nextValue = [voiceBaseValueRef.current, previewSpoken].filter(Boolean).join(" ").trim();
+      onChangeRef.current(nextValue);
     };
-    recognition.onend = () => setIsListening(false);
-    recognition.onerror = () => setIsListening(false);
+
+    recognition.onerror = () => {
+      previewSpeechRef.current = "";
+      capturedSpeechRef.current = "";
+      setHeardText("");
+      setShowVoiceDraft(false);
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+
+      const finalSpoken = (capturedSpeechRef.current || previewSpeechRef.current).trim();
+      if (!finalSpoken || disabledRef.current) {
+        setHeardText("");
+        setShowVoiceDraft(false);
+        return;
+      }
+
+      capturedSpeechRef.current = finalSpoken;
+      previewSpeechRef.current = finalSpoken;
+      setHeardText(finalSpoken);
+      setShowVoiceDraft(true);
+
+      const nextValue = [voiceBaseValueRef.current, finalSpoken].filter(Boolean).join(" ").trim();
+      onChangeRef.current(nextValue);
+
+      window.setTimeout(() => {
+        textareaRef.current?.focus();
+      }, 0);
+    };
+
     recognitionRef.current = recognition;
 
     return () => {
       recognition.onresult = null;
-      recognition.onend = null;
       recognition.onerror = null;
+      recognition.onend = null;
       try {
         recognition.stop();
       } catch {
-        // recognition may not have started
+        // Ignore cleanup errors if recognition is already stopped.
       }
       recognitionRef.current = null;
     };
-  }, [onChange]);
+  }, []);
 
-  useEffect(() => {
-    if (!disabled || !isListening || !recognitionRef.current) {
+  const clearFile = () => {
+    setAttachedFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const resetVoiceDraft = () => {
+    voiceBaseValueRef.current = "";
+    capturedSpeechRef.current = "";
+    previewSpeechRef.current = "";
+    setHeardText("");
+    setShowVoiceDraft(false);
+  };
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
       return;
     }
 
-    recognitionRef.current.stop();
-    setIsListening(false);
-  }, [disabled, isListening]);
+    const imageFile = isImageFile(file);
+    setAttachedFile(file);
+    setLauncherView("closed");
 
-  const handleSend = () => {
-    if (disabled || !value.trim()) {
+    if (imageFile) {
+      setSelectedPresetId("create_image");
+    } else {
+      setSelectedPresetId((current) => (current === "create_image" ? null : current));
+    }
+  };
+
+  const dispatchMessage = (rawValue: string) => {
+    if (disabledRef.current) {
       return;
     }
 
-    if (isListening && recognitionRef.current) {
-      recognitionRef.current.stop();
-      setIsListening(false);
+    const trimmed = String(rawValue || "").trim();
+    const currentFile = attachedFileRef.current;
+    const imageAttachment = isImageFile(currentFile);
+    if (!trimmed && !currentFile) {
+      return;
     }
 
-    onSend({
-      text: value.trim(),
-      file: null,
+    const activePreset = selectedPresetId ? PRESET_MAP[selectedPresetId] || null : null;
+    const attachmentKind: AttachmentKind = currentFile ? (imageAttachment ? "image" : "document") : null;
+    const attachmentLabel = attachmentKind === "image" ? "Photo" : "File";
+    const fallbackText = currentFile
+      ? imageAttachment
+        ? "Create a polished edit from this uploaded photo."
+        : "Summarize this document in simple words."
+      : "";
+    const text = trimmed || fallbackText;
+    const displayText = currentFile
+      ? `${trimmed}${trimmed ? " + " : ""}[${attachmentLabel}: ${currentFile.name}]`
+      : trimmed;
+
+    onSendRef.current({
+      text,
+      displayText: displayText || text,
+      file: currentFile || null,
+      attachmentKind,
+      presetId: activePreset?.id || null,
+      forceMode: activePreset?.forceMode || toolMode || null,
+      promptPrefix: activePreset?.promptPrefix || "",
+      presetLabel: activePreset ? `${activePreset.emoji} ${activePreset.label}` : null,
     });
 
-    onChange("");
+    resetVoiceDraft();
+    clearFile();
+    onChangeRef.current("");
+  };
+
+  const handleSend = () => {
+    dispatchMessage(valueRef.current);
+  };
+
+  const handleVoiceSend = () => {
+    dispatchMessage(valueRef.current);
+  };
+
+  const handleVoiceEdit = () => {
+    textareaRef.current?.focus();
+    const cursorPosition = valueRef.current.length;
+
+    try {
+      textareaRef.current?.setSelectionRange(cursorPosition, cursorPosition);
+    } catch {
+      // Ignore selection issues from browsers that do not support range updates here.
+    }
+  };
+
+  const handleInputChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    onChange(event.target.value);
+  };
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      handleSend();
+    }
   };
 
   const handleVoiceToggle = () => {
-    if (!speechSupported || !recognitionRef.current || disabled) {
+    if (!speechSupported || disabled) {
       return;
+    }
+
+    const recognition = recognitionRef.current;
+    if (!recognition) {
+      return;
+    }
+
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
     }
 
     if (isListening) {
-      recognitionRef.current.stop();
-      setIsListening(false);
+      recognition.stop();
       return;
     }
 
-    speechPrefixRef.current = value.trim();
     try {
-      recognitionRef.current.start();
+      voiceBaseValueRef.current = valueRef.current.trim();
+      capturedSpeechRef.current = "";
+      previewSpeechRef.current = "";
+      setHeardText("");
+      setShowVoiceDraft(false);
+      recognition.start();
       setIsListening(true);
     } catch {
       setIsListening(false);
     }
   };
 
-  const helperText = isListening
-    ? "Listening..."
-    : status || "Enter to send. Shift + Enter for a new line.";
+  const handlePresetSelect = (presetId: string) => {
+    setSelectedPresetId(presetId);
+    setLauncherView("closed");
+    textareaRef.current?.focus();
+  };
+
+  const clearPreset = () => {
+    setSelectedPresetId(null);
+  };
+
+  const handleMenuAction = (actionId: string) => {
+    if (actionId === "attach") {
+      fileInputRef.current?.click();
+      setLauncherView("closed");
+      return;
+    }
+
+    if (actionId === "more") {
+      setLauncherView("more");
+      return;
+    }
+
+    handlePresetSelect(actionId);
+  };
 
   return (
-    <div className="rounded-[26px] border border-white/8 bg-[#202c33]/92 p-3 shadow-[0_12px_32px_rgba(0,0,0,0.22)] backdrop-blur-xl">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        {toolButtons.map((button) => {
-          const Icon = button.icon;
-          const isActive = toolMode === button.key;
+    <div className="input-wrap">
+      {showVoicePanel ? (
+        <div className={`voice-capture${isListening ? " live" : ""}`}>
+          <div className="voice-capture-head">
+            <div className="voice-capture-status">
+              <span className="voice-capture-dot" aria-hidden="true" />
+              <span>{isListening ? "Listening..." : "Voice draft ready"}</span>
+            </div>
+            <div className="voice-capture-label">
+              {isListening ? "Speak naturally and I will show it here." : "Edit it below or send it directly."}
+            </div>
+          </div>
 
-          return (
-            <motion.button
-              key={button.key}
-              type="button"
-              whileHover={{ y: -1 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={() => onToolModeChange(isActive ? null : button.key)}
-              className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-[12px] transition ${
-                isActive
-                  ? "bg-[#144d37] text-white"
-                  : "bg-white/[0.06] text-[#cad6dd] hover:bg-white/[0.1]"
-              }`}
-            >
-              <Icon className="h-3.5 w-3.5" />
-              <span>{button.label}</span>
-            </motion.button>
-          );
-        })}
-      </div>
+          <div className={`voice-capture-text${heardText ? "" : " empty"}`}>
+            {heardText || "Start speaking and your words will appear here."}
+          </div>
 
-      <div className="flex items-end gap-2 rounded-[22px] bg-[#111b21] px-3 py-2.5">
-        <div className="flex-1">
-          <TextareaAutosize
-            minRows={1}
-            maxRows={6}
-            value={value}
-            disabled={disabled}
-            onChange={(event) => onChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="Type a message"
-            className="w-full resize-none bg-transparent px-1 py-1.5 text-[15px] leading-6 text-white outline-none placeholder:text-[#748894] disabled:cursor-not-allowed"
-          />
+          {!isListening ? (
+            <div className="voice-capture-actions">
+              <button className="voice-capture-btn secondary" type="button" onClick={handleVoiceEdit}>
+                Edit
+              </button>
+              <button
+                className="voice-capture-btn primary"
+                type="button"
+                disabled={isSendDisabled}
+                onClick={handleVoiceSend}
+              >
+                OK, Send
+              </button>
+            </div>
+          ) : null}
         </div>
+      ) : null}
 
-        <div className="flex items-center gap-2">
+      {attachedFile ? (
+        <div className={`fp${attachedImage ? " photo" : ""}`}>
+          <div className="fp-icon" aria-hidden="true">
+            {attachedImage ? PHOTO_TILE_ICON : FILE_TILE_ICON}
+          </div>
+          <div className="fp-copy">
+            <strong>{attachedFile.name}</strong>
+            <span>
+              {attachedImage ? "Photo ready for image remix" : "Document ready for chat analysis"} {"\u2022"}{" "}
+              {formatFileSize(attachedFile.size)}
+            </span>
+          </div>
+          <button className="frm" type="button" onClick={clearFile} aria-label="Remove attachment">
+            {CLOSE_SYMBOL}
+          </button>
+        </div>
+      ) : null}
+
+      <div className="input-shell" ref={composerRef}>
+        {launcherView !== "closed" ? (
+          <div className={`launcher-menu${launcherView === "more" ? " more" : ""}`}>
+            {launcherView === "main" ? (
+              <div className="launcher-panel">
+                {(CHAT_COMPOSER_MENU as ComposerMenuItem[]).map((item) => {
+                  const active = item.id === selectedPresetId;
+                  return (
+                    <button
+                      key={item.id}
+                      className={`launcher-action${active ? " active" : ""}`}
+                      type="button"
+                      onClick={() => handleMenuAction(item.id)}
+                    >
+                      <span className="launcher-action-icon" aria-hidden="true">
+                        {item.emoji}
+                      </span>
+                      <span className="launcher-action-copy">
+                        <strong>{item.label}</strong>
+                        <span>{item.description}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="launcher-panel">
+                <button className="launcher-back" type="button" onClick={() => setLauncherView("main")}>
+                  {BACK_LABEL}
+                </button>
+
+                <button
+                  className={`launcher-action${!selectedPreset ? " active" : ""}`}
+                  type="button"
+                  onClick={() => {
+                    clearPreset();
+                    setLauncherView("closed");
+                  }}
+                >
+                  <span className="launcher-action-icon" aria-hidden="true">
+                    {CHAT_TILE_ICON}
+                  </span>
+                  <span className="launcher-action-copy">
+                    <strong>General chat</strong>
+                    <span>Clear quick mode and return to a normal conversation</span>
+                  </span>
+                </button>
+
+                <button
+                  className={`launcher-action${generatePromptImage ? " active" : ""}`}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => {
+                    onTogglePromptImage?.();
+                    setLauncherView("closed");
+                  }}
+                >
+                  <span className="launcher-action-icon" aria-hidden="true">
+                    {PROMPT_IMAGE_ICON}
+                  </span>
+                  <span className="launcher-action-copy">
+                    <strong>{generatePromptImage ? "Prompt image on" : "Prompt image"}</strong>
+                    <span>Generate a visual from your prompt alongside the answer</span>
+                  </span>
+                </button>
+
+                <button
+                  className={`launcher-action${generateAnswerImage ? " active" : ""}`}
+                  type="button"
+                  disabled={disabled || answerImageLocked}
+                  onClick={() => {
+                    if (!answerImageLocked) {
+                      onToggleAnswerImage?.();
+                    }
+                    setLauncherView("closed");
+                  }}
+                >
+                  <span className="launcher-action-icon" aria-hidden="true">
+                    {PHOTO_TILE_ICON}
+                  </span>
+                  <span className="launcher-action-copy">
+                    <strong>{answerImageLocked ? "Answer visuals always on" : "Answer visuals"}</strong>
+                    <span>Ask NOVA to add a relevant image to the response when possible</span>
+                  </span>
+                </button>
+
+                <div className="launcher-note">
+                  {NOTE_PIN_ICON} Photos now flow into the image tool for edits and remixes. Documents still upload
+                  into chat for analysis and summarization.
+                </div>
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        <div className="input-pill">
           <button
+            className={`input-btn ghost input-launcher-btn${launcherView !== "closed" ? " active" : ""}`}
             type="button"
-            onClick={handleVoiceToggle}
-            disabled={!speechSupported || disabled}
-            className={`flex h-11 w-11 items-center justify-center rounded-full transition ${
-              isListening
-                ? "bg-[#144d37] text-white"
-                : "bg-white/[0.06] text-[#d9e4ea] hover:bg-white/[0.1]"
-            } disabled:cursor-not-allowed disabled:opacity-50`}
-            aria-label={isListening ? "Stop voice input" : "Start voice input"}
+            onClick={() => setLauncherView((current) => (current === "closed" ? "main" : "closed"))}
+            aria-label="Open tools"
+            disabled={disabled}
           >
-            <Mic className="h-4 w-4" />
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
           </button>
 
-          <motion.button
-            type="button"
-            whileTap={{ scale: 0.97 }}
-            onClick={handleSend}
-            disabled={disabled || !value.trim()}
-            className="flex h-11 w-11 items-center justify-center rounded-full bg-[#25d366] text-[#08131a] transition hover:bg-[#32db72] disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label="Send message"
-          >
-            <ArrowUp className="h-4 w-4" />
-          </motion.button>
+          <textarea
+            ref={textareaRef}
+            className="input-field"
+            placeholder={placeholder}
+            rows={1}
+            value={value}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            disabled={disabled}
+          />
+
+          <div className="input-actions">
+            <button
+              className={`input-btn ghost${isListening ? " listening" : ""}`}
+              type="button"
+              title={voiceButtonTitle}
+              onClick={handleVoiceToggle}
+              disabled={!speechSupported || disabled}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+              </svg>
+            </button>
+            <button className="input-btn send send-circle" type="button" disabled={isSendDisabled} onClick={handleSend}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="mt-2 flex flex-col gap-1 px-1 text-[11px] text-[#8da2ae] sm:flex-row sm:items-center sm:justify-between">
-        <span>{helperText}</span>
-        <span>
-          {toolMode === "search" ? "Search mode on" : toolMode === "image" ? "Image mode on" : "Chat mode"}
-        </span>
+      <div className="input-meta">
+        <div className="input-meta-group">
+          {onToolModeChange
+            ? QUICK_TOOL_BUTTONS.map((button) => {
+                const active = toolMode === button.key;
+                return (
+                  <button
+                    key={button.key}
+                    className={`input-mode-pill${active ? " active" : ""}`}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => onToolModeChange(active ? null : button.key)}
+                  >
+                    <span aria-hidden="true">{button.emoji}</span>
+                    <span>{button.label}</span>
+                  </button>
+                );
+              })
+            : null}
+
+          {modelOptions.length ? (
+            <div className="input-model input-model-wrap">
+              <select
+                className="input-model-select"
+                value={selectedModelKey}
+                onChange={(event) => onSelectModel?.(event.target.value)}
+                disabled={disabled || modelOptions.length <= 1}
+                title="Choose model"
+              >
+                {modelOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </div>
+          ) : null}
+
+          {selectedPreset ? (
+            <button className="input-mode-pill" type="button" onClick={clearPreset}>
+              <span aria-hidden="true">{selectedPreset.emoji}</span>
+              <span>{selectedPreset.label}</span>
+              <span className="input-mode-pill-close" aria-hidden="true">
+                {CLOSE_SYMBOL}
+              </span>
+            </button>
+          ) : null}
+
+          {generatePromptImage ? <span className="input-status-pill">{PROMPT_IMAGE_ICON} Prompt image on</span> : null}
+          {generateAnswerImage || answerImageLocked ? (
+            <span className="input-status-pill">{PHOTO_TILE_ICON} Answer visuals on</span>
+          ) : null}
+        </div>
+
+        <div className="input-meta-note">{helperNote}</div>
       </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        style={{ display: "none" }}
+        accept={FILE_INPUT_ACCEPT}
+        onChange={handleFileChange}
+      />
     </div>
   );
 }

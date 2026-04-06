@@ -4,12 +4,20 @@ import { useEffect, useRef, useState } from "react";
 import Layout from "../components/common/Layout";
 import MessageBubble from "../components/chat/MessageBubble";
 import SearchResults from "../components/chat/SearchResults";
+import { stopSpeechPlayback } from "../utils/speech";
 import { useAuthStore } from "../utils/store";
+
+const API_BASE = (import.meta.env.VITE_API_URL || "").trim();
+const API_BASE_NORMALIZED = API_BASE.replace(/\/$/, "");
+const SEARCH_CHAT_ENDPOINT = API_BASE_NORMALIZED
+  ? API_BASE_NORMALIZED.endsWith("/api")
+    ? `${API_BASE_NORMALIZED}/search/chat`
+    : `${API_BASE_NORMALIZED}/api/search/chat`
+  : "/api/search/chat";
 
 export default function SearchChat() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
-  const [model] = useState("gpt-4");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -20,6 +28,10 @@ export default function SearchChat() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  useEffect(() => () => {
+    stopSpeechPlayback();
+  }, []);
+
   const search = async (query) => {
     if (!query || !query.trim() || loading) {
       return;
@@ -27,6 +39,7 @@ export default function SearchChat() {
 
     setError(null);
     setInput("");
+    stopSpeechPlayback();
 
     const userMsg = { role: "user", content: query };
     const history = messages
@@ -45,27 +58,38 @@ export default function SearchChat() {
     setLoading(true);
 
     try {
-      const response = await fetch("/api/search/chat", {
+      let finalReply = "";
+      const response = await fetch(SEARCH_CHAT_ENDPOINT, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           message: query,
-          model,
           history,
         }),
       });
 
       if (!response.ok) {
-        throw new Error(`Server error: ${response.status}`);
+        let detail = `Server error: ${response.status}`;
+        try {
+          const payload = await response.json();
+          detail = payload?.detail || payload?.message || detail;
+        } catch {
+          // Ignore non-JSON error bodies.
+        }
+        throw new Error(detail);
+      }
+
+      if (!response.body) {
+        throw new Error("Search response did not include a stream.");
       }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
 
-      while (true) {
+      for (;;) {
         const { done, value } = await reader.read();
         if (done) {
           break;
@@ -94,6 +118,7 @@ export default function SearchChat() {
             }
 
             if ((parsed.type === "chunk" || parsed.type === "delta") && parsed.content) {
+              finalReply += parsed.content;
               setMessages((previous) => {
                 const updated = [...previous];
                 const last = updated[updated.length - 1];
@@ -106,6 +131,7 @@ export default function SearchChat() {
             }
 
             if (parsed.type === "final" && parsed.message) {
+              finalReply = parsed.message;
               setMessages((previous) => {
                 const updated = [...previous];
                 const last = updated[updated.length - 1];
@@ -120,15 +146,28 @@ export default function SearchChat() {
             }
 
             if (parsed.error || parsed.type === "error") {
-              setError(parsed.error || parsed.content || "An error occurred");
+              const detail = parsed.error || parsed.content || "An error occurred";
+              setMessages((previous) => {
+                const updated = [...previous];
+                const lastIndex = updated.length - 1;
+                if (lastIndex >= 0 && updated[lastIndex]?.role === "assistant") {
+                  updated[lastIndex] = {
+                    ...updated[lastIndex],
+                    isSearching: false,
+                  };
+                }
+                return updated;
+              });
+              setError(detail);
             }
           } catch {
             // Ignore malformed stream chunks.
           }
         }
       }
+
     } catch (err) {
-      setError(err.message);
+      setError(err?.message || "Search request failed.");
       setMessages((previous) => previous.slice(0, -1));
     } finally {
       setLoading(false);

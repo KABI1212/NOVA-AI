@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
-
-from models.base import Field, MongoModel
+from models.base import Field, MongoModel, utc_now
 
 
 class Document(MongoModel):
@@ -19,8 +17,8 @@ class Document(MongoModel):
     text_content = Field(default=None)
     summary = Field(default=None)
     is_processed = Field(default=False)
-    created_at = Field(default_factory=datetime.utcnow)
-    updated_at = Field(default_factory=datetime.utcnow)
+    created_at = Field(default_factory=utc_now)
+    updated_at = Field(default_factory=utc_now)
 
     def __repr__(self) -> str:
         return f"<Document {self.filename}>"

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from typing import List
 
 from pydantic import BaseModel, ConfigDict
 
-from models.base import Field, MongoModel
+from models.base import Field, MongoModel, utc_now
 
 
 class Conversation(MongoModel):
@@ -26,8 +25,8 @@ class Conversation(MongoModel):
     context_summary = Field(default="")
     context_summary_message_count = Field(default=0)
     context_summary_updated_at = Field(default=None)
-    created_at = Field(default_factory=datetime.utcnow)
-    updated_at = Field(default_factory=datetime.utcnow)
+    created_at = Field(default_factory=utc_now)
+    updated_at = Field(default_factory=utc_now)
 
 
 class Message(BaseModel):

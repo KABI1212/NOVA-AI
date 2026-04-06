@@ -20,6 +20,10 @@ def test_build_messages_adds_clarity_and_presentation_instructions_for_chat_mode
         for content in system_messages
     )
     assert any(
+        "break the reply into short Markdown sections" in content
+        for content in system_messages
+    )
+    assert any(
         "add relevant emojis" in content
         for content in system_messages
     )

@@ -393,12 +393,16 @@ def contextual_system_instructions(mode: str, message: str) -> List[str]:
     return instructions
 
 
-def build_messages(history: List[Dict[str, str]], mode: str) -> List[Dict[str, str]]:
+def build_messages(
+    history: List[Dict[str, str]],
+    mode: str,
+    instruction_message: str | None = None,
+) -> List[Dict[str, str]]:
     """Inject system prompt for the selected mode."""
     system_prompt = get_mode_prompt(mode)
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
 
-    latest_user_message = _latest_user_message(history)
+    latest_user_message = str(instruction_message or "").strip() or _latest_user_message(history)
     messages.extend(
         {"role": "system", "content": instruction}
         for instruction in contextual_system_instructions(mode, latest_user_message)

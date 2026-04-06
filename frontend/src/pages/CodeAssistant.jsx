@@ -1,10 +1,11 @@
 // @ts-nocheck
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Code, Send } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Layout from '../components/common/Layout';
 import { codeAPI } from '../services/api';
 import MessageBubble from '../components/chat/MessageBubble';
+import { stopSpeechPlayback } from '../utils/speech';
 
 function CodeAssistant() {
   const [activeTab, setActiveTab] = useState('generate');
@@ -13,10 +14,16 @@ function CodeAssistant() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => () => {
+    stopSpeechPlayback();
+  }, []);
+
   const handleSubmit = async () => {
     if (!prompt.trim()) return;
 
+    stopSpeechPlayback();
     setLoading(true);
+    setResult(null);
     try {
       let response;
       if (activeTab === 'generate') {
@@ -34,7 +41,13 @@ function CodeAssistant() {
       }
       toast.success('Code processed successfully!');
     } catch (error) {
-      toast.error('Failed to process code');
+      const detail =
+        error?.response?.data?.detail ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'Failed to process code';
+      setResult({ content: detail, role: 'assistant' });
+      toast.error(detail);
     } finally {
       setLoading(false);
     }

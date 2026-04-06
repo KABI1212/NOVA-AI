@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { sendMessage } from '../services/api'
 import MessageBubble from './MessageBubble'
 
@@ -16,29 +16,7 @@ function VoiceAssistant() {
   const [isStreaming, setIsStreaming] = useState(false)
   const recognitionRef = useRef(null)
 
-  useEffect(() => {
-    const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SpeechRecognition) return
-    const recognition = new SpeechRecognition()
-    recognition.lang = 'en-US'
-    recognition.interimResults = false
-    recognition.continuous = false
-
-    recognition.onresult = (event) => {
-      const transcript = event.results?.[0]?.[0]?.transcript || ''
-      if (transcript) {
-        handleUserMessage(transcript)
-      }
-    }
-
-    recognition.onend = () => setIsListening(false)
-    recognition.onerror = () => setIsListening(false)
-
-    recognitionRef.current = recognition
-  }, [])
-
-  const streamAnswer = (id, text) =>
+  const streamAnswer = useCallback((id, text) =>
     new Promise((resolve) => {
       let index = 0
       if (!text) {
@@ -60,18 +38,9 @@ function VoiceAssistant() {
           resolve()
         }
       }, 12)
-    })
+    }), [])
 
-  const speak = (text) => {
-    if (!window.speechSynthesis) return
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.rate = 1
-    utterance.pitch = 1
-    window.speechSynthesis.cancel()
-    window.speechSynthesis.speak(utterance)
-  }
-
-  const handleUserMessage = async (text) => {
+  const handleUserMessage = useCallback(async (text) => {
     const userMessage = { id: createId(), role: 'user', content: text }
     const assistantId = createId()
     setMessages((prev) => [
@@ -81,8 +50,29 @@ function VoiceAssistant() {
     ])
     const answer = await sendMessage(text)
     await streamAnswer(assistantId, answer)
-    speak(answer)
-  }
+  }, [streamAnswer])
+
+  useEffect(() => {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SpeechRecognition) return
+    const recognition = new SpeechRecognition()
+    recognition.lang = 'en-US'
+    recognition.interimResults = false
+    recognition.continuous = false
+
+    recognition.onresult = (event) => {
+      const transcript = event.results?.[0]?.[0]?.transcript || ''
+      if (transcript) {
+        handleUserMessage(transcript)
+      }
+    }
+
+    recognition.onend = () => setIsListening(false)
+    recognition.onerror = () => setIsListening(false)
+
+    recognitionRef.current = recognition
+  }, [handleUserMessage])
 
   const toggleListening = () => {
     if (!recognitionRef.current) return

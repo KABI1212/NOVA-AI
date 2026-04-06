@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Lightbulb, Send } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Layout from '../components/common/Layout';
 import MessageBubble from '../components/chat/MessageBubble';
 import { explainAPI } from '../services/api';
+import { stopSpeechPlayback } from '../utils/speech';
 
 function ExplainAssistant() {
   const [prompt, setPrompt] = useState('');
@@ -11,6 +12,10 @@ function ExplainAssistant() {
   const [detail, setDetail] = useState('detailed');
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => () => {
+    stopSpeechPlayback();
+  }, []);
 
   const suggestions = [
     'Explain how transformers work step-by-step',
@@ -21,6 +26,7 @@ function ExplainAssistant() {
 
   const handleExplain = async () => {
     if (!prompt.trim() || loading) return;
+    stopSpeechPlayback();
     setLoading(true);
     try {
       const response = await explainAPI.explain({

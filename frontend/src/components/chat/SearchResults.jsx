@@ -25,7 +25,7 @@ export default function SearchResults({ results = [], query }) {
   return (
     <div className="mb-4 px-4">
       <div className="text-xs text-gray-400 mb-2">
-        Web results for "{query}"
+        Web results for &quot;{query}&quot;
       </div>
 
       <div className="grid gap-2">

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { motion } from "framer-motion";
-import { Bot, User, Copy, Check, Sparkles, Bookmark, Volume2, VolumeX } from "lucide-react";
+import { Bot, User, Copy, Check } from "lucide-react";
 import { useState } from "react";
 import toast from "react-hot-toast";
 import TTSButton from "./TTSButton";
@@ -16,11 +16,7 @@ function MessageBubble({
   message,
   isTyping,
   isStreaming = false,
-  onExplain,
-  onSave,
-  onSpeak,
-  onStopSpeak,
-  isSpeaking
+  showTts = true,
 }) {
 
   const [copiedMessage, setCopiedMessage] = useState(false);
@@ -107,7 +103,7 @@ function MessageBubble({
               </div>
             )}
 
-            {!isUser && message.content && !isStreaming && (
+            {!isUser && showTts && message.content && !isStreaming && (
               <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/50">
                 <TTSButton text={message.content}/>
                 <span className="text-xs text-gray-600">Read aloud</span>
@@ -118,7 +114,6 @@ function MessageBubble({
 
           {!isUser && (
             <div className="mt-2 flex flex-wrap gap-3 text-xs text-gray-500">
-
               <button
                 onClick={() => copyMessageToClipboard(message.content)}
                 className="flex items-center gap-1"
@@ -128,37 +123,6 @@ function MessageBubble({
                   : <Copy className="w-3 h-3"/>}
                 {copiedMessage ? "Copied!" : "Copy"}
               </button>
-
-              <button
-                onClick={() => onExplain?.(message.content)}
-                className="flex items-center gap-1"
-              >
-                <Sparkles className="w-3 h-3"/>Explain
-              </button>
-
-              <button
-                onClick={() => onSave?.(message.content)}
-                className="flex items-center gap-1"
-              >
-                <Bookmark className="w-3 h-3"/>Save
-              </button>
-
-              {isSpeaking ? (
-                <button
-                  onClick={() => onStopSpeak?.()}
-                  className="flex items-center gap-1"
-                >
-                  <VolumeX className="w-3 h-3"/>Stop
-                </button>
-              ) : (
-                <button
-                  onClick={() => onSpeak?.(message.content)}
-                  className="flex items-center gap-1"
-                >
-                  <Volume2 className="w-3 h-3"/>Speak
-                </button>
-              )}
-
             </div>
           )}
 

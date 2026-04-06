@@ -1,4 +1,7 @@
 import logging
+import platform
+import sys
+import warnings
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -62,11 +65,43 @@ def _configure_logging() -> None:
     logging.getLogger("pymongo").setLevel(logging.WARNING)
     logging.getLogger("pymongo.serverSelection").setLevel(logging.WARNING)
     logging.getLogger("pymongo.topology").setLevel(logging.WARNING)
-    logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+    logging.getLogger("uvicorn.access").setLevel(
+        logging.INFO if settings.UVICORN_ACCESS_LOG else logging.WARNING
+    )
+
+
+def _configure_warnings() -> None:
+    if settings.SUPPRESS_32BIT_CRYPTO_WARNING:
+        warnings.filterwarnings(
+            "ignore",
+            message=r"You are using cryptography on a 32-bit Python on a 64-bit Windows Operating System\..*",
+            category=UserWarning,
+            module=r"cryptography\.hazmat\.backends\.openssl\.backend",
+        )
+
+
+def _should_enable_reload() -> bool:
+    if not settings.DEBUG:
+        return False
+
+    if sys.platform == "win32" and platform.architecture()[0] == "32bit":
+        warnings.warn(
+            (
+                "Uvicorn reload is disabled on 32-bit Windows Python because the "
+                "reload worker is unreliable in this environment. Use a 64-bit "
+                "interpreter to restore hot reload."
+            ),
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return False
+
+    return True
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _configure_warnings()
     _configure_logging()
     logger.info("%s v%s starting", settings.APP_NAME, settings.APP_VERSION)
     db_ready = init_db()
@@ -187,5 +222,6 @@ if __name__ == "__main__":
         "main:app",
         host=settings.APP_HOST,
         port=settings.APP_PORT,
-        reload=settings.DEBUG,
+        reload=_should_enable_reload(),
+        access_log=settings.UVICORN_ACCESS_LOG,
     )

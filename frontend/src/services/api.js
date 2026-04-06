@@ -46,6 +46,7 @@ export const chatAPI = {
   regenerate: (data) => api.post('/api/chat/regenerate', data),
   getConversations: () => api.get('/api/chat/conversations'),
   getConversation: (id) => api.get(`/api/chat/conversations/${id}`),
+  updateConversation: (id, data) => api.put(`/api/chat/conversations/${id}`, data),
   deleteConversation: (id) => api.delete(`/api/chat/conversations/${id}`),
   getProviders: () => api.get('/api/chat/providers'),
 };
@@ -76,16 +77,10 @@ export const codeAPI = {
 
 // Document API
 export const documentAPI = {
-  upload: (formData, options = {}) => {
-    const token = localStorage.getItem('token');
-    return axios.post(`${API_URL}/api/document/upload`, formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-        Authorization: `Bearer ${token}`,
-      },
+  upload: (formData, options = {}) =>
+    api.postForm('/api/document/upload', formData, {
       onUploadProgress: options.onUploadProgress,
-    });
-  },
+    }),
   getDocuments: () => api.get('/api/document'),
   getDocument: (id) => api.get(`/api/document/${id}`),
   askQuestion: (data) => api.post('/api/document/ask', data),
@@ -109,7 +104,19 @@ export const explainAPI = {
 // Image API
 export const imageAPI = {
   generate: (data) => api.post('/api/image/generate', data, { timeout: 240000 }),
+  optimizePrompt: (data) => api.post('/api/image/prompt', data, { timeout: 120000 }),
+  getProviders: () => api.get('/api/image/providers'),
   variation: (data) => api.post('/api/image/variations', data, { timeout: 240000 }),
+};
+
+export const generateImage = async (prompt, options = {}) => {
+  const response = await imageAPI.generate({ prompt, ...options });
+  return response.data?.url || response.data?.images?.[0] || '';
+};
+
+export const optimizeImagePrompt = async (data) => {
+  const response = await imageAPI.optimizePrompt(data);
+  return response.data?.revised_prompt || response.data?.prompt || '';
 };
 
 export default api;
