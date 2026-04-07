@@ -1,4 +1,8 @@
-from datetime import datetime, timedelta
+import hashlib
+import hmac
+import secrets
+from datetime import UTC, datetime, timedelta
+from string import digits
 from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -21,7 +25,36 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def get_password_hash(password: str) -> str:
     """Hash a password"""
-    return pwd_context.hash(password, scheme="pbkdf2_sha256")
+    return pwd_context.hash(password)
+
+
+def utcnow_naive() -> datetime:
+    """Return the current UTC time as a naive datetime for existing storage code."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def generate_numeric_otp(length: int | None = None) -> str:
+    """Generate a numeric OTP with the configured length."""
+    otp_length = length or settings.AUTH_OTP_LENGTH
+    return "".join(secrets.choice(digits) for _ in range(otp_length))
+
+
+def generate_login_challenge_token() -> str:
+    """Generate a random opaque token for an in-progress OTP login."""
+    return secrets.token_urlsafe(32)
+
+
+def hash_secret_value(value: str) -> str:
+    """Create a deterministic secret-key-based hash for short-lived secrets."""
+    payload = f"{settings.SECRET_KEY}:{value}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def verify_secret_value(value: str, expected_hash: str | None) -> bool:
+    """Compare a raw value against a previously stored hash."""
+    if not value or not expected_hash:
+        return False
+    return hmac.compare_digest(hash_secret_value(value), expected_hash)
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -31,9 +64,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         to_encode["sub"] = str(to_encode["sub"])
 
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = utcnow_naive() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = utcnow_naive() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
 
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)

@@ -3,8 +3,8 @@
 ## Overview
 
 NOVA AI is a full-stack AI workspace with chat, image generation, document
-analysis, code help, search, sharing, learning tools, and optional voice
-features.
+analysis, code help, search, sharing, learning tools, optional voice
+features, and email-OTP-protected login.
 
 ## Current Stack
 
@@ -35,6 +35,7 @@ features.
 7. Learning roadmap generation and progress tracking.
 8. Voice transcription and text-to-speech endpoints that use OpenAI when a key
    is configured.
+9. Two-step login with email OTP verification and JWT session issuance.
 
 ## Storage Model
 
@@ -137,5 +138,6 @@ Frontend URL: `http://localhost:3000`
 - `README.md`: main project documentation
 - `QUICKSTART.md`: shortest path to a local run
 - `SETUP_GUIDE.md`: step-by-step setup guidance
+- `CAPABILITY_MATRIX.md`: implemented, partial, and missing feature coverage
 - `DATABASE_SCHEMA.sql`: current storage reference for Mongo collections/indexes
 - `/docs`: FastAPI-generated API docs while the backend is running

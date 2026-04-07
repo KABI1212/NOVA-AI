@@ -7,7 +7,7 @@ import Navbar from "./Navbar";
 import Sidebar from "./Sidebar";
 import SuggestionChips from "./SuggestionChips";
 
-type ToolMode = "search" | "image" | null;
+type ToolMode = "search" | "image" | "documents" | null;
 
 type Message = {
   id: string;

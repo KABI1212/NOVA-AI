@@ -135,6 +135,14 @@ _EXPANDED_DOCUMENT_CONTEXT_CHARS = 120000
 _DEFAULT_DOCUMENT_SEARCH_K = 3
 _EXPANDED_RESPONSE_MAX_TOKENS = 16384
 _ASSIGNMENT_REQUEST_PATTERN = re.compile(r"\b(?:assignment|assignments)\b", re.IGNORECASE)
+_DOCUMENT_GROUNDING_INSTRUCTION = (
+    "Document verification mode:\n"
+    "- Treat the uploaded document context as the only source of truth.\n"
+    "- Answer only from the provided document context.\n"
+    "- Do not mix in outside knowledge, web facts, or assumptions.\n"
+    "- If the document does not contain the answer, say \"I don't know based on the provided document.\"\n"
+    "- Keep the answer exact, grounded, and easy to verify against the file."
+)
 
 
 class ChatRequest(BaseModel):
@@ -1213,6 +1221,195 @@ async def _resolve_document_context(message: Optional[str], document: Document) 
     return document_text[:_DEFAULT_DOCUMENT_CONTEXT_CHARS]
 
 
+def _document_question_terms(question: str, limit: int = 10) -> List[str]:
+    stopwords = {
+        "a",
+        "an",
+        "and",
+        "answer",
+        "assignment",
+        "compare",
+        "comparison",
+        "describe",
+        "difference",
+        "document",
+        "draw",
+        "explain",
+        "for",
+        "give",
+        "how",
+        "in",
+        "is",
+        "it",
+        "me",
+        "of",
+        "or",
+        "please",
+        "question",
+        "show",
+        "simple",
+        "step",
+        "steps",
+        "summarize",
+        "tell",
+        "the",
+        "this",
+        "what",
+        "with",
+        "write",
+    }
+    raw_terms = re.findall(r"[A-Za-z0-9][A-Za-z0-9/+.-]{1,}", str(question or "").lower())
+    terms: List[str] = []
+    seen: set[str] = set()
+
+    for term in raw_terms:
+        cleaned = term.strip().lower()
+        if (
+            not cleaned
+            or cleaned in stopwords
+            or len(cleaned) < 3
+            or cleaned.isdigit()
+            or cleaned in seen
+        ):
+            continue
+        seen.add(cleaned)
+        terms.append(cleaned)
+        if len(terms) >= limit:
+            break
+
+    return terms
+
+
+def _document_passages(text: str, chunk_chars: int = 420) -> List[str]:
+    passages: List[str] = []
+    sections = re.split(r"\n{2,}", str(text or ""))
+
+    for section in sections:
+        cleaned_section = " ".join(section.split()).strip()
+        if not cleaned_section:
+            continue
+        if len(cleaned_section) <= chunk_chars:
+            passages.append(cleaned_section)
+            continue
+
+        sentences = re.split(r"(?<=[.!?])\s+", cleaned_section)
+        current_chunk = ""
+        for sentence in sentences:
+            candidate = f"{current_chunk} {sentence}".strip()
+            if current_chunk and len(candidate) > chunk_chars:
+                passages.append(current_chunk)
+                current_chunk = sentence.strip()
+            else:
+                current_chunk = candidate
+
+        if current_chunk:
+            passages.append(current_chunk)
+
+    if passages:
+        return passages
+
+    cleaned_text = " ".join(str(text or "").split()).strip()
+    return [cleaned_text] if cleaned_text else []
+
+
+def _score_document_passage(passage: str, terms: List[str], index: int) -> float:
+    lowered = passage.lower()
+    score = 0.0
+
+    for term in terms:
+        if term in lowered:
+            score += 3.0 + min(lowered.count(term), 3)
+
+    if len(terms) >= 2:
+        consecutive_matches = sum(
+            1 for first, second in zip(terms, terms[1:]) if f"{first} {second}" in lowered
+        )
+        score += consecutive_matches * 2.5
+
+    score += max(0, 2 - index) * 0.15
+    return score
+
+
+def _trim_document_excerpt(text: str, limit: int = 320) -> str:
+    cleaned = " ".join(str(text or "").split()).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return f"{cleaned[:limit].rstrip()}..."
+
+
+def _rank_document_passages(question: str, context: str) -> List[tuple[float, int, str]]:
+    passages = _document_passages(context)
+    if not passages:
+        return []
+
+    terms = _document_question_terms(question)
+    return sorted(
+        (
+            (_score_document_passage(passage, terms, index), index, passage)
+            for index, passage in enumerate(passages)
+        ),
+        key=lambda item: (item[0], -item[1]),
+        reverse=True,
+    )
+
+
+def _document_sources_from_context(question: str, context: Optional[str], limit: int = 3) -> List[dict]:
+    ranked_passages = _rank_document_passages(question, str(context or ""))
+    if not ranked_passages:
+        return []
+
+    selected = [(score, index, passage) for score, index, passage in ranked_passages if score > 0][:limit]
+    if not selected:
+        selected = ranked_passages[:limit]
+
+    sources: List[dict] = []
+    seen: set[str] = set()
+
+    for source_index, (_, _, passage) in enumerate(selected, start=1):
+        excerpt = _trim_document_excerpt(passage, limit=280)
+        normalized_excerpt = excerpt.lower()
+        if not excerpt or normalized_excerpt in seen:
+            continue
+        seen.add(normalized_excerpt)
+        sources.append(
+            {
+                "kind": "document",
+                "title": f"Document Source {source_index}",
+                "label": f"Document Source {source_index}",
+                "excerpt": excerpt,
+            }
+        )
+
+    return sources
+
+
+def _fallback_document_answer_from_context(question: str, context: Optional[str]) -> str:
+    ranked_passages = _rank_document_passages(question, str(context or ""))
+    if not ranked_passages:
+        return "I don't know based on the provided document."
+
+    selected = [passage for score, _, passage in ranked_passages if score > 0][:3]
+    if not selected:
+        selected = [passage for _, _, passage in ranked_passages[:2]]
+
+    excerpts = [
+        f"{index + 1}. {_trim_document_excerpt(passage)}"
+        for index, passage in enumerate(selected)
+    ]
+
+    if len(excerpts) == 1:
+        return (
+            "I could not fully verify a complete answer from the uploaded document, but this is the "
+            f"most relevant part I found:\n\n{excerpts[0]}"
+        )
+
+    return (
+        "I could not fully verify a complete answer from the uploaded document, but these are the "
+        "most relevant parts I found:\n\n"
+        + "\n".join(excerpts)
+    )
+
+
 def _build_regenerate_instruction(previous_answer: Optional[str]) -> str:
     cleaned_answer = _normalize_regenerate_answer(previous_answer)
     if not cleaned_answer:
@@ -1271,6 +1468,9 @@ def _build_ai_messages(
         ai_messages.insert(insert_index, {"role": "system", "content": extra_instruction})
         insert_index += 1
     if doc_context:
+        if (mode or "").lower() == "documents":
+            ai_messages.insert(insert_index, {"role": "system", "content": _DOCUMENT_GROUNDING_INSTRUCTION})
+            insert_index += 1
         ai_messages.insert(insert_index, {"role": "system", "content": f"Document context:\n{doc_context[:8000]}"})
     return ai_messages
 
@@ -1647,10 +1847,14 @@ async def _best_effort_answer_bundle(
     force_search: bool = False,
     max_tokens: Optional[int] = None,
 ) -> tuple[str, List[dict]]:
-    primary_message, primary_sources = await _maybe_enhance_temporal_message_with_sources(
-        user_message,
-        force_search=force_search,
-    )
+    if mode == "documents":
+        primary_message = user_message
+        primary_sources = _document_sources_from_context(user_message, doc_context)
+    else:
+        primary_message, primary_sources = await _maybe_enhance_temporal_message_with_sources(
+            user_message,
+            force_search=force_search,
+        )
     use_case = "research" if force_search else infer_use_case(mode, user_message)
     resolved_max_tokens = max_tokens or _response_max_tokens(user_message, mode, doc_context)
 
@@ -1672,12 +1876,14 @@ async def _best_effort_answer_bundle(
         )
         primary_answer = await _cross_check_answer_if_needed(
             user_message,
-            primary_message,
+            doc_context if mode == "documents" and doc_context else primary_message,
             primary_answer,
             provider,
             model,
             max_tokens=resolved_max_tokens,
         )
+        if mode == "documents" and _looks_like_stale_cutoff_answer(primary_answer):
+            return _fallback_document_answer_from_context(user_message, doc_context), primary_sources
         if _looks_like_stale_cutoff_answer(primary_answer):
             refreshed_answer, refreshed_sources = await _retry_stale_answer_with_fresh_sources_bundle(
                 history,
@@ -1700,8 +1906,10 @@ async def _best_effort_answer_bundle(
             model or "<default>",
             exc,
         )
+        if mode == "documents":
+            return _fallback_document_answer_from_context(user_message, doc_context), primary_sources
 
-    if primary_message == user_message:
+    if mode != "documents" and primary_message == user_message:
         searched_message, searched_sources = await _maybe_enhance_temporal_message_with_sources(
             user_message,
             force_search=True,
@@ -1754,6 +1962,9 @@ async def _best_effort_answer_bundle(
     )
     if search_backup:
         return search_backup, backup_sources
+
+    if mode == "documents":
+        return _fallback_document_answer_from_context(user_message, doc_context), primary_sources
 
     return FALLBACK_MESSAGE, []
 
@@ -2765,6 +2976,61 @@ async def chat(
                     yield _sse_event(_final_payload("Here are your images.", saved_conversation, images=images))
                     return
 
+                if mode == "documents":
+                    full_response, answer_sources = await _best_effort_answer_bundle(
+                        history,
+                        message_text,
+                        mode,
+                        provider,
+                        model,
+                        doc_context=doc_context,
+                        max_tokens=response_max_tokens,
+                    )
+                    prompt_images = await _await_image_task(prompt_image_task)
+                    answer_images = []
+                    if generate_answer_image and full_response != FALLBACK_MESSAGE:
+                        answer_images = await _generate_images_best_effort(
+                            _build_answer_image_prompt(message_text, full_response)
+                        )
+                    _apply_images_to_message(
+                        user_message,
+                        images=prompt_images,
+                        generate_prompt_image=generate_prompt_image,
+                        generate_answer_image=generate_answer_image,
+                        document_id=document.id if document else None,
+                        document_name=document.filename if document else None,
+                    )
+                    _append_message(
+                        db,
+                        conversation,
+                        "assistant",
+                        full_response,
+                        meta=_merge_message_meta(
+                            {"mode": mode},
+                            images=answer_images,
+                            image_origin="answer" if answer_images else None,
+                            document_id=document.id if document else None,
+                            document_name=document.filename if document else None,
+                            sources=answer_sources,
+                        ),
+                    )
+                    saved_conversation = await _save_conversation_with_summary(
+                        db,
+                        conversation,
+                        refresh_summary=True,
+                    )
+                    _log_chat_response(mode, provider, model, full_response)
+                    yield _sse_event(
+                        _final_payload(
+                            full_response,
+                            saved_conversation,
+                            prompt_images=prompt_images,
+                            answer_images=answer_images,
+                            sources=answer_sources,
+                        )
+                    )
+                    return
+
                 full_response = ""
                 async for chunk in ai_service.chat_stream(
                     ai_messages,
@@ -2842,15 +3108,27 @@ async def chat(
         _log_chat_response(mode, provider, model, "Here are your images.")
         return _payload("Here are your images.", conversation, images=images)
 
-    response_text = await _best_effort_answer(
-        history,
-        message_text,
-        mode,
-        provider,
-        model,
-        doc_context=doc_context,
-        max_tokens=response_max_tokens,
-    )
+    answer_sources: List[dict] = []
+    if mode == "documents":
+        response_text, answer_sources = await _best_effort_answer_bundle(
+            history,
+            message_text,
+            mode,
+            provider,
+            model,
+            doc_context=doc_context,
+            max_tokens=response_max_tokens,
+        )
+    else:
+        response_text = await _best_effort_answer(
+            history,
+            message_text,
+            mode,
+            provider,
+            model,
+            doc_context=doc_context,
+            max_tokens=response_max_tokens,
+        )
 
     prompt_images = await _await_image_task(prompt_image_task)
     answer_images = []
@@ -2877,6 +3155,7 @@ async def chat(
             image_origin="answer" if answer_images else None,
             document_id=document.id if document else None,
             document_name=document.filename if document else None,
+            sources=answer_sources,
         ),
     )
     conversation = await _save_conversation_with_summary(
@@ -2890,6 +3169,7 @@ async def chat(
         conversation,
         prompt_images=prompt_images,
         answer_images=answer_images,
+        sources=answer_sources,
     )
 
 
@@ -3307,6 +3587,55 @@ async def regenerate(
                     yield _sse_event(_final_payload("Here are your images.", saved_conversation, images=images))
                     return
 
+                if mode == "documents":
+                    full_response, answer_sources = await _best_effort_answer_bundle(
+                        history,
+                        last_user_message_content,
+                        mode,
+                        provider,
+                        model,
+                        doc_context=doc_context,
+                        extra_instruction=regenerate_instruction,
+                        max_tokens=response_max_tokens,
+                    )
+                    full_response = _resolve_regenerated_text(full_response, previous_answer)
+                    prompt_images = _message_images(last_user_message)
+                    answer_images = []
+                    if generate_answer_image and full_response != FALLBACK_MESSAGE:
+                        answer_images = await _generate_images_best_effort(
+                            _build_answer_image_prompt(last_user_message_content, full_response)
+                        )
+                    _append_message(
+                        db,
+                        conversation,
+                        "assistant",
+                        full_response,
+                        meta=_merge_message_meta(
+                            {"mode": mode},
+                            images=answer_images,
+                            image_origin="answer" if answer_images else None,
+                            document_id=document.id if document else None,
+                            document_name=document.filename if document else None,
+                            sources=answer_sources,
+                        ),
+                    )
+                    saved_conversation = await _save_conversation_with_summary(
+                        db,
+                        conversation,
+                        refresh_summary=True,
+                    )
+                    _log_chat_response(mode, provider, model, full_response)
+                    yield _sse_event(
+                        _final_payload(
+                            full_response,
+                            saved_conversation,
+                            prompt_images=prompt_images,
+                            answer_images=answer_images,
+                            sources=answer_sources,
+                        )
+                    )
+                    return
+
                 full_response = ""
                 async for chunk in ai_service.chat_stream(
                     ai_messages,
@@ -3376,16 +3705,29 @@ async def regenerate(
         _log_chat_response(mode, provider, model, "Here are your images.")
         return _payload("Here are your images.", conversation, images=images)
 
-    response_text = await _best_effort_answer(
-        history,
-        last_user_message_content,
-        mode,
-        provider,
-        model,
-        doc_context=doc_context,
-        extra_instruction=regenerate_instruction,
-        max_tokens=response_max_tokens,
-    )
+    answer_sources: List[dict] = []
+    if mode == "documents":
+        response_text, answer_sources = await _best_effort_answer_bundle(
+            history,
+            last_user_message_content,
+            mode,
+            provider,
+            model,
+            doc_context=doc_context,
+            extra_instruction=regenerate_instruction,
+            max_tokens=response_max_tokens,
+        )
+    else:
+        response_text = await _best_effort_answer(
+            history,
+            last_user_message_content,
+            mode,
+            provider,
+            model,
+            doc_context=doc_context,
+            extra_instruction=regenerate_instruction,
+            max_tokens=response_max_tokens,
+        )
     response_text = _resolve_regenerated_text(response_text, previous_answer)
     prompt_images = _message_images(last_user_message)
     answer_images = []
@@ -3404,6 +3746,7 @@ async def regenerate(
             image_origin="answer" if answer_images else None,
             document_id=document.id if document else None,
             document_name=document.filename if document else None,
+            sources=answer_sources,
         ),
     )
     conversation = await _save_conversation_with_summary(
@@ -3417,6 +3760,7 @@ async def regenerate(
         conversation,
         prompt_images=prompt_images,
         answer_images=answer_images,
+        sources=answer_sources,
     )
 
 

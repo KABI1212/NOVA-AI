@@ -1885,55 +1885,138 @@ class AIService:
         async for token in _stream_with_fallback(messages, provider, model, temperature, max_tokens, use_case=use_case):
             yield token
 
-    async def generate_code(self, prompt: str, language: str = "python") -> str:
+    async def generate_code(
+        self,
+        prompt: str,
+        language: str = "python",
+        sample_input: str = "",
+    ) -> str:
+        sample_text = " ".join((sample_input or "").split()).strip()
+        sample_guidance = (
+            f"Use this sample input or runtime scenario when you describe the output:\n{sample_text}"
+            if sample_text
+            else (
+                "If the task needs input, invent one tiny representative example before you show the expected output. "
+                "If the task does not need input, show the normal output directly."
+            )
+        )
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "You are an expert programmer. Generate clean, well-documented "
-                    f"{language} code. Do not invent APIs or library behavior."
+                    "You are an expert programmer. Generate clean, accurate, runnable "
+                    f"{language} code. Do not invent APIs or library behavior.\n\n"
+                    "Return markdown with exactly these sections:\n"
+                    "## Summary\n"
+                    "A short explanation of what the solution does.\n"
+                    f"## Code\n```{language}\n...\n```\n"
+                    "## Output\n"
+                    "Show the expected output in a fenced text block.\n"
+                    "## Notes\n"
+                    "Use short flat bullets for assumptions, setup, or edge cases.\n\n"
+                    f"{sample_guidance}"
                 ),
             },
             {"role": "user", "content": prompt},
         ]
         return await _complete_non_stream(messages, use_case="coding")
 
-    async def explain_code(self, code: str, language: str = "python") -> str:
+    async def explain_code(
+        self,
+        code: str,
+        language: str = "python",
+        sample_input: str = "",
+    ) -> str:
+        sample_text = " ".join((sample_input or "").split()).strip()
+        sample_guidance = (
+            f"Use this sample input or runtime scenario when you describe the output:\n{sample_text}"
+            if sample_text
+            else (
+                "If the code needs input, create one tiny representative example before you describe the output. "
+                "If it does not need input, show the normal output directly."
+            )
+        )
         messages = [
             {
                 "role": "system",
                 "content": _with_presentation_style(
                     "You are an expert programming instructor. Explain the code clearly, "
-                    "step by step, and say when any behavior depends on external context."
+                    "step by step, and say when any behavior depends on external context.\n\n"
+                    "Return markdown with exactly these sections:\n"
+                    "## Summary\n"
+                    "## Explanation\n"
+                    "## Output\n"
+                    "Use a fenced text block for the expected output.\n"
+                    "## Key points\n"
+                    "Use short flat bullets.\n\n"
+                    f"{sample_guidance}"
                 ),
             },
             {"role": "user", "content": f"Explain this {language} code:\n\n{code}"},
         ]
         return await _complete_non_stream(messages, use_case="coding")
 
-    async def debug_code(self, code: str, error: str = "") -> str:
-        prompt = f"Debug this code:\n\n{code}"
+    async def debug_code(
+        self,
+        code: str,
+        language: str = "python",
+        error: str = "",
+        sample_input: str = "",
+    ) -> str:
+        prompt = f"Debug this {language} code:\n\n{code}"
         if error:
             prompt += f"\n\nError message:\n{error}"
+        sample_text = " ".join((sample_input or "").split()).strip()
+        if sample_text:
+            prompt += f"\n\nSample input or runtime scenario:\n{sample_text}"
         messages = [
             {
                 "role": "system",
                 "content": _with_presentation_style(
-                    "You are an expert debugger. Identify the real issue, avoid guessing, "
-                    "and provide a corrected solution with a concise explanation."
+                    f"You are an expert {language} debugger. Identify the real issue, avoid guessing, "
+                    "and provide a corrected solution with a concise explanation.\n\n"
+                    "Return markdown with exactly these sections:\n"
+                    "## Root cause\n"
+                    f"## Fixed code\n```{language}\n...\n```\n"
+                    "## Output\n"
+                    "Use a fenced text block for the expected output after the fix.\n"
+                    "## Fix notes\n"
+                    "Use short flat bullets for the main changes."
                 ),
             },
             {"role": "user", "content": prompt},
         ]
         return await _complete_non_stream(messages, use_case="coding")
 
-    async def optimize_code(self, code: str, language: str = "python") -> str:
+    async def optimize_code(
+        self,
+        code: str,
+        language: str = "python",
+        sample_input: str = "",
+    ) -> str:
+        sample_text = " ".join((sample_input or "").split()).strip()
+        sample_guidance = (
+            f"Use this sample input or runtime scenario when you describe the output:\n{sample_text}"
+            if sample_text
+            else (
+                "If the code needs input, create one tiny representative example before you describe the output. "
+                "If it does not need input, show the normal output directly."
+            )
+        )
         messages = [
             {
                 "role": "system",
                 "content": _with_presentation_style(
                     f"You are an expert in {language} optimization. Suggest accurate, justified "
-                    "performance improvements and avoid speculative claims."
+                    "performance improvements and avoid speculative claims.\n\n"
+                    "Return markdown with exactly these sections:\n"
+                    "## Summary\n"
+                    f"## Improved code\n```{language}\n...\n```\n"
+                    "## Output\n"
+                    "Use a fenced text block for the expected output.\n"
+                    "## Improvements\n"
+                    "Use short flat bullets for the main gains.\n\n"
+                    f"{sample_guidance}"
                 ),
             },
             {"role": "user", "content": f"Optimize this code:\n\n{code}"},
@@ -2007,8 +2090,10 @@ class AIService:
             {
                 "role": "system",
                 "content": _with_presentation_style(
-                    "Answer questions only from the provided context. If the answer is not in the context, say "
-                    "\"I don't know based on the provided document.\""
+                    "Answer questions only from the provided context. Use simple, clear language by default. "
+                    "Start with the direct answer. Prefer short paragraphs or bullets when that makes the answer easier "
+                    "to understand. If the user asks for a process, explanation, or workflow, explain it step by step. "
+                    "If the answer is not in the context, say \"I don't know based on the provided document.\""
                 ),
             },
             *[

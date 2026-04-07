@@ -10,17 +10,32 @@ import MouseSpark from "../components/MouseSpark";
 import Sidebar from "../components/chat/Sidebar";
 import Settings from "../components/Settings";
 import Topbar from "../components/Topbar";
-import { chatAPI, documentAPI, imageAPI } from "../services/api";
+import { chatAPI, imageAPI } from "../services/api";
 import { speakText, speechSupported as browserSpeechSupported, stopSpeechPlayback } from "../utils/speech";
 import { useAuthStore } from "../utils/store";
 
 const API_BASE = (import.meta.env.VITE_API_URL || "").trim();
 const API_BASE_NORMALIZED = API_BASE.replace(/\/$/, "");
-const API_ENDPOINT = API_BASE_NORMALIZED
+const buildApiEndpoint = (path) => API_BASE_NORMALIZED
   ? API_BASE_NORMALIZED.endsWith("/api")
-    ? `${API_BASE_NORMALIZED}/chat`
-    : `${API_BASE_NORMALIZED}/api/chat`
-  : "/api/chat";
+    ? `${API_BASE_NORMALIZED}${path}`
+    : `${API_BASE_NORMALIZED}/api${path}`
+  : `/api${path}`;
+const buildCompatEndpoint = (path) => {
+  if (!API_BASE_NORMALIZED) {
+    return path;
+  }
+
+  if (API_BASE_NORMALIZED.endsWith("/api")) {
+    const rootBase = API_BASE_NORMALIZED.replace(/\/api$/, "");
+    return `${rootBase}${path}` || path;
+  }
+
+  return `${API_BASE_NORMALIZED}${path}`;
+};
+const API_ENDPOINT = buildApiEndpoint("/chat");
+const DOCUMENT_UPLOAD_ENDPOINT = buildApiEndpoint("/document/upload");
+const LEGACY_DOCUMENT_UPLOAD_ENDPOINT = buildCompatEndpoint("/upload-document");
 const REQUEST_TIMEOUT_MS = 240000;
 const SESSION_STORAGE_KEY = "nova_session_id";
 const MODEL_STORAGE_KEY = "nova_selected_model";
@@ -47,7 +62,6 @@ const ACTIVE_NAV_TO_MODE = {
   Explain: "chat",
   Reasoning: "chat",
   Knowledge: "chat",
-  Documents: "chat",
   Learning: "chat",
   Images: "chat",
   Customize: "chat",
@@ -63,7 +77,6 @@ const CHAT_NAV_VALUES = new Set([
   "Explain",
   "Reasoning",
   "Knowledge",
-  "Documents",
   "Learning",
   "Images",
   "Customize",
@@ -131,10 +144,17 @@ const buildConversationExport = (title, messages) => {
       lines.push("");
       lines.push("Sources:");
       message.meta.sources.forEach((source) => {
-        const titleText = String(source?.title || source?.source || source?.url || "Source").trim();
+        const titleText = String(
+          source?.title || source?.label || source?.source || source?.url || "Source"
+        ).trim();
         const urlText = String(source?.url || "").trim();
+        const excerptText = String(source?.excerpt || "").trim();
         if (urlText) {
           lines.push(`- ${titleText}: ${urlText}`);
+        } else if (excerptText) {
+          lines.push(`- ${titleText}: ${excerptText}`);
+        } else {
+          lines.push(`- ${titleText}`);
         }
       });
     }
@@ -150,31 +170,6 @@ const buildConversationExport = (title, messages) => {
   return lines.join("\n").trim();
 };
 
-const resolveDocumentContext = (meta) => {
-  const rawId = meta?.document_id;
-  const numericId = Number(rawId);
-  const id = Number.isFinite(numericId) ? numericId : null;
-  const name = typeof meta?.document_name === "string" && meta.document_name.trim()
-    ? meta.document_name.trim()
-    : null;
-
-  return id ? { id, name } : null;
-};
-
-const withDocumentLabel = (content, role, meta) => {
-  if (role !== "user") {
-    return content || "";
-  }
-
-  const documentContext = resolveDocumentContext(meta);
-  if (!documentContext?.name || String(content || "").includes("[File:")) {
-    return content || "";
-  }
-
-  const base = String(content || "").trim();
-  return `${base}${base ? " + " : ""}[File: ${documentContext.name}]`;
-};
-
 const normalizeMessage = (message, conversationId = null) => {
   const role = message?.role || "assistant";
   const meta = message?.meta || null;
@@ -186,21 +181,11 @@ const normalizeMessage = (message, conversationId = null) => {
         ? crypto.randomUUID()
         : String(Date.now() + Math.random())),
     role,
-    content: withDocumentLabel(message?.content || "", role, meta),
+    content: String(message?.content || ""),
     conversation_id: message?.conversation_id || conversationId,
     images: Array.isArray(message?.images) ? message.images : [],
     meta,
   };
-};
-
-const extractDocumentContextFromMessages = (messageList = []) => {
-  for (let index = messageList.length - 1; index >= 0; index -= 1) {
-    const documentContext = resolveDocumentContext(messageList[index]?.meta);
-    if (documentContext?.id) {
-      return documentContext;
-    }
-  }
-  return null;
 };
 
 const NAV_TO_INSTRUCTION = {
@@ -209,7 +194,6 @@ const NAV_TO_INSTRUCTION = {
   Explain: ["[Explain mode: answer step by step, use plain language first, then add detail where it helps.]"],
   Reasoning: ["[Reasoning mode: think carefully about tradeoffs, assumptions, and safer next steps before answering.]"],
   Knowledge: ["[Knowledge mode: answer like a strong tutor, organize ideas clearly, and include examples when useful.]"],
-  Documents: ["[Documents mode: expect uploaded files, summarize them clearly, and answer from the file context first.]"],
   Learning: ["[Learning mode: structure the answer as a practical learning path with milestones, sequence, and next steps.]"],
   Images: ["[Images mode: help with creating, refining, or remixing visual prompts and image outputs.]"],
   Customize: ["[Personalize the answer to the user's preferences when helpful]"],
@@ -230,13 +214,50 @@ const getResponseImages = (payload) => ({
 
 const getResponseSources = (payload) =>
   Array.isArray(payload?.sources)
-    ? payload.sources.filter((item) => item && typeof item === "object" && item.url)
+    ? payload.sources.filter(
+        (item) =>
+          item &&
+          typeof item === "object" &&
+          (item.url || item.label || item.title || item.excerpt)
+      )
     : [];
+
+const getDocumentReferenceFromMeta = (meta) => {
+  if (!meta || typeof meta !== "object") {
+    return null;
+  }
+
+  const rawDocumentId = meta.document_id;
+  const parsedDocumentId = Number.parseInt(String(rawDocumentId ?? ""), 10);
+  const documentId = Number.isFinite(parsedDocumentId) ? parsedDocumentId : null;
+  const documentName = String(meta.document_name || "").trim() || null;
+
+  if (documentId == null && !documentName) {
+    return null;
+  }
+
+  return {
+    id: documentId,
+    name: documentName,
+  };
+};
+
+const getLatestDocumentReference = (messages = []) => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const reference = getDocumentReferenceFromMeta(messages[index]?.meta);
+    if (reference?.id != null || reference?.name) {
+      return reference;
+    }
+  }
+
+  return null;
+};
 
 const buildProgressStatus = ({
   text,
   isSearch = false,
   isImage = false,
+  isDocument = false,
   generatePromptImage = false,
   generateAnswerImage = false,
   regenerate = false,
@@ -247,6 +268,12 @@ const buildProgressStatus = ({
     return regenerate
       ? "NOVA AI is regenerating your image..."
       : "NOVA AI is generating your image...";
+  }
+
+  if (isDocument) {
+    return regenerate
+      ? "NOVA AI is revisiting your document..."
+      : "NOVA AI is analyzing your document...";
   }
 
   if (regenerate) {
@@ -452,7 +479,6 @@ function Chat() {
   const [generatePromptImage, setGeneratePromptImage] = useState(false);
   const [generateAnswerImage, setGenerateAnswerImage] = useState(false);
   const [imageGenerationAvailable, setImageGenerationAvailable] = useState(true);
-  const [activeDocumentContext, setActiveDocumentContext] = useState(null);
   const [availableProviders, setAvailableProviders] = useState([]);
   const [selectedModelKey, setSelectedModelKey] = useState(getStoredModelKey);
 
@@ -465,6 +491,10 @@ function Chat() {
   const selectedModelOption = useMemo(
     () => modelOptions.find((option) => option.id === selectedModelKey) || modelOptions[0],
     [modelOptions, selectedModelKey]
+  );
+  const activeDocumentReference = useMemo(
+    () => getLatestDocumentReference(messages),
+    [messages]
   );
   const currentConversationTitle = useMemo(() => {
     const activeConversation = conversations.find(
@@ -640,29 +670,58 @@ function Chat() {
     }
   }, [handleUnauthorized]);
 
-  const uploadDocumentForChat = useCallback(
+  const uploadDocument = useCallback(
     async (file) => {
       const formData = new FormData();
       formData.append("file", file);
 
-      const response = await documentAPI.upload(formData, {
-        onUploadProgress: (event) => {
-          const total = event.total || file?.size || 0;
-          if (!total) {
-            setStatus(`Uploading ${file?.name || "document"}...`);
-            return;
-          }
+      const token = localStorage.getItem("token");
+      const uploadTargets = [
+        DOCUMENT_UPLOAD_ENDPOINT,
+        LEGACY_DOCUMENT_UPLOAD_ENDPOINT,
+      ].filter((value, index, array) => value && array.indexOf(value) === index);
 
-          const progress = Math.min(100, Math.round((event.loaded / total) * 100));
-          setStatus(`Uploading ${file?.name || "document"}... ${progress}%`);
-        },
-      });
-      return {
-        id: response?.data?.id,
-        name: response?.data?.filename || file?.name || "document",
-      };
+      let lastError = null;
+
+      for (const target of uploadTargets) {
+        const response = await fetch(target, {
+          method: "POST",
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: formData,
+        });
+
+        if (response.status === 401 || response.status === 403) {
+          handleUnauthorized();
+          return null;
+        }
+
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
+        }
+
+        if (response.ok) {
+          return payload;
+        }
+
+        if (response.status === 404 || response.status === 405) {
+          lastError =
+            payload?.detail || payload?.message || `Document upload failed (${response.status})`;
+          continue;
+        }
+
+        throw new Error(
+          payload?.detail || payload?.message || `Document upload failed (${response.status})`
+        );
+      }
+
+      throw new Error(lastError || "Document upload failed.");
     },
-    []
+    [handleUnauthorized]
   );
 
   const loadConversations = useCallback(
@@ -681,7 +740,6 @@ function Chat() {
           startTransition(() => {
             setCurrentConversationId(null);
             setMessages([]);
-            setActiveDocumentContext(null);
           });
         }
       } catch (error) {
@@ -713,7 +771,6 @@ function Chat() {
         startTransition(() => {
           setCurrentConversationId(conversation?.id || conversationId);
           setMessages(loadedMessages);
-          setActiveDocumentContext(extractDocumentContextFromMessages(loadedMessages));
         });
       } catch (error) {
         if (error?.response?.status === 401 || error?.response?.status === 403) {
@@ -758,7 +815,6 @@ function Chat() {
     setInput("");
     setStatus("");
     setCurrentConversationId(null);
-    setActiveDocumentContext(null);
     handleNavChange(DEFAULT_CHAT_NAV);
   };
 
@@ -823,7 +879,6 @@ function Chat() {
             setCurrentConversationId(null);
             setMessages([]);
             setStatus("");
-            setActiveDocumentContext(null);
           });
         }
       } catch (error) {
@@ -893,10 +948,21 @@ function Chat() {
       const presetLabel = isStructuredPayload ? payload.presetLabel : null;
       let trimmed = String(text || "").trim();
       const hasImageAttachment = attachmentKind === "image" || isImageAttachment(attachedFile);
+      const hasDocumentAttachment = Boolean(attachedFile && !hasImageAttachment);
       const predictedImageRequest =
-        forceMode === "image" || (resolvedMode === "chat" && looksLikeImageRequest(trimmed));
+        !hasDocumentAttachment &&
+        (forceMode === "image" || (resolvedMode === "chat" && looksLikeImageRequest(trimmed)));
+      const shouldContinueDocumentConversation =
+        !hasDocumentAttachment &&
+        !predictedImageRequest &&
+        !forceMode &&
+        resolvedMode === "chat" &&
+        Boolean(activeDocumentReference?.id);
       if (!trimmed && hasImageAttachment && attachedFile && !predictedImageRequest) {
         trimmed = "Describe this image clearly.";
+      }
+      if (!trimmed && hasDocumentAttachment) {
+        trimmed = "Summarize this document.";
       }
       const displayValue = String(displayText || trimmed).trim();
       const effectiveGeneratePromptImage = imageGenerationAvailable && generatePromptImage;
@@ -911,6 +977,10 @@ function Chat() {
         attachedImageDataUrl = await readFileAsDataUrl(attachedFile);
       }
 
+      const initialDocumentReference = shouldContinueDocumentConversation
+        ? activeDocumentReference
+        : null;
+
       stopSpeaking();
       const optimisticUserMessage = createMessage("user", displayValue || trimmed, currentConversationId, {
         images: attachedImageDataUrl ? [attachedImageDataUrl] : [],
@@ -918,27 +988,30 @@ function Chat() {
           generate_prompt_image: effectiveGeneratePromptImage,
           generate_answer_image: effectiveGenerateAnswerImage,
           ...(presetLabel ? { quick_mode: presetLabel } : {}),
-          ...(attachedFile?.name && !hasImageAttachment ? { document_name: attachedFile.name } : {}),
           ...(hasImageAttachment ? { attachment_kind: "image" } : {}),
+          ...(hasDocumentAttachment ? { attachment_kind: "document" } : {}),
           ...(attachedImageDataUrl ? { image_origin: "upload" } : {}),
-          ...(activeDocumentContext?.id && !attachedFile
-            ? {
-                document_id: activeDocumentContext.id,
-                document_name: activeDocumentContext.name,
-              }
-            : {}),
+          ...(initialDocumentReference?.id != null ? { document_id: initialDocumentReference.id } : {}),
+          ...(initialDocumentReference?.name ? { document_name: initialDocumentReference.name } : {}),
         },
       });
       setMessages((previous) => [...previous, optimisticUserMessage]);
       setIsTyping(true);
       if (attachedFile?.name) {
-        setStatus(hasImageAttachment ? `Preparing ${attachedFile.name}...` : `Reading ${attachedFile.name}...`);
+        setStatus(
+          hasImageAttachment
+            ? `Preparing ${attachedFile.name}...`
+            : hasDocumentAttachment
+              ? `Uploading ${attachedFile.name}...`
+              : `Reading ${attachedFile.name}...`
+        );
       } else {
         setStatus(
           buildProgressStatus({
             text: trimmed,
             isSearch: forceMode === "search" || activeNav === "Search",
             isImage: predictedImageRequest,
+            isDocument: shouldContinueDocumentConversation,
             generatePromptImage: effectiveGeneratePromptImage,
             generateAnswerImage: effectiveGenerateAnswerImage,
           })
@@ -1008,7 +1081,6 @@ function Chat() {
             }
           );
 
-          setActiveDocumentContext(null);
           setMessages((previous) => {
             const updated = previous.map((message) =>
               message.id === optimisticUserMessage.id
@@ -1032,25 +1104,62 @@ function Chat() {
           return;
         }
 
-        let documentContext = attachedFile ? null : activeDocumentContext;
+        let documentReference = initialDocumentReference;
 
-        if (attachedFile && !hasImageAttachment) {
-          const uploadedDocument = await uploadDocumentForChat(attachedFile);
-          if (!uploadedDocument?.id) {
-            throw new Error("Document upload did not return an id.");
+        if (hasDocumentAttachment && attachedFile) {
+          setStatus(`Uploading ${attachedFile.name || "document"}...`);
+          const uploadedDocument = await uploadDocument(attachedFile);
+
+          if (!uploadedDocument) {
+            return;
           }
-          documentContext = uploadedDocument;
-          setActiveDocumentContext(uploadedDocument);
+
+          documentReference = {
+            id: uploadedDocument?.id ?? null,
+            name: uploadedDocument?.filename || attachedFile.name || null,
+          };
+
+          setMessages((previous) =>
+            previous.map((message) =>
+              message.id === optimisticUserMessage.id
+                ? {
+                    ...message,
+                    meta: {
+                      ...(message.meta || {}),
+                      attachment_kind: "document",
+                      ...(documentReference?.id != null ? { document_id: documentReference.id } : {}),
+                      ...(documentReference?.name ? { document_name: documentReference.name } : {}),
+                    },
+                  }
+                : message
+            )
+          );
+
+          if (documentReference?.id == null) {
+            throw new Error("Document upload did not return a document id.");
+          }
+
+          if (!uploadedDocument?.is_processed) {
+            const detail =
+              uploadedDocument?.summary ||
+              "The document uploaded, but no readable text could be extracted.";
+            setMessages((previous) => [
+              ...previous,
+              createMessage("assistant", detail, currentConversationId),
+            ]);
+            return;
+          }
         }
 
-        const requestMode = documentContext?.id
+        const requestMode = hasDocumentAttachment
           ? "documents"
-          : forceMode || (resolvedMode === "chat" && looksLikeImageRequest(trimmed) ? "image" : resolvedMode);
+          : forceMode || (shouldContinueDocumentConversation ? "documents" : predictedImageRequest ? "image" : resolvedMode);
         setStatus(
           buildProgressStatus({
             text: trimmed,
             isSearch: requestMode === "search",
             isImage: requestMode === "image",
+            isDocument: requestMode === "documents",
             generatePromptImage: effectiveGeneratePromptImage,
             generateAnswerImage: effectiveGenerateAnswerImage,
           })
@@ -1058,11 +1167,9 @@ function Chat() {
 
         const trimmedPromptPrefix = String(promptPrefix || "").trim();
         const combinedPromptPrefix = [toolPrefix, trimmedPromptPrefix].filter(Boolean).join("\n");
-        const prompt = requestMode === "documents"
-          ? [trimmedPromptPrefix, trimmed].filter(Boolean).join("\n")
-          : combinedPromptPrefix
-            ? `${combinedPromptPrefix}\n${trimmed}`
-            : trimmed;
+        const prompt = combinedPromptPrefix
+          ? `${combinedPromptPrefix}\n${trimmed}`
+          : trimmed;
         const selectedProvider =
           selectedModelOption?.provider && selectedModelOption?.model
             ? {
@@ -1090,10 +1197,12 @@ function Chat() {
             stream: true,
             mode: requestMode,
             conversation_id: currentConversationId,
-            ...(documentContext?.id ? { document_id: documentContext.id } : {}),
             ...selectedProvider,
             generate_prompt_image: effectiveGeneratePromptImage,
             generate_answer_image: effectiveGenerateAnswerImage,
+            ...(requestMode === "documents" && documentReference?.id != null
+              ? { document_id: documentReference.id }
+              : {}),
             ...(attachedImageDataUrl
               ? {
                   image_b64: attachedImageDataUrl.includes(",")
@@ -1155,11 +1264,11 @@ function Chat() {
                     images: promptImages,
                     meta: {
                       ...(message.meta || {}),
-                      ...(documentContext?.id
-                        ? {
-                            document_id: documentContext.id,
-                            document_name: documentContext.name,
-                          }
+                      ...(requestMode === "documents" && documentReference?.id != null
+                        ? { document_id: documentReference.id }
+                        : {}),
+                      ...(requestMode === "documents" && documentReference?.name
+                        ? { document_name: documentReference.name }
                         : {}),
                     },
                   }
@@ -1172,10 +1281,6 @@ function Chat() {
 
             return updated;
           });
-
-          if (documentContext?.id) {
-            setActiveDocumentContext(documentContext);
-          }
 
           await loadConversations(nextConversationId);
           return;
@@ -1248,22 +1353,22 @@ function Chat() {
 
         setMessages((previous) => {
           const updated = previous.map((message) =>
-            message.id === optimisticUserMessage.id
-              ? {
-                  ...message,
-                  conversation_id: nextConversationId,
-                  images: promptImages,
-                  meta: {
-                    ...(message.meta || {}),
-                    ...(documentContext?.id
-                      ? {
-                          document_id: documentContext.id,
-                          document_name: documentContext.name,
-                        }
-                      : {}),
-                  },
-                }
-              : message
+              message.id === optimisticUserMessage.id
+                ? {
+                    ...message,
+                    conversation_id: nextConversationId,
+                    images: promptImages,
+                    meta: {
+                      ...(message.meta || {}),
+                      ...(requestMode === "documents" && documentReference?.id != null
+                        ? { document_id: documentReference.id }
+                        : {}),
+                      ...(requestMode === "documents" && documentReference?.name
+                        ? { document_name: documentReference.name }
+                        : {}),
+                    },
+                  }
+                : message
           );
 
           const assistantIndex = updated.findIndex(
@@ -1282,10 +1387,6 @@ function Chat() {
 
           return updated;
         });
-
-        if (documentContext?.id) {
-          setActiveDocumentContext(documentContext);
-        }
 
         await loadConversations(nextConversationId);
       } catch (error) {
@@ -1320,10 +1421,10 @@ function Chat() {
       }
     },
     [
-      activeDocumentContext,
       currentConversationId,
       handleUnauthorized,
       activeNav,
+      activeDocumentReference,
       imageGenerationAvailable,
       isConversationLoading,
       isTyping,
@@ -1332,7 +1433,7 @@ function Chat() {
       resolvedMode,
       stopSpeaking,
       toolPrefix,
-      uploadDocumentForChat,
+      uploadDocument,
       generateAnswerImage,
       generatePromptImage,
     ]
@@ -1351,13 +1452,16 @@ function Chat() {
       }
 
       stopSpeaking();
-      const documentContext = activeDocumentContext || extractDocumentContextFromMessages(messages);
       const targetMessage = messages.find((message) => message.id === messageId) || null;
       const lastUserContent = [...messages]
         .reverse()
         .find((message) => message.role === "user")?.content || "";
       const effectiveGenerateAnswerImage = imageGenerationAvailable && generateAnswerImage;
-      const requestMode = documentContext?.id
+      const shouldUseDocumentMode =
+        resolvedMode === "chat" &&
+        Boolean(activeDocumentReference?.id) &&
+        !looksLikeImageRequest(lastUserContent);
+      const requestMode = shouldUseDocumentMode
         ? "documents"
         : resolvedMode === "chat" && looksLikeImageRequest(lastUserContent)
           ? "image"
@@ -1367,6 +1471,7 @@ function Chat() {
         buildProgressStatus({
           isSearch: requestMode === "search",
           isImage: requestMode === "image",
+          isDocument: requestMode === "documents",
           generateAnswerImage: effectiveGenerateAnswerImage,
           regenerate: true,
         })
@@ -1378,12 +1483,14 @@ function Chat() {
           mode: requestMode,
           stream: false,
           previous_answer: targetMessage?.content || "",
-          ...(documentContext?.id ? { document_id: documentContext.id } : {}),
           ...(selectedModelOption?.provider && selectedModelOption?.model
             ? {
                 provider: selectedModelOption.provider,
                 model: selectedModelOption.model,
               }
+            : {}),
+          ...(requestMode === "documents" && activeDocumentReference?.id != null
+            ? { document_id: activeDocumentReference.id }
             : {}),
           generate_answer_image: effectiveGenerateAnswerImage,
         });
@@ -1397,12 +1504,6 @@ function Chat() {
             ? createMessage("assistant", reply, nextConversationId, {
                 images: answerImages,
                 meta: {
-                  ...(documentContext?.id
-                    ? {
-                        document_id: documentContext.id,
-                        document_name: documentContext.name,
-                      }
-                    : {}),
                   ...(answerSources.length ? { sources: answerSources } : {}),
                 },
               })
@@ -1441,10 +1542,6 @@ function Chat() {
           });
         });
 
-        if (documentContext?.id) {
-          setActiveDocumentContext(documentContext);
-        }
-
         await loadConversations(nextConversationId);
       } catch (error) {
         if (error?.response?.status === 401 || error?.response?.status === 403) {
@@ -1463,7 +1560,6 @@ function Chat() {
       }
     },
     [
-      activeDocumentContext,
       currentConversationId,
       handleUnauthorized,
       imageGenerationAvailable,
@@ -1471,6 +1567,7 @@ function Chat() {
       isTyping,
       loadConversations,
       messages,
+      activeDocumentReference,
       regeneratableMessageId,
       selectedModelOption,
       resolvedMode,
@@ -1489,11 +1586,6 @@ function Chat() {
 
       stopSpeaking();
       setInput(rewrittenInput);
-
-      const messageDocumentContext = resolveDocumentContext(message?.meta);
-      if (messageDocumentContext?.id) {
-        setActiveDocumentContext(messageDocumentContext);
-      }
 
       setStatus("");
       window.setTimeout(() => {

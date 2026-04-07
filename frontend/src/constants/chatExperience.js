@@ -47,8 +47,8 @@ export const CHAT_COMPOSER_MENU = [
   {
     id: "attach",
     emoji: "\uD83D\uDCCE",
-    label: "Add photos & files",
-    description: "Upload documents now, or attach a photo to remix",
+    label: "Add file",
+    description: "Attach a document for chat analysis or a photo for image remixing",
   },
   {
     id: "create_image",
@@ -85,7 +85,7 @@ export const CHAT_COMPOSER_MENU = [
 export const QUICK_START_CHIPS = [
   { label: "\uD83E\uDD16 Compare top AIs", text: "Compare ChatGPT, Claude, Gemini, and DeepSeek for real work." },
   { label: "\uD83E\uDDE0 Best Claude features", text: "What are the strongest Claude features right now?" },
-  { label: "\uD83D\uDCC4 Summarize a document", text: "Summarize this document in simple language and highlight the key points." },
+  { label: "\uD83D\uDCCB Summarize notes", text: "Summarize these notes in simple language and highlight the key points." },
   { label: "\uD83D\uDECD\uFE0F Best laptop under $1000", text: "Find the best laptops under $1000 and compare them by value." },
   { label: "\uD83C\uDFA8 Create a hero image", text: "Create a cinematic hero image idea for NOVA AI." },
 ];

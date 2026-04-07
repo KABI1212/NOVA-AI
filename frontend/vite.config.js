@@ -12,6 +12,11 @@ export default defineConfig({
         secure: false,
         rewrite: (path) => path,
       },
+      '/upload-document': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false,
+      },
     },
   },
   resolve: {

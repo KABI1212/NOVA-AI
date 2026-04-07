@@ -171,6 +171,20 @@ def test_build_ai_messages_uses_raw_prompt_for_instruction_detection() -> None:
     assert not any("The user explicitly wants a short/simple answer." in content for content in system_messages)
 
 
+def test_build_ai_messages_adds_document_grounding_instruction_when_context_exists() -> None:
+    messages = chat_module._build_ai_messages(
+        history=[],
+        user_message="What is the launch date?",
+        mode="documents",
+        doc_context="Launch date: April 5, 2026.",
+    )
+
+    system_messages = [message["content"] for message in messages if message.get("role") == "system"]
+
+    assert any("Document verification mode:" in content for content in system_messages)
+    assert any("Document context:" in content for content in system_messages)
+
+
 def test_build_cross_check_messages_preserves_markdown_structure_guidance() -> None:
     messages = chat_module._build_cross_check_messages(
         "Explain zero trust architecture.",
@@ -235,5 +249,36 @@ def test_best_effort_answer_retries_with_fresh_sources_when_draft_is_stale(
             max_tokens=900,
         )
         assert result == "Kolkata Knight Riders won the 2024 IPL title."
+
+    asyncio.run(scenario())
+
+
+def test_best_effort_answer_bundle_document_mode_uses_document_fallback_without_web_search(
+    monkeypatch,
+) -> None:
+    async def failing_collect(*args, **kwargs):
+        raise RuntimeError("provider unavailable")
+
+    async def forbidden_search_backup_bundle(message: str, force_search: bool = False):
+        raise AssertionError("document mode should not fall back to web search")
+
+    monkeypatch.setattr(chat_module, "_collect_ai_response", failing_collect)
+    monkeypatch.setattr(chat_module, "_search_backup_answer_bundle", forbidden_search_backup_bundle)
+
+    async def scenario() -> None:
+        answer, sources = await chat_module._best_effort_answer_bundle(
+            history=[],
+            user_message="What is the launch date?",
+            mode="documents",
+            provider=None,
+            model=None,
+            doc_context="Launch date: April 5, 2026.\n\nVenue: Chennai.",
+            max_tokens=900,
+        )
+
+        assert "april 5, 2026" in answer.lower()
+        assert sources
+        assert sources[0]["kind"] == "document"
+        assert "April 5, 2026" in sources[0]["excerpt"]
 
     asyncio.run(scenario())

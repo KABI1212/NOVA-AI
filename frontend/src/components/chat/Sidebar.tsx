@@ -43,22 +43,7 @@ type SidebarItem = {
 
 const CHAT_ROUTE = "/chat";
 
-const buildChatRoute = (navValue?: string, presetId?: string) => {
-  const params = new URLSearchParams();
-
-  if (navValue && navValue !== "Chat") {
-    params.set("nav", navValue);
-  }
-
-  if (presetId) {
-    params.set("preset", presetId);
-  }
-
-  const query = params.toString();
-  return query ? `${CHAT_ROUTE}?${query}` : CHAT_ROUTE;
-};
-
-const mainItems: SidebarItem[] = [
+const chatItems: SidebarItem[] = [
   {
     key: "new",
     label: "New chat",
@@ -72,122 +57,22 @@ const mainItems: SidebarItem[] = [
     ),
   },
   {
-    key: "search",
-    label: "Search",
-    route: buildChatRoute("Search"),
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <circle cx="11" cy="11" r="8" />
-        <line x1="21" y1="21" x2="16.65" y2="16.65" />
-      </svg>
-    ),
-  },
-  {
-    key: "code",
-    label: "Code",
-    route: buildChatRoute("Code"),
-    navValue: "Code",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <polyline points="16 18 22 12 16 6" />
-        <polyline points="8 6 2 12 8 18" />
-      </svg>
-    ),
-  },
-  {
-    key: "documents",
-    label: "Documents",
-    route: buildChatRoute("Documents"),
-    navValue: "Documents",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16l4-2h10a2 2 0 0 0 2-2V8z" />
-        <path d="M14 2v6h6" />
-      </svg>
-    ),
-  },
-  {
-    key: "images",
-    label: "Images",
-    route: buildChatRoute("Images", "create_image"),
-    navValue: "Images",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <rect x="3" y="3" width="18" height="18" rx="2" />
-        <circle cx="8.5" cy="8.5" r="1.5" />
-        <path d="m21 15-5-5L5 21" />
-      </svg>
-    ),
-  },
-  {
-    key: "customize",
-    label: "Customize",
-    route: buildChatRoute("Customize"),
-    navValue: "Customize",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M12 1v4" />
-        <path d="M12 19v4" />
-        <path d="M4.22 4.22l2.83 2.83" />
-        <path d="M16.95 16.95l2.83 2.83" />
-        <path d="M1 12h4" />
-        <path d="M19 12h4" />
-        <path d="M4.22 19.78l2.83-2.83" />
-        <path d="M16.95 7.05l2.83-2.83" />
-      </svg>
-    ),
-  },
-  {
-    key: "chats",
-    label: "Chats",
-    route: buildChatRoute("Chats"),
-    navValue: "Chats",
+    key: "chat",
+    label: "Main chat",
+    route: CHAT_ROUTE,
+    navValue: "Chat",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
       </svg>
     ),
   },
-  {
-    key: "projects",
-    label: "Projects",
-    route: buildChatRoute("Projects"),
-    navValue: "Projects",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M3 7h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
-      </svg>
-    ),
-  },
-  {
-    key: "artifacts",
-    label: "Artifacts",
-    route: buildChatRoute("Artifacts"),
-    navValue: "Artifacts",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <rect x="3" y="3" width="18" height="18" rx="2" />
-        <path d="M9 9h6M9 12h6M9 15h4" />
-      </svg>
-    ),
-  },
 ];
 
-const workspaceItems: SidebarItem[] = [
+const assistantItems: SidebarItem[] = [
   {
-    key: "workspace-search",
-    label: "Search page",
-    route: "/search",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <circle cx="11" cy="11" r="8" />
-        <line x1="21" y1="21" x2="16.65" y2="16.65" />
-      </svg>
-    ),
-  },
-  {
-    key: "workspace-code",
-    label: "Code page",
+    key: "code",
+    label: "Code Assistant",
     route: "/code",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -197,19 +82,8 @@ const workspaceItems: SidebarItem[] = [
     ),
   },
   {
-    key: "workspace-documents",
-    label: "Documents page",
-    route: "/documents",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16l4-2h10a2 2 0 0 0 2-2V8z" />
-        <path d="M14 2v6h6" />
-      </svg>
-    ),
-  },
-  {
-    key: "workspace-images",
-    label: "Images page",
+    key: "images",
+    label: "Image Generator",
     route: "/images",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -220,8 +94,8 @@ const workspaceItems: SidebarItem[] = [
     ),
   },
   {
-    key: "workspace-explain",
-    label: "Explain page",
+    key: "explain",
+    label: "Explain",
     route: "/explain",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -232,8 +106,8 @@ const workspaceItems: SidebarItem[] = [
     ),
   },
   {
-    key: "workspace-reasoning",
-    label: "Reasoning page",
+    key: "reasoning",
+    label: "Reasoning",
     route: "/reasoning",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -243,8 +117,8 @@ const workspaceItems: SidebarItem[] = [
     ),
   },
   {
-    key: "workspace-knowledge",
-    label: "Knowledge page",
+    key: "knowledge",
+    label: "Knowledge",
     route: "/knowledge",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -254,14 +128,40 @@ const workspaceItems: SidebarItem[] = [
     ),
   },
   {
-    key: "workspace-learning",
-    label: "Learning page",
+    key: "learning",
+    label: "Learning",
     route: "/learning",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <path d="M12 14v7" />
         <path d="M9 18h6" />
         <path d="M4 4h16v8H4z" />
+      </svg>
+    ),
+  },
+];
+
+const workspaceItems: SidebarItem[] = [
+  {
+    key: "search",
+    label: "Web Search",
+    route: "/search",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <circle cx="11" cy="11" r="8" />
+        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+      </svg>
+    ),
+  },
+  {
+    key: "my-shares",
+    label: "Shared Chats",
+    route: "/my-shares",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M10 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10Z" />
+        <path d="M21 21l-6-6" />
+        <path d="M3 21c1.5-3 4-4.5 7-4.5" />
       </svg>
     ),
   },
@@ -533,8 +433,9 @@ export default function Sidebar({
         </div>
 
         <div className="sb-scroll">
+          <div className="sl">Chat</div>
           <div className="slist">
-            {mainItems.map((item) => (
+            {chatItems.map((item) => (
               <button
                 key={item.key}
                 className={`sitem${isItemActive(item) ? " active" : ""}`}
@@ -547,7 +448,22 @@ export default function Sidebar({
             ))}
           </div>
 
-          <div className="sl">Full Pages</div>
+          <div className="sl">Assistants</div>
+          <div className="slist">
+            {assistantItems.map((item) => (
+              <button
+                key={item.key}
+                className={`sitem${isItemActive(item) ? " active" : ""}`}
+                type="button"
+                onClick={() => handleClick(item)}
+              >
+                {item.icon}
+                <span className="slabel">{item.label}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="sl">Workspace</div>
           <div className="slist">
             {workspaceItems.map((item) => (
               <button
@@ -739,7 +655,7 @@ export default function Sidebar({
           <div className="modal" onClick={(event) => event.stopPropagation()}>
             <h3>Delete Account</h3>
             <p>
-              This removes your profile, conversations, uploaded documents, and learning history. Type{" "}
+              This removes your profile, conversations, and learning history. Type{" "}
               <strong>DELETE</strong> to continue.
             </p>
             <label className="modal-label" htmlFor="delete-account-confirmation">

@@ -7,7 +7,7 @@ import {
   DEFAULT_CHAT_PLACEHOLDER,
 } from "../../constants/chatExperience";
 
-type ToolMode = "search" | "image" | null;
+type ToolMode = "search" | "image" | "documents" | null;
 type AttachmentKind = "image" | "document" | null;
 type LauncherView = "closed" | "main" | "more";
 
@@ -68,9 +68,29 @@ const PRESET_MAP = Object.fromEntries(
 ) as Record<string, ComposerPreset>;
 
 const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"];
-const FILE_INPUT_ACCEPT =
-  ".pdf,.txt,.docx,.md,.csv,.json,.py,.js,.jsx,.ts,.tsx,.html,.htm,.css,.xml,.yml,.yaml,.png,.jpg,.jpeg,.webp,.gif,.bmp";
-const QUICK_TOOL_BUTTONS: Array<{ key: Exclude<ToolMode, null>; label: string; emoji: string }> = [
+const DOCUMENT_EXTENSIONS = [
+  ".pdf",
+  ".txt",
+  ".docx",
+  ".xlsx",
+  ".xlsm",
+  ".md",
+  ".csv",
+  ".json",
+  ".py",
+  ".js",
+  ".jsx",
+  ".ts",
+  ".tsx",
+  ".html",
+  ".htm",
+  ".css",
+  ".xml",
+  ".yml",
+  ".yaml",
+];
+const FILE_INPUT_ACCEPT = [...IMAGE_EXTENSIONS, ...DOCUMENT_EXTENSIONS].join(",");
+const QUICK_TOOL_BUTTONS: Array<{ key: Exclude<ToolMode, null | "documents">; label: string; emoji: string }> = [
   { key: "search", label: "Search", emoji: "\u{1F50E}" },
   { key: "image", label: "Image", emoji: "\u2728" },
 ];
@@ -164,8 +184,10 @@ export default function ChatInput({
     : "Voice input is not supported in this browser";
   const helperNote = selectedPreset
     ? selectedPreset.description
-    : attachedImage
-      ? "Photo uploads now go straight into the image tool for edits or remixes."
+    : attachedFile
+      ? attachedImage
+        ? "Photo uploads now go straight into the image tool for edits or remixes."
+        : "Document ready for chat analysis. Ask a question or send to get a summary."
       : status || "Use + to attach a file, launch research, or switch into image mode.";
 
   useEffect(() => {
@@ -364,15 +386,9 @@ export default function ChatInput({
       return;
     }
 
-    const imageFile = isImageFile(file);
     setAttachedFile(file);
     setLauncherView("closed");
-
-    if (imageFile) {
-      setSelectedPresetId("create_image");
-    } else {
-      setSelectedPresetId((current) => (current === "create_image" ? null : current));
-    }
+    setSelectedPresetId(isImageFile(file) ? "create_image" : null);
   };
 
   const dispatchMessage = (rawValue: string) => {
@@ -383,17 +399,22 @@ export default function ChatInput({
     const trimmed = String(rawValue || "").trim();
     const currentFile = attachedFileRef.current;
     const imageAttachment = isImageFile(currentFile);
+    const documentAttachment = Boolean(currentFile && !imageAttachment);
     if (!trimmed && !currentFile) {
       return;
     }
 
     const activePreset = selectedPresetId ? PRESET_MAP[selectedPresetId] || null : null;
-    const attachmentKind: AttachmentKind = currentFile ? (imageAttachment ? "image" : "document") : null;
-    const attachmentLabel = attachmentKind === "image" ? "Photo" : "File";
+    const attachmentKind: AttachmentKind = currentFile
+      ? imageAttachment
+        ? "image"
+        : "document"
+      : null;
+    const attachmentLabel = imageAttachment ? "Photo" : "File";
     const fallbackText = currentFile
       ? imageAttachment
         ? "Create a polished edit from this uploaded photo."
-        : "Summarize this document in simple words."
+        : "Summarize this document."
       : "";
     const text = trimmed || fallbackText;
     const displayText = currentFile
@@ -406,7 +427,7 @@ export default function ChatInput({
       file: currentFile || null,
       attachmentKind,
       presetId: activePreset?.id || null,
-      forceMode: activePreset?.forceMode || toolMode || null,
+      forceMode: activePreset?.forceMode || (documentAttachment ? "documents" : toolMode || null),
       promptPrefix: activePreset?.promptPrefix || "",
       presetLabel: activePreset ? `${activePreset.emoji} ${activePreset.label}` : null,
     });
@@ -644,8 +665,7 @@ export default function ChatInput({
                 </button>
 
                 <div className="launcher-note">
-                  {NOTE_PIN_ICON} Photos now flow into the image tool for edits and remixes. Documents still upload
-                  into chat for analysis and summarization.
+                  {NOTE_PIN_ICON} Photos go to image remix. Documents stay in main chat for summaries and Q&A.
                 </div>
               </div>
             )}

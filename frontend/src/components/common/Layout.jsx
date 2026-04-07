@@ -5,7 +5,6 @@ import { motion } from "framer-motion";
 import {
   BookOpen,
   Code,
-  FileText,
   GraduationCap,
   Image,
   Lightbulb,
@@ -50,7 +49,6 @@ function Layout({ children }) {
       { icon: Lightbulb, label: "Deep Explain", mode: "deep", path: "/explain" },
       { icon: ShieldCheck, label: "Safe Reasoning", mode: "safe", path: "/reasoning" },
       { icon: BookOpen, label: "Knowledge", mode: "knowledge", path: "/knowledge" },
-      { icon: FileText, label: "Documents", mode: "documents", path: "/documents" },
       { icon: GraduationCap, label: "Learning", mode: "learning", path: "/learning" },
       { icon: Image, label: "Image Generator", mode: "image", path: "/images" },
     ],

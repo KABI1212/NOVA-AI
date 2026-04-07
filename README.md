@@ -1,6 +1,6 @@
 # NOVA AI
 
-NOVA AI is a full-stack AI workspace with chat, image generation, document analysis, code help, search, sharing, and learning tools.
+NOVA AI is a full-stack AI workspace with chat, image generation, document analysis, code help, search, sharing, learning tools, and email-OTP-protected login.
 
 ## Features
 
@@ -9,13 +9,14 @@ NOVA AI is a full-stack AI workspace with chat, image generation, document analy
 - Document upload, summarization, and question answering
 - Code generation, explanation, debugging, and optimization helpers
 - Search mode, shareable chats, and learning-roadmap flows
+- Two-step login with email OTP verification over SMTP or SendGrid-compatible delivery
 - Markdown answers with tables, code blocks, callouts, and friendly heading formatting
 
 ## Stack
 
 - Backend: FastAPI, MongoDB, Redis, httpx, provider SDKs
 - Frontend: React 18, Vite, Zustand, react-markdown
-- Auth: JWT + bcrypt
+- Auth: JWT + bcrypt + email OTP verification
 - Retrieval: lexical fallback by default, optional embedding-assisted retrieval when OpenAI embeddings are configured
 
 ## Local Setup
@@ -57,6 +58,12 @@ GOOGLE_API_KEY=your-google-key
 GEMINI_API_KEY=your-google-key
 GEMINI_IMAGE_MODEL=gemini-2.5-flash-image
 AI_IMAGE_REQUEST_TIMEOUT_SECONDS=180
+EMAIL_PROVIDER=smtp
+EMAIL_FROM_ADDRESS=no-reply@example.com
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=your-smtp-username
+SMTP_PASSWORD=your-smtp-password
 ```
 
 Run the backend:
@@ -94,6 +101,9 @@ OPENAI_API_KEY=
 GEMINI_IMAGE_MODEL=gemini-2.5-flash-image
 AI_IMAGE_REQUEST_TIMEOUT_SECONDS=180
 SECRET_KEY=change-me
+EMAIL_PROVIDER=sendgrid
+EMAIL_FROM_ADDRESS=no-reply@example.com
+SENDGRID_API_KEY=your-sendgrid-key
 ```
 
 ## Provider Notes
@@ -102,6 +112,59 @@ SECRET_KEY=change-me
 - Image generation uses Gemini when Google keys are present and Gemini is selected or OpenAI is unavailable.
 - Backend voice endpoints still require `OPENAI_API_KEY`.
 - Document retrieval works without FAISS; the app falls back to lexical search when embedding/vector extras are unavailable.
+- Login OTP email delivery supports `EMAIL_PROVIDER=smtp` or `EMAIL_PROVIDER=sendgrid`. In debug mode with no provider configured, OTP codes are logged to the backend for local development.
+
+## Email Setup
+
+### Gmail SMTP
+
+```env
+EMAIL_PROVIDER=smtp
+EMAIL_FROM_ADDRESS=yourgmail@gmail.com
+EMAIL_FROM_NAME=NOVA AI
+EMAIL_REPLY_TO=yourgmail@gmail.com
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=yourgmail@gmail.com
+SMTP_PASSWORD=your-16-char-google-app-password
+SMTP_USE_TLS=true
+SMTP_USE_SSL=false
+SMTP_TIMEOUT_SECONDS=20
+```
+
+### Outlook SMTP
+
+```env
+EMAIL_PROVIDER=smtp
+EMAIL_FROM_ADDRESS=you@outlook.com
+EMAIL_FROM_NAME=NOVA AI
+EMAIL_REPLY_TO=you@outlook.com
+SMTP_HOST=smtp-mail.outlook.com
+SMTP_PORT=587
+SMTP_USERNAME=you@outlook.com
+SMTP_PASSWORD=your-outlook-password-or-app-password
+SMTP_USE_TLS=true
+SMTP_USE_SSL=false
+SMTP_TIMEOUT_SECONDS=20
+```
+
+### SendGrid
+
+```env
+EMAIL_PROVIDER=sendgrid
+EMAIL_FROM_ADDRESS=verified-sender@yourdomain.com
+EMAIL_FROM_NAME=NOVA AI
+EMAIL_REPLY_TO=verified-sender@yourdomain.com
+SENDGRID_API_KEY=your-sendgrid-api-key
+SMTP_TIMEOUT_SECONDS=20
+```
+
+Notes:
+
+- Gmail requires 2-Step Verification and an App Password.
+- SendGrid requires a verified sender or verified domain for `EMAIL_FROM_ADDRESS`.
+- Restart the backend after changing email settings.
+- Once you can log in, you can call `POST /api/auth/email-test` with your bearer token to verify inbox delivery to your registered account email.
 
 ## Troubleshooting
 
@@ -116,3 +179,9 @@ SECRET_KEY=change-me
 
 - Chat says providers failed
   Make sure the backend is running and at least one provider key is configured in `backend/.env`.
+
+- OTP emails are not arriving
+  Check `EMAIL_PROVIDER`, sender address, and SMTP or SendGrid credentials in `backend/.env`, then restart the backend.
+
+- I want to test inbox delivery directly
+  Sign in, open `/docs`, and call `POST /api/auth/email-test` with your bearer token. It sends a test message to your account email.

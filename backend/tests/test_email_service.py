@@ -1,0 +1,135 @@
+from __future__ import annotations
+
+import importlib
+import smtplib
+
+import pytest
+
+from services.email_service import EmailService
+email_service_module = importlib.import_module("services.email_service")
+
+
+def test_build_login_otp_email_renders_branded_html() -> None:
+    service = EmailService()
+
+    subject, text_body, html_body = service._build_login_otp_email(
+        otp_code="123456",
+        recipient_name="Alex",
+    )
+
+    assert "verification code" in subject.lower()
+    assert "123456" in text_body
+    assert "expires in 5 minutes" in text_body.lower()
+    assert "NOVA AI" in html_body
+    assert "Your one-time verification code" in html_body
+    assert "Security note" in html_body
+    assert "123456" in html_body
+
+
+def test_build_test_email_renders_delivery_confirmation() -> None:
+    service = EmailService()
+
+    subject, text_body, html_body = service._build_test_email(
+        recipient_name="Alex",
+    )
+
+    assert "delivery test" in subject.lower()
+    assert "test email" in text_body.lower()
+    assert "Inbox delivery is working" in html_body
+    assert "email provider is connected successfully" in html_body
+
+
+def test_gmail_smtp_auth_failure_maps_to_app_password_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = EmailService()
+
+    class _FakeSMTP:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def starttls(self, context=None) -> None:
+            return None
+
+        def login(self, username: str, password: str) -> None:
+            raise smtplib.SMTPAuthenticationError(535, b"5.7.8 Username and Password not accepted")
+
+    monkeypatch.setattr(email_service_module.settings, "SMTP_HOST", "smtp.gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PORT", 587)
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USERNAME", "kabileshk702@gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "wrong-password")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USE_TLS", True)
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USE_SSL", False)
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "kabileshk702@gmail.com")
+    monkeypatch.setattr(email_service_module.smtplib, "SMTP", _FakeSMTP)
+
+    with pytest.raises(email_service_module.EmailDeliveryError) as exc_info:
+        service._send_via_smtp(
+            recipient_email="someone@example.com",
+            subject="Test",
+            text_body="Hello",
+            html_body="<p>Hello</p>",
+        )
+
+    assert "Google App Password" in str(exc_info.value)
+
+
+def test_gmail_app_password_spaces_are_removed_before_login(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = EmailService()
+    captured: dict = {}
+
+    class _FakeSMTP:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def starttls(self, context=None) -> None:
+            return None
+
+        def login(self, username: str, password: str) -> None:
+            captured["username"] = username
+            captured["password"] = password
+
+        def send_message(self, message, from_addr=None, to_addrs=None) -> None:
+            return None
+
+    monkeypatch.setattr(email_service_module.settings, "SMTP_HOST", "smtp.gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PORT", 587)
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USERNAME", "kabileshkofficial@gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "gnnw osso ygck yhbx")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USE_TLS", True)
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USE_SSL", False)
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "kabileshkofficial@gmail.com")
+    monkeypatch.setattr(email_service_module.smtplib, "SMTP", _FakeSMTP)
+
+    service._send_via_smtp(
+        recipient_email="someone@example.com",
+        subject="Test",
+        text_body="Hello",
+        html_body="<p>Hello</p>",
+    )
+
+    assert captured["username"] == "kabileshkofficial@gmail.com"
+    assert captured["password"] == "gnnwossoygckyhbx"
+
+
+def test_test_email_falls_back_to_log_mode_without_debug_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = EmailService()
+
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_PROVIDER", "log")
+
+    delivery_mode = service.send_test_email(
+        recipient_email="someone@example.com",
+        recipient_name="Alex",
+    )
+
+    assert delivery_mode == "log"

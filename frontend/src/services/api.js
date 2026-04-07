@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_URL = (import.meta.env.VITE_API_URL || '').trim();
 
 const api = axios.create({
   baseURL: API_URL,
@@ -22,7 +22,8 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    const token = localStorage.getItem('token');
+    if (error.response?.status === 401 && token) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       window.location.href = '/login';
@@ -35,6 +36,9 @@ api.interceptors.response.use(
 export const authAPI = {
   signup: (data) => api.post('/api/auth/signup', data),
   login: (data) => api.post('/api/auth/login', data),
+  verifyLoginOtp: (data) => api.post('/api/auth/login/otp/verify', data),
+  resendLoginOtp: (data) => api.post('/api/auth/login/otp/resend', data),
+  sendTestEmail: () => api.post('/api/auth/email-test'),
   me: () => api.get('/api/auth/me'),
   updateMe: (data) => api.put('/api/auth/me', data),
   deleteMe: () => api.delete('/api/auth/me'),
@@ -73,19 +77,6 @@ export const codeAPI = {
   explain: (data) => api.post('/api/code/explain', data),
   debug: (data) => api.post('/api/code/debug', data),
   optimize: (data) => api.post('/api/code/optimize', data),
-};
-
-// Document API
-export const documentAPI = {
-  upload: (formData, options = {}) =>
-    api.postForm('/api/document/upload', formData, {
-      onUploadProgress: options.onUploadProgress,
-    }),
-  getDocuments: () => api.get('/api/document'),
-  getDocument: (id) => api.get(`/api/document/${id}`),
-  askQuestion: (data) => api.post('/api/document/ask', data),
-  rewriteQuestion: (data) => api.post('/api/document/rewrite-question', data),
-  deleteDocument: (id) => api.delete(`/api/document/${id}`),
 };
 
 // Learning API

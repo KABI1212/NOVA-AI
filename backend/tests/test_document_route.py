@@ -188,6 +188,61 @@ def test_ask_question_falls_back_to_document_excerpt_when_ai_is_offline(
         assert result["answer_mode"] == "fallback"
         assert "document fallback mode" in result["answer"].lower()
         assert "process scheduling decides which process should run next on the cpu" in result["answer"].lower()
+        assert result["citations"][0]["label"] == "os-notes.txt · Source 1"
+        assert "process scheduling decides which process should run next on the cpu" in result["citations"][0]["excerpt"].lower()
+        assert any("simple words" in item.lower() for item in result["suggested_questions"])
+        assert any("step by step" in item.lower() for item in result["suggested_questions"])
+
+    asyncio.run(scenario())
+
+
+def test_ask_question_returns_citations_when_ai_answer_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_user = SimpleNamespace(id=7)
+    document = SimpleNamespace(
+        id=23,
+        user_id=7,
+        is_processed=True,
+        summary="Networking notes",
+        text_content=(
+            "A router forwards packets between networks using routing tables.\n\n"
+            "Switches connect devices within the same local network."
+        ),
+        filename="networking-notes.txt",
+    )
+    fake_db = _FakeReadSession(document)
+
+    async def fake_ensure_document(text: str, doc_id: int) -> None:
+        return None
+
+    async def fake_search(question: str, k: int, doc_id: int):
+        return [
+            ("A router forwards packets between networks using routing tables.", 0.94),
+            ("Switches connect devices within the same local network.", 0.82),
+        ]
+
+    async def successful_answer(question: str, context: str, max_context_chars: int = 20000) -> str:
+        return "A router sends packets from one network to another by using a routing table."
+
+    monkeypatch.setattr(document_module.vector_service, "ensure_document", fake_ensure_document)
+    monkeypatch.setattr(document_module.vector_service, "search", fake_search)
+    monkeypatch.setattr(document_module.ai_service, "answer_question_from_document", successful_answer)
+
+    async def scenario() -> None:
+        result = await document_module.ask_question(
+            request=document_module.AskQuestionRequest(
+                document_id=23,
+                question="What does a router do?",
+            ),
+            current_user=current_user,
+            db=fake_db,
+        )
+
+        assert result["answer_mode"] == "ai"
+        assert result["citations"][0]["label"] == "networking-notes.txt · Source 1"
+        assert "router forwards packets between networks" in result["citations"][0]["excerpt"].lower()
+        assert len(result["citations"]) >= 1
 
     asyncio.run(scenario())
 

@@ -342,7 +342,7 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
             <div className="settings-section-head">
               <div>
                 <h4>Danger zone</h4>
-                <span>Deleting your account removes conversations, uploaded documents, and learning history.</span>
+                <span>Deleting your account removes conversations and learning history.</span>
               </div>
             </div>
 

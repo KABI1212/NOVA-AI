@@ -55,15 +55,6 @@ export const useThemeStore = create((set) => ({
   }),
 }));
 
-// Document Store
-export const useDocumentStore = create((set) => ({
-  documents: [],
-  currentDocument: null,
-  setDocuments: (documents) => set({ documents }),
-  setCurrentDocument: (document) => set({ currentDocument: document }),
-  addDocument: (document) => set((state) => ({ documents: [document, ...state.documents] })),
-}));
-
 const BROWSER_VOICE_STORAGE_KEY = 'nova_browser_voice';
 const TTS_VOICE_STORAGE_KEY = 'nova_tts_voice';
 

@@ -3,7 +3,9 @@ import os
 import re
 import warnings
 from pathlib import Path
+from xml.etree import ElementTree as ET
 from uuid import uuid4
+import zipfile
 
 import aiofiles
 import docx
@@ -46,6 +48,10 @@ class DocumentService:
         "xml",
         "yml",
         "yaml",
+    }
+    SPREADSHEET_TYPES = {
+        "xlsx",
+        "xlsm",
     }
 
     def __init__(self):
@@ -97,6 +103,79 @@ class DocumentService:
             logger.warning("DOCX extraction failed file=%s error=%s", file_path, exc)
             raise RuntimeError(f"Error extracting DOCX text: {exc}") from exc
 
+    def extract_text_from_xlsx(self, file_path: str) -> str:
+        """Extract readable text from XLSX/XLSM spreadsheets."""
+        namespace = {"main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+
+        def _shared_string_text(node: ET.Element) -> str:
+            parts = [
+                "".join(text for text in fragment.itertext())
+                for fragment in node.findall(".//main:t", namespace)
+            ]
+            return "".join(parts).strip()
+
+        try:
+            with zipfile.ZipFile(file_path) as workbook:
+                shared_strings: list[str] = []
+                if "xl/sharedStrings.xml" in workbook.namelist():
+                    shared_root = ET.fromstring(workbook.read("xl/sharedStrings.xml"))
+                    shared_strings = [
+                        _shared_string_text(item)
+                        for item in shared_root.findall("main:si", namespace)
+                    ]
+
+                worksheet_names = sorted(
+                    name
+                    for name in workbook.namelist()
+                    if name.startswith("xl/worksheets/") and name.endswith(".xml")
+                )
+                sheet_sections: list[str] = []
+
+                for worksheet_name in worksheet_names:
+                    root = ET.fromstring(workbook.read(worksheet_name))
+                    row_lines: list[str] = []
+
+                    for row in root.findall(".//main:sheetData/main:row", namespace):
+                        cell_values: list[str] = []
+
+                        for cell in row.findall("main:c", namespace):
+                            cell_type = cell.attrib.get("t", "")
+                            value_node = cell.find("main:v", namespace)
+                            inline_node = cell.find("main:is", namespace)
+
+                            if cell_type == "inlineStr" and inline_node is not None:
+                                value = "".join(inline_node.itertext()).strip()
+                            elif value_node is None or value_node.text is None:
+                                value = ""
+                            else:
+                                raw_value = value_node.text.strip()
+                                if cell_type == "s":
+                                    try:
+                                        value = shared_strings[int(raw_value)]
+                                    except (ValueError, IndexError):
+                                        value = raw_value
+                                elif cell_type == "b":
+                                    value = "TRUE" if raw_value == "1" else "FALSE"
+                                else:
+                                    value = raw_value
+
+                            if value:
+                                cell_values.append(value)
+
+                        if cell_values:
+                            row_lines.append(" | ".join(cell_values))
+
+                    if row_lines:
+                        sheet_label = Path(worksheet_name).stem.replace("_", " ").title()
+                        sheet_sections.append(
+                            f"{sheet_label}\n" + "\n".join(row_lines)
+                        )
+
+                return "\n\n".join(sheet_sections).strip()
+        except Exception as exc:
+            logger.warning("XLSX extraction failed file=%s error=%s", file_path, exc)
+            raise RuntimeError(f"Error extracting XLSX text: {exc}") from exc
+
     async def extract_text_from_text_like(self, file_path: str, file_type: str) -> str:
         """Extract text from plain-text-like and source-code files."""
         try:
@@ -119,6 +198,8 @@ class DocumentService:
             return await self.extract_text_from_txt(file_path)
         if file_type == "docx":
             return self.extract_text_from_docx(file_path)
+        if file_type in self.SPREADSHEET_TYPES:
+            return self.extract_text_from_xlsx(file_path)
         if file_type in self.TEXT_LIKE_TYPES:
             return await self.extract_text_from_text_like(file_path, file_type)
         raise ValueError(f"Unsupported file type: {file_type}")

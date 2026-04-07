@@ -67,22 +67,39 @@ _STOPWORDS = {
     "answer",
     "assignment",
     "compare",
+    "could",
+    "describe",
     "comparison",
+    "does",
     "difference",
     "diagram",
+    "document",
     "draw",
     "explain",
     "for",
     "give",
+    "how",
     "in",
     "is",
     "it",
     "marks",
+    "me",
     "neat",
     "of",
     "or",
+    "please",
     "show",
+    "simple",
+    "show",
+    "step",
+    "steps",
     "the",
+    "this",
+    "those",
+    "what",
+    "words",
+    "would",
+    "why",
     "to",
     "with",
     "write",
@@ -93,6 +110,8 @@ SUPPORTED_DOCUMENT_EXTENSIONS = {
     ".pdf",
     ".txt",
     ".docx",
+    ".xlsx",
+    ".xlsm",
     ".md",
     ".csv",
     ".json",
@@ -210,16 +229,13 @@ def _trim_document_excerpt(text: str, limit: int = 360) -> str:
     return f"{cleaned[:limit].rstrip()}..."
 
 
-def _fallback_answer_from_context(question: str, context: str) -> str:
-    passages = _document_passages(context)
+def _rank_document_passages(question: str, text: str) -> list[tuple[float, int, str]]:
+    passages = _document_passages(text)
     if not passages:
-        return (
-            "I could not build a useful fallback answer from this document because no readable "
-            "text was available in the selected context."
-        )
+        return []
 
     terms = _document_question_terms(question)
-    ranked_passages = sorted(
+    return sorted(
         (
             (_score_document_passage(passage, terms, index), index, passage)
             for index, passage in enumerate(passages)
@@ -228,9 +244,47 @@ def _fallback_answer_from_context(question: str, context: str) -> str:
         reverse=True,
     )
 
+
+def _document_citations(question: str, context: str, filename: str, limit: int = 3) -> list[dict[str, str]]:
+    ranked_passages = _rank_document_passages(question, context)
+    if not ranked_passages:
+        return []
+
+    selected = [(score, index, passage) for score, index, passage in ranked_passages if score > 0][:limit]
+    if not selected:
+        selected = ranked_passages[:limit]
+
+    document_label = str(filename or "Document").strip() or "Document"
+    citations: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    for citation_index, (_, _, passage) in enumerate(selected, start=1):
+        excerpt = _trim_document_excerpt(passage, limit=280)
+        normalized_excerpt = excerpt.lower()
+        if not excerpt or normalized_excerpt in seen:
+            continue
+        seen.add(normalized_excerpt)
+        citations.append(
+            {
+                "label": f"{document_label} · Source {citation_index}",
+                "excerpt": excerpt,
+            }
+        )
+
+    return citations
+
+
+def _fallback_answer_from_context(question: str, context: str) -> str:
+    ranked_passages = _rank_document_passages(question, context)
+    if not ranked_passages:
+        return (
+            "I could not build a useful fallback answer from this document because no readable "
+            "text was available in the selected context."
+        )
+
     selected = [passage for score, _, passage in ranked_passages if score > 0][:3]
     if not selected:
-        selected = passages[:2]
+        selected = [passage for _, _, passage in ranked_passages[:2]]
 
     formatted_excerpts = [
         f"{index + 1}. {_trim_document_excerpt(passage)}"
@@ -260,6 +314,38 @@ def _fallback_rewrite_question(question: str) -> str:
     if rebuilt[-1] not in {"?", ".", "!"}:
         rebuilt = f"{rebuilt}?"
     return rebuilt
+
+
+def _document_topic_phrase(question: str) -> str:
+    terms = _document_question_terms(question, limit=5)
+    if not terms:
+        return "this topic"
+    return " ".join(terms)
+
+
+def _document_follow_up_suggestions(question: str, limit: int = 4) -> List[str]:
+    topic = _document_topic_phrase(question)
+    suggestions = [
+        f"Explain {topic} in simple words.",
+        f"Explain {topic} step by step.",
+        f"Give 5 key points about {topic}.",
+        f"Give one simple example of {topic} from the document.",
+    ]
+
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for suggestion in suggestions:
+        cleaned = " ".join((suggestion or "").split()).strip()
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        deduped.append(cleaned)
+        if len(deduped) >= limit:
+            break
+    return deduped
 
 
 def _needs_full_document_context(question: str) -> bool:
@@ -502,7 +588,7 @@ async def upload_document(
     if file_ext not in SUPPORTED_DOCUMENT_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail="Supported files: PDF, DOCX, TXT, Markdown, CSV, JSON, HTML, XML, YAML, and common code files"
+            detail="Supported files: PDF, DOCX, XLSX, TXT, Markdown, CSV, JSON, HTML, XML, YAML, and common code files"
         )
 
     # Validate file size
@@ -547,7 +633,7 @@ async def upload_document(
             document.is_processed = False
             document.summary = (
                 "No readable text could be extracted from this file. "
-                "Try a text-based PDF, DOCX, TXT, Markdown, or code file."
+                "Try a text-based PDF, DOCX, XLSX, TXT, Markdown, or code file."
             )
             db.commit()
             db.refresh(document)
@@ -682,7 +768,7 @@ async def ask_question(
             status_code=400,
             detail=(
                 "No readable text was extracted from this document. "
-                "Upload a text-based PDF, DOCX, TXT, Markdown, or code file."
+                "Upload a text-based PDF, DOCX, XLSX, TXT, Markdown, or code file."
             ),
         )
 
@@ -735,11 +821,20 @@ async def ask_question(
             limit=2,
         )
 
+    citations = _document_citations(
+        request.question,
+        context_for_answer,
+        document.filename,
+        limit=3,
+    )
+
     return {
         "question": request.question,
         "answer": answer,
         "answer_images": answer_images,
         "answer_mode": answer_mode,
+        "citations": citations,
+        "suggested_questions": _document_follow_up_suggestions(request.question),
     }
 
 

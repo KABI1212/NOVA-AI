@@ -26,6 +26,7 @@ from routes import (
     voice_router,
 )
 from services.rate_limit_service import rate_limit_service
+from utils.warning_filters import configure_warning_filters
 
 
 logger = logging.getLogger(__name__)
@@ -71,13 +72,7 @@ def _configure_logging() -> None:
 
 
 def _configure_warnings() -> None:
-    if settings.SUPPRESS_32BIT_CRYPTO_WARNING:
-        warnings.filterwarnings(
-            "ignore",
-            message=r"You are using cryptography on a 32-bit Python on a 64-bit Windows Operating System\..*",
-            category=UserWarning,
-            module=r"cryptography\.hazmat\.backends\.openssl\.backend",
-        )
+    configure_warning_filters()
 
 
 def _should_enable_reload() -> bool:
@@ -118,7 +113,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="AI-powered chatbot platform with code generation, document analysis, and learning assistance",
+    description="AI-powered chatbot platform with code generation, search, image, and learning assistance",
     redirect_slashes=False,
     lifespan=lifespan,
 )
@@ -137,9 +132,9 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(code_router)
+app.include_router(document_router)
 app.include_router(explain_router)
 app.include_router(image_router)
-app.include_router(document_router)
 app.include_router(learning_router)
 app.include_router(voice_router)
 app.include_router(compat_router)

@@ -5,7 +5,6 @@ import { Toaster } from "react-hot-toast";
 
 import Chat from "./pages/Chat";
 import CodeAssistant from "./pages/CodeAssistant";
-import DocumentAnalyzer from "./pages/DocumentAnalyzer";
 import ExplainAssistant from "./pages/ExplainAssistant";
 import ImageGenerator from "./pages/ImageGenerator";
 import KnowledgeAssistant from "./pages/KnowledgeAssistant";
@@ -97,14 +96,6 @@ function App() {
           element={(
             <ProtectedRoute>
               <KnowledgeAssistant />
-            </ProtectedRoute>
-          )}
-        />
-        <Route
-          path="/documents"
-          element={(
-            <ProtectedRoute>
-              <DocumentAnalyzer />
             </ProtectedRoute>
           )}
         />

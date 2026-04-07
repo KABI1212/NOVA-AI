@@ -63,7 +63,6 @@ function CodeAssistant() {
   return (
     <Layout>
       <div className="h-full flex flex-col p-6">
-        {/* Tabs */}
         <div className="flex gap-2 mb-6">
           {tabs.map((tab) => (
             <button
@@ -81,7 +80,6 @@ function CodeAssistant() {
         </div>
 
         <div className="flex-1 grid grid-cols-2 gap-6 overflow-hidden">
-          {/* Input */}
           <div className="card p-6 flex flex-col">
             <h3 className="text-lg font-semibold mb-4">Input</h3>
             <select
@@ -115,7 +113,6 @@ function CodeAssistant() {
             </button>
           </div>
 
-          {/* Output */}
           <div className="card p-6 flex flex-col overflow-y-auto">
             <h3 className="text-lg font-semibold mb-4">Result</h3>
             {result ? (

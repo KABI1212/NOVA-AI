@@ -30,6 +30,21 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "change-me-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    AUTH_OTP_EXPIRE_MINUTES: int = 5
+    AUTH_OTP_LENGTH: int = 6
+
+    EMAIL_PROVIDER: str = ""
+    EMAIL_FROM_ADDRESS: str = ""
+    EMAIL_FROM_NAME: str = "NOVA AI"
+    EMAIL_REPLY_TO: str = ""
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_USE_TLS: bool = True
+    SMTP_USE_SSL: bool = False
+    SMTP_TIMEOUT_SECONDS: int = 20
+    SENDGRID_API_KEY: str = ""
 
     OPENAI_API_KEY: str = ""
     OPENAI_CHAT_MODEL: str = "gpt-4o"
@@ -73,6 +88,8 @@ class Settings(BaseSettings):
     AI_LOG_PREVIEW_CHARS: int = 400
 
     CORS_ORIGINS: str = (
+        "http://localhost,"
+        "http://127.0.0.1,"
         "http://localhost:3000,"
         "http://127.0.0.1:3000,"
         "http://localhost:5173,"

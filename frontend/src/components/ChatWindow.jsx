@@ -61,10 +61,6 @@ const HERO_CONTENT = {
     pill: "Knowledge workspace",
     subtitle: "Ask factual questions, summaries, or concept overviews in one continuous conversation.",
   },
-  Documents: {
-    pill: "Documents workspace",
-    subtitle: "Attach a file in chat and ask NOVA to summarize it, answer questions, or pull study notes from it.",
-  },
   Learning: {
     pill: "Learning workspace",
     subtitle: "Turn the chat into a study coach for roadmaps, practice plans, and guided learning steps.",
@@ -171,7 +167,14 @@ function getSourceHostname(url) {
 
 function getMessageSources(message) {
   const metaSources = Array.isArray(message?.meta?.sources) ? message.meta.sources : [];
-  return metaSources.filter((item) => item && typeof item === "object" && item.url).slice(0, 3);
+  return metaSources
+    .filter(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        (item.url || item.label || item.title || item.excerpt)
+    )
+    .slice(0, 3);
 }
 
 function MessageSources({ message }) {
@@ -181,11 +184,28 @@ function MessageSources({ message }) {
   }
 
   return (
-    <div className="message-sources" aria-label="Web sources">
+    <div className="message-sources" aria-label="Sources">
       {sources.map((item, index) => {
-        const sourceName = String(item?.source || "").trim() || getSourceHostname(item?.url || "");
+        const sourceName = String(item?.source || item?.kind || "").trim() || getSourceHostname(item?.url || "");
         const sourceMeta = [formatSourceDate(item?.date), sourceName].filter(Boolean).join(" | ");
-        const sourceTitle = String(item?.title || sourceName || "Source").trim() || "Source";
+        const sourceTitle = String(item?.title || item?.label || sourceName || "Source").trim() || "Source";
+        const excerpt = String(item?.excerpt || "").trim();
+
+        if (!item?.url) {
+          return (
+            <div
+              key={`${message.id}-source-${index}`}
+              className="message-source-chip"
+              title={sourceTitle}
+            >
+              <span className="message-source-copy">
+                <strong>{sourceTitle}</strong>
+                {sourceMeta ? <span>{sourceMeta}</span> : null}
+                {excerpt ? <span>{excerpt}</span> : null}
+              </span>
+            </div>
+          );
+        }
 
         return (
           <a

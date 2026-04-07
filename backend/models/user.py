@@ -15,6 +15,10 @@ class User(MongoModel):
     full_name = Field(default="")
     is_active = Field(default=True)
     is_verified = Field(default=False)
+    login_otp_code_hash = Field(default=None)
+    login_otp_expires_at = Field(default=None)
+    login_otp_sent_at = Field(default=None)
+    login_otp_challenge_hash = Field(default=None)
     created_at = Field(default_factory=utc_now)
     updated_at = Field(default_factory=utc_now)
 
