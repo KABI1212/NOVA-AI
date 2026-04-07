@@ -1,1 +1,0 @@
-AI ImpactSense is a document about explainable AI systems and responsible automation.
