@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import Layout from '../components/common/Layout';
 import { codeAPI } from '../services/api';
 import MessageBubble from '../components/chat/MessageBubble';
+import { formatApiError } from '../utils/apiErrors';
 import { stopSpeechPlayback } from '../utils/speech';
 
 function CodeAssistant() {
@@ -41,11 +42,7 @@ function CodeAssistant() {
       }
       toast.success('Code processed successfully!');
     } catch (error) {
-      const detail =
-        error?.response?.data?.detail ||
-        error?.response?.data?.message ||
-        error?.message ||
-        'Failed to process code';
+      const detail = formatApiError(error, 'Failed to process code');
       setResult({ content: detail, role: 'assistant' });
       toast.error(detail);
     } finally {

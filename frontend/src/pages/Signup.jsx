@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { Lock, Mail, RefreshCw, Shield, User } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authAPI } from '../services/api';
+import { formatApiError } from '../utils/apiErrors';
 import { useAuthStore, useThemeStore } from '../utils/store';
 import NovaLogo from '../components/common/NovaLogo';
 
@@ -72,7 +73,7 @@ function Signup() {
         });
       }
     } catch (error) {
-      toast.error(error.response?.data?.detail || 'Signup failed');
+      toast.error(formatApiError(error, 'Signup failed'));
     } finally {
       setSubmittingDetails(false);
     }
@@ -93,7 +94,7 @@ function Signup() {
       toast.success('Account verified successfully!');
       navigate('/chat');
     } catch (error) {
-      toast.error(error.response?.data?.detail || 'Verification failed');
+      toast.error(formatApiError(error, 'Verification failed'));
     } finally {
       setVerifyingOtp(false);
     }
@@ -122,7 +123,7 @@ function Signup() {
         });
       }
     } catch (error) {
-      toast.error(error.response?.data?.detail || 'Could not resend the code');
+      toast.error(formatApiError(error, 'Could not resend the code'));
     } finally {
       setResendingOtp(false);
     }

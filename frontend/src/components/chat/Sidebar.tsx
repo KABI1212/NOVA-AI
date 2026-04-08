@@ -4,6 +4,7 @@ import toast from "react-hot-toast";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { authAPI } from "../../services/api";
+import { formatApiError } from "../../utils/apiErrors";
 import { useAuthStore } from "../../utils/store";
 
 type Conversation = {
@@ -336,7 +337,7 @@ export default function Sidebar({
       setIsEditOpen(false);
       toast.success(response?.data?.message || "Account updated successfully.");
     } catch (error: any) {
-      toast.error(error?.response?.data?.detail || "Could not update your account right now.");
+      toast.error(formatApiError(error, "Could not update your account right now."));
     } finally {
       setIsSaving(false);
     }
@@ -355,7 +356,7 @@ export default function Sidebar({
       navigate("/signup", { replace: true });
       toast.success(response?.data?.message || "Account deleted successfully.");
     } catch (error: any) {
-      toast.error(error?.response?.data?.detail || "Could not delete your account right now.");
+      toast.error(formatApiError(error, "Could not delete your account right now."));
     } finally {
       setIsDeleting(false);
     }
