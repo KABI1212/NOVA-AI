@@ -1,9 +1,54 @@
 import axios from 'axios';
 
-const API_URL = (import.meta.env.VITE_API_URL || '').trim();
+const RAW_API_URL = (import.meta.env.VITE_API_URL || '').trim();
+
+export const API_BASE_URL = RAW_API_URL.replace(/\/$/, '');
+
+const normalizePath = (path = '') => {
+  const value = String(path || '').trim();
+  if (!value) {
+    return '';
+  }
+
+  return value.startsWith('/') ? value : `/${value}`;
+};
+
+export const buildApiEndpoint = (path = '') => {
+  const normalizedPath = normalizePath(path);
+
+  if (!API_BASE_URL) {
+    return normalizedPath.startsWith('/api') ? normalizedPath : `/api${normalizedPath}`;
+  }
+
+  if (API_BASE_URL.endsWith('/api')) {
+    return normalizedPath.startsWith('/api')
+      ? `${API_BASE_URL}${normalizedPath.slice(4)}`
+      : `${API_BASE_URL}${normalizedPath}`;
+  }
+
+  return normalizedPath.startsWith('/api')
+    ? `${API_BASE_URL}${normalizedPath}`
+    : `${API_BASE_URL}/api${normalizedPath}`;
+};
+
+export const buildAppEndpoint = (path = '') => {
+  const normalizedPath = normalizePath(path);
+
+  if (!API_BASE_URL) {
+    return normalizedPath;
+  }
+
+  if (API_BASE_URL.endsWith('/api')) {
+    const rootBase = API_BASE_URL.replace(/\/api$/, '');
+    return rootBase ? `${rootBase}${normalizedPath}` : normalizedPath;
+  }
+
+  return `${API_BASE_URL}${normalizedPath}`;
+};
+
+export const fetchApi = (path, options = {}) => fetch(buildApiEndpoint(path), options);
 
 const api = axios.create({
-  baseURL: API_URL,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -34,25 +79,25 @@ api.interceptors.response.use(
 
 // Auth API
 export const authAPI = {
-  signup: (data) => api.post('/api/auth/signup', data),
-  login: (data) => api.post('/api/auth/login', data),
-  verifyLoginOtp: (data) => api.post('/api/auth/login/otp/verify', data),
-  resendLoginOtp: (data) => api.post('/api/auth/login/otp/resend', data),
-  sendTestEmail: () => api.post('/api/auth/email-test'),
-  me: () => api.get('/api/auth/me'),
-  updateMe: (data) => api.put('/api/auth/me', data),
-  deleteMe: () => api.delete('/api/auth/me'),
+  signup: (data) => api.post(buildApiEndpoint('/auth/signup'), data),
+  login: (data) => api.post(buildApiEndpoint('/auth/login'), data),
+  verifyLoginOtp: (data) => api.post(buildApiEndpoint('/auth/login/otp/verify'), data),
+  resendLoginOtp: (data) => api.post(buildApiEndpoint('/auth/login/otp/resend'), data),
+  sendTestEmail: () => api.post(buildApiEndpoint('/auth/email-test')),
+  me: () => api.get(buildApiEndpoint('/auth/me')),
+  updateMe: (data) => api.put(buildApiEndpoint('/auth/me'), data),
+  deleteMe: () => api.delete(buildApiEndpoint('/auth/me')),
 };
 
 // Chat API
 export const chatAPI = {
-  sendMessage: (data) => api.post('/api/chat', data),
-  regenerate: (data) => api.post('/api/chat/regenerate', data),
-  getConversations: () => api.get('/api/chat/conversations'),
-  getConversation: (id) => api.get(`/api/chat/conversations/${id}`),
-  updateConversation: (id, data) => api.put(`/api/chat/conversations/${id}`, data),
-  deleteConversation: (id) => api.delete(`/api/chat/conversations/${id}`),
-  getProviders: () => api.get('/api/chat/providers'),
+  sendMessage: (data) => api.post(buildApiEndpoint('/chat'), data),
+  regenerate: (data) => api.post(buildApiEndpoint('/chat/regenerate'), data),
+  getConversations: () => api.get(buildApiEndpoint('/chat/conversations')),
+  getConversation: (id) => api.get(buildApiEndpoint(`/chat/conversations/${id}`)),
+  updateConversation: (id, data) => api.put(buildApiEndpoint(`/chat/conversations/${id}`), data),
+  deleteConversation: (id) => api.delete(buildApiEndpoint(`/chat/conversations/${id}`)),
+  getProviders: () => api.get(buildApiEndpoint('/chat/providers')),
 };
 
 export const sendMessage = async (message) => {
@@ -73,31 +118,31 @@ export const sendMessage = async (message) => {
 
 // Code API
 export const codeAPI = {
-  generate: (data) => api.post('/api/code/generate', data),
-  explain: (data) => api.post('/api/code/explain', data),
-  debug: (data) => api.post('/api/code/debug', data),
-  optimize: (data) => api.post('/api/code/optimize', data),
+  generate: (data) => api.post(buildApiEndpoint('/code/generate'), data),
+  explain: (data) => api.post(buildApiEndpoint('/code/explain'), data),
+  debug: (data) => api.post(buildApiEndpoint('/code/debug'), data),
+  optimize: (data) => api.post(buildApiEndpoint('/code/optimize'), data),
 };
 
 // Learning API
 export const learningAPI = {
-  generateRoadmap: (data) => api.post('/api/learning/roadmap', data),
-  getProgress: () => api.get('/api/learning'),
-  updateProgress: (data) => api.post('/api/learning/progress', data),
-  deleteProgress: (id) => api.delete(`/api/learning/${id}`),
+  generateRoadmap: (data) => api.post(buildApiEndpoint('/learning/roadmap'), data),
+  getProgress: () => api.get(buildApiEndpoint('/learning')),
+  updateProgress: (data) => api.post(buildApiEndpoint('/learning/progress'), data),
+  deleteProgress: (id) => api.delete(buildApiEndpoint(`/learning/${id}`)),
 };
 
 // Explain API
 export const explainAPI = {
-  explain: (data) => api.post('/api/explain', data),
+  explain: (data) => api.post(buildApiEndpoint('/explain'), data),
 };
 
 // Image API
 export const imageAPI = {
-  generate: (data) => api.post('/api/image/generate', data, { timeout: 240000 }),
-  optimizePrompt: (data) => api.post('/api/image/prompt', data, { timeout: 120000 }),
-  getProviders: () => api.get('/api/image/providers'),
-  variation: (data) => api.post('/api/image/variations', data, { timeout: 240000 }),
+  generate: (data) => api.post(buildApiEndpoint('/image/generate'), data, { timeout: 240000 }),
+  optimizePrompt: (data) => api.post(buildApiEndpoint('/image/prompt'), data, { timeout: 120000 }),
+  getProviders: () => api.get(buildApiEndpoint('/image/providers')),
+  variation: (data) => api.post(buildApiEndpoint('/image/variations'), data, { timeout: 240000 }),
 };
 
 export const generateImage = async (prompt, options = {}) => {

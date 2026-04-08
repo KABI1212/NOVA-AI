@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams }           from "react-router-dom";
 import MessageBubble           from "../components/chat/MessageBubble";
 import NovaLogo                from "../components/common/NovaLogo";
+import { fetchApi }            from "../services/api";
 
 export default function SharedView() {
   const { shareId }              = useParams();
@@ -12,7 +13,7 @@ export default function SharedView() {
 
   const fetchShared = useCallback(async () => {
     try {
-      const res = await fetch(`/api/share/view/${shareId}`);
+      const res = await fetchApi(`/share/view/${shareId}`);
 
       if (!res.ok) {
         const err = await res.json();

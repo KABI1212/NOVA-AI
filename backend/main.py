@@ -1,4 +1,5 @@
 import logging
+import os
 import platform
 import sys
 import warnings
@@ -49,6 +50,23 @@ DEV_INDEX_HTML = f"""
   </body>
 </html>
 """
+DEPLOYMENT_INDEX_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NOVA AI API</title>
+  </head>
+  <body>
+    <main style="font-family: Arial, sans-serif; max-width: 720px; margin: 4rem auto; padding: 0 1rem; line-height: 1.6;">
+      <h1>NOVA AI backend is running</h1>
+      <p>This deployment does not include a built frontend bundle.</p>
+      <p>Use the API endpoints directly or deploy the React frontend separately.</p>
+    </main>
+  </body>
+</html>
+"""
 
 
 def _configure_logging() -> None:
@@ -92,6 +110,10 @@ def _should_enable_reload() -> bool:
         return False
 
     return True
+
+
+def _should_serve_dev_frontend() -> bool:
+    return settings.DEBUG and not os.getenv("RENDER")
 
 
 @asynccontextmanager
@@ -147,7 +169,9 @@ async def root():
     """Serve the NOVA AI UI."""
     if FRONTEND_INDEX.exists():
         return FileResponse(FRONTEND_INDEX, media_type="text/html")
-    return HTMLResponse(content=DEV_INDEX_HTML)
+    if _should_serve_dev_frontend():
+        return HTMLResponse(content=DEV_INDEX_HTML)
+    return HTMLResponse(content=DEPLOYMENT_INDEX_HTML)
 
 
 @app.get("/api/status")
@@ -195,7 +219,12 @@ async def catch_all(full_path: str):
         return JSONResponse(status_code=404, content={"detail": "Not found"})
     if FRONTEND_INDEX.exists():
         return FileResponse(FRONTEND_INDEX, media_type="text/html")
-    return HTMLResponse(content=DEV_INDEX_HTML)
+    if _should_serve_dev_frontend():
+        return HTMLResponse(content=DEV_INDEX_HTML)
+    return JSONResponse(
+        status_code=404,
+        content={"detail": "Frontend build not found for this deployment."},
+    )
 
 
 @app.exception_handler(Exception)

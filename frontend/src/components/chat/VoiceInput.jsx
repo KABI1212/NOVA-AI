@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { buildApiEndpoint } from '../../services/api';
 import { useAuthStore } from '../../utils/store';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const RECORDING_LIMIT_MS = 60000;
 
 export default function VoiceInput({ onTranscript, disabled }) {
@@ -88,7 +88,7 @@ export default function VoiceInput({ onTranscript, disabled }) {
       formData.append('file', audioBlob, 'recording.webm');
 
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
-      const res = await fetch(`${API_URL}/api/voice/transcribe`, {
+      const res = await fetch(buildApiEndpoint('/voice/transcribe'), {
         method: 'POST',
         headers,
         body: formData,

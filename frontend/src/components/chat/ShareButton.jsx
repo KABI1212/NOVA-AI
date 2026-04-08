@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 
+import { fetchApi } from "../../services/api";
 import { useAuthStore } from "../../utils/store";
 
 function formatViewCount(value) {
@@ -38,7 +39,7 @@ export default function ShareButton({
 
     const fetchStatus = async () => {
       try {
-        const response = await fetch(`/api/share/status/${conversationId}`, {
+        const response = await fetchApi(`/share/status/${conversationId}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
 
@@ -85,7 +86,7 @@ export default function ShareButton({
 
     setLoading(true);
     try {
-      const response = await fetch("/api/share/create", {
+      const response = await fetchApi("/share/create", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -121,7 +122,7 @@ export default function ShareButton({
 
     setLoading(true);
     try {
-      const response = await fetch(`/api/share/disable/${conversationId}`, {
+      const response = await fetchApi(`/share/disable/${conversationId}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });

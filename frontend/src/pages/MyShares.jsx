@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import Layout from "../components/common/Layout";
+import { fetchApi } from "../services/api";
 import { useAuthStore } from "../utils/store";
 
 export default function MyShares() {
@@ -12,7 +13,7 @@ export default function MyShares() {
 
   const fetchShares = useCallback(async () => {
     try {
-      const response = await fetch("/api/share/my-shares", {
+      const response = await fetchApi("/share/my-shares", {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await response.json();
@@ -30,7 +31,7 @@ export default function MyShares() {
 
   const disableShare = async (conversationId, shareId) => {
     try {
-      await fetch(`/api/share/disable/${conversationId}`, {
+      await fetchApi(`/share/disable/${conversationId}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });

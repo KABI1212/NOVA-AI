@@ -1,0 +1,82 @@
+services:
+  - type: keyvalue
+    name: nova-ai-redis
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: allkeys-lru
+
+  - type: web
+    name: nova-ai-backend
+    runtime: docker
+    plan: starter
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    healthCheckPath: /health
+    disk:
+      name: uploads
+      mountPath: /app/uploads
+      sizeGB: 1
+    envVars:
+      - key: DEBUG
+        value: "false"
+      - key: APP_HOST
+        value: "0.0.0.0"
+      - key: DATABASE_URL
+        sync: false
+      - key: MONGODB_DB_NAME
+        value: "nova_ai"
+      - key: MONGODB_REQUIRED
+        value: "true"
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: nova-ai-redis
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: CORS_ORIGINS
+        sync: false
+      - key: UPLOAD_DIR
+        value: /app/uploads
+      - key: AI_PROVIDER
+        value: "auto"
+      - key: GEMINI_IMAGE_MODEL
+        value: "gemini-2.5-flash-image"
+      - key: AI_IMAGE_REQUEST_TIMEOUT_SECONDS
+        value: "180"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: EMAIL_PROVIDER
+        sync: false
+      - key: EMAIL_FROM_ADDRESS
+        sync: false
+      - key: EMAIL_FROM_NAME
+        value: "NOVA AI"
+      - key: EMAIL_REPLY_TO
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_USE_TLS
+        value: "true"
+      - key: SMTP_USE_SSL
+        value: "false"
+      - key: SENDGRID_API_KEY
+        sync: false

@@ -2,10 +2,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import Layout from '../components/common/Layout';
-import { imageAPI } from '../services/api';
+import { buildApiEndpoint, imageAPI } from '../services/api';
 import { useAuthStore, useChatStore } from '../utils/store';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const SIZES = [
   { id: '1024x1024', label: 'Square', desc: '1024 x 1024' },
@@ -183,7 +181,7 @@ export default function ImageGenerator() {
 
   const downloadImage = async (url, filename = 'nova-ai-image.png') => {
     try {
-      const proxyUrl = `${API_URL}/api/image/proxy?url=${encodeURIComponent(url)}`;
+      const proxyUrl = buildApiEndpoint(`/image/proxy?url=${encodeURIComponent(url)}`);
       const res = await fetch(proxyUrl, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
