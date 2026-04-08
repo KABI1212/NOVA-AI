@@ -59,7 +59,14 @@ function Signup() {
     setSubmittingDetails(true);
 
     try {
-      const response = await authAPI.signup(formData);
+      const payload = {
+        email: formData.email.trim(),
+        username: formData.username.trim(),
+        password: formData.password,
+        full_name: formData.full_name.trim(),
+      };
+
+      const response = await authAPI.signup(payload);
 
       setChallenge(response.data);
       setOtp('');

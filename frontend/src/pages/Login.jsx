@@ -58,7 +58,12 @@ function Login() {
     setSubmittingCredentials(true);
 
     try {
-      const response = await authAPI.login(formData);
+      const payload = {
+        email: formData.email.trim(),
+        password: formData.password,
+      };
+
+      const response = await authAPI.login(payload);
 
       if (response.data?.requires_otp) {
         setChallenge(response.data);
