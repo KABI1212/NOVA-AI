@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import Layout from '../components/common/Layout';
-import { buildApiEndpoint, imageAPI } from '../services/api';
+import { fetchApi, imageAPI } from '../services/api';
 import { useAuthStore, useChatStore } from '../utils/store';
 
 const SIZES = [
@@ -181,8 +181,7 @@ export default function ImageGenerator() {
 
   const downloadImage = async (url, filename = 'nova-ai-image.png') => {
     try {
-      const proxyUrl = buildApiEndpoint(`/image/proxy?url=${encodeURIComponent(url)}`);
-      const res = await fetch(proxyUrl, {
+      const res = await fetchApi(`/image/proxy?url=${encodeURIComponent(url)}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const blob = await res.blob();

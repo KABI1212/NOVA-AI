@@ -4,16 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import Layout from "../components/common/Layout";
 import MessageBubble from "../components/chat/MessageBubble";
 import SearchResults from "../components/chat/SearchResults";
+import { fetchApi } from "../services/api";
 import { stopSpeechPlayback } from "../utils/speech";
 import { useAuthStore } from "../utils/store";
-
-const API_BASE = (import.meta.env.VITE_API_URL || "").trim();
-const API_BASE_NORMALIZED = API_BASE.replace(/\/$/, "");
-const SEARCH_CHAT_ENDPOINT = API_BASE_NORMALIZED
-  ? API_BASE_NORMALIZED.endsWith("/api")
-    ? `${API_BASE_NORMALIZED}/search/chat`
-    : `${API_BASE_NORMALIZED}/api/search/chat`
-  : "/api/search/chat";
 
 export default function SearchChat() {
   const [messages, setMessages] = useState([]);
@@ -59,7 +52,7 @@ export default function SearchChat() {
 
     try {
       let finalReply = "";
-      const response = await fetch(SEARCH_CHAT_ENDPOINT, {
+      const response = await fetchApi("/search/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

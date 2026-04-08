@@ -1,8 +1,19 @@
 import axios from 'axios';
 
-const RAW_API_URL = (import.meta.env.VITE_API_URL || '').trim();
+const STATUS_REQUEST_TIMEOUT_MS = 3500;
+const RAW_API_URL = String(import.meta.env.VITE_API_URL || '').trim();
 
-export const API_BASE_URL = RAW_API_URL.replace(/\/$/, '');
+const normalizeBaseUrl = (value = '') => String(value || '').trim().replace(/\/$/, '');
+
+const parseApiBaseCandidates = (rawValue = '') =>
+  Array.from(
+    new Set(
+      String(rawValue || '')
+        .split(/[,\n]/)
+        .map((value) => normalizeBaseUrl(value))
+        .filter(Boolean)
+    )
+  );
 
 const normalizePath = (path = '') => {
   const value = String(path || '').trim();
@@ -13,40 +24,184 @@ const normalizePath = (path = '') => {
   return value.startsWith('/') ? value : `/${value}`;
 };
 
-export const buildApiEndpoint = (path = '') => {
+const buildEndpoint = (path = '', baseUrl = '', api = true) => {
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
   const normalizedPath = normalizePath(path);
 
-  if (!API_BASE_URL) {
+  if (!normalizedBaseUrl) {
+    if (!api) {
+      return normalizedPath;
+    }
     return normalizedPath.startsWith('/api') ? normalizedPath : `/api${normalizedPath}`;
   }
 
-  if (API_BASE_URL.endsWith('/api')) {
+  if (api) {
+    if (normalizedBaseUrl.endsWith('/api')) {
+      return normalizedPath.startsWith('/api')
+        ? `${normalizedBaseUrl}${normalizedPath.slice(4)}`
+        : `${normalizedBaseUrl}${normalizedPath}`;
+    }
+
     return normalizedPath.startsWith('/api')
-      ? `${API_BASE_URL}${normalizedPath.slice(4)}`
-      : `${API_BASE_URL}${normalizedPath}`;
+      ? `${normalizedBaseUrl}${normalizedPath}`
+      : `${normalizedBaseUrl}/api${normalizedPath}`;
   }
 
-  return normalizedPath.startsWith('/api')
-    ? `${API_BASE_URL}${normalizedPath}`
-    : `${API_BASE_URL}/api${normalizedPath}`;
-};
-
-export const buildAppEndpoint = (path = '') => {
-  const normalizedPath = normalizePath(path);
-
-  if (!API_BASE_URL) {
-    return normalizedPath;
-  }
-
-  if (API_BASE_URL.endsWith('/api')) {
-    const rootBase = API_BASE_URL.replace(/\/api$/, '');
+  if (normalizedBaseUrl.endsWith('/api')) {
+    const rootBase = normalizedBaseUrl.replace(/\/api$/, '');
     return rootBase ? `${rootBase}${normalizedPath}` : normalizedPath;
   }
 
-  return `${API_BASE_URL}${normalizedPath}`;
+  return `${normalizedBaseUrl}${normalizedPath}`;
 };
 
-export const fetchApi = (path, options = {}) => fetch(buildApiEndpoint(path), options);
+const API_BASE_CANDIDATES = parseApiBaseCandidates(RAW_API_URL);
+
+let preferredApiBaseUrl = API_BASE_CANDIDATES[0] || '';
+let preferredApiStatus = null;
+let resolveApiBaseUrlPromise = null;
+
+const hasWindow = () => typeof window !== 'undefined';
+
+const safeSetTimeout = (callback, timeout) =>
+  hasWindow() ? window.setTimeout(callback, timeout) : setTimeout(callback, timeout);
+
+const safeClearTimeout = (timeoutId) => {
+  if (timeoutId == null) {
+    return;
+  }
+
+  if (hasWindow()) {
+    window.clearTimeout(timeoutId);
+    return;
+  }
+
+  clearTimeout(timeoutId);
+};
+
+const buildStatusEndpoint = (baseUrl = '') => buildEndpoint('/status', baseUrl, true);
+
+const findMatchingCandidateBase = (url = '') =>
+  API_BASE_CANDIDATES.find(
+    (candidate) => url === candidate || url.startsWith(`${candidate}/`)
+  );
+
+const probeApiBaseUrl = async (baseUrl) => {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = controller
+    ? safeSetTimeout(() => controller.abort(), STATUS_REQUEST_TIMEOUT_MS)
+    : null;
+
+  try {
+    const response = await fetch(buildStatusEndpoint(baseUrl), {
+      headers: {
+        Accept: 'application/json',
+      },
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+
+    if (!response.ok) {
+      return {
+        baseUrl,
+        healthy: false,
+        score: 0,
+        status: null,
+      };
+    }
+
+    const status = await response.json().catch(() => null);
+    const ai = status?.capabilities?.ai || {};
+    const auth = status?.capabilities?.auth || {};
+    const email = auth?.email || {};
+    const availableTextProviders = Array.isArray(ai.available_text_providers)
+      ? ai.available_text_providers
+      : [];
+
+    return {
+      baseUrl,
+      healthy: true,
+      score:
+        100 +
+        (ai.text_ready ? 40 : 0) +
+        (email.ready ? 20 : 0) +
+        (ai.image_ready ? 10 : 0) +
+        availableTextProviders.length,
+      status,
+    };
+  } catch {
+    return {
+      baseUrl,
+      healthy: false,
+      score: 0,
+      status: null,
+    };
+  } finally {
+    safeClearTimeout(timeoutId);
+  }
+};
+
+const pickBestApiBase = (results = []) => {
+  const healthyResults = results.filter((result) => result?.healthy);
+  const pool = healthyResults.length ? healthyResults : results;
+
+  return [...pool].sort((left, right) => (right?.score || 0) - (left?.score || 0))[0] || null;
+};
+
+export const API_BASE_URL = preferredApiBaseUrl;
+
+export const getApiBaseCandidates = () => [...API_BASE_CANDIDATES];
+
+export const getPreferredApiStatus = () => preferredApiStatus;
+
+export const buildApiEndpoint = (path = '', baseUrl = preferredApiBaseUrl) =>
+  buildEndpoint(path, baseUrl, true);
+
+export const buildAppEndpoint = (path = '', baseUrl = preferredApiBaseUrl) =>
+  buildEndpoint(path, baseUrl, false);
+
+export const resolveApiBaseUrl = async (force = false) => {
+  if (!API_BASE_CANDIDATES.length) {
+    return '';
+  }
+
+  if (!force && preferredApiStatus) {
+    return preferredApiBaseUrl;
+  }
+
+  if (!force && resolveApiBaseUrlPromise) {
+    return resolveApiBaseUrlPromise;
+  }
+
+  resolveApiBaseUrlPromise = (async () => {
+    const results = await Promise.all(API_BASE_CANDIDATES.map((baseUrl) => probeApiBaseUrl(baseUrl)));
+    const bestMatch = pickBestApiBase(results);
+
+    preferredApiBaseUrl = bestMatch?.baseUrl || API_BASE_CANDIDATES[0];
+    preferredApiStatus = bestMatch?.status || null;
+
+    return preferredApiBaseUrl;
+  })();
+
+  try {
+    return await resolveApiBaseUrlPromise;
+  } finally {
+    resolveApiBaseUrlPromise = null;
+  }
+};
+
+export const fetchApi = async (path, options = {}) => {
+  const baseUrl = await resolveApiBaseUrl();
+  return fetch(buildApiEndpoint(path, baseUrl), options);
+};
+
+export const fetchApp = async (path, options = {}) => {
+  const baseUrl = await resolveApiBaseUrl();
+  return fetch(buildAppEndpoint(path, baseUrl), options);
+};
+
+if (hasWindow() && API_BASE_CANDIDATES.length > 1) {
+  void resolveApiBaseUrl();
+}
 
 const api = axios.create({
   headers: {
@@ -54,8 +209,22 @@ const api = axios.create({
   },
 });
 
-// Add auth token to requests
-api.interceptors.request.use((config) => {
+api.interceptors.request.use(async (config) => {
+  const resolvedBaseUrl = await resolveApiBaseUrl();
+  const originalUrl = String(config.url || '').trim();
+  const matchedCandidateBase = findMatchingCandidateBase(originalUrl);
+
+  if (originalUrl) {
+    if (!/^https?:\/\//i.test(originalUrl)) {
+      config.url = buildApiEndpoint(originalUrl, resolvedBaseUrl);
+    } else if (matchedCandidateBase) {
+      const remainder = originalUrl.slice(matchedCandidateBase.length) || '/';
+      config.url = remainder.startsWith('/api')
+        ? buildApiEndpoint(remainder, resolvedBaseUrl)
+        : buildAppEndpoint(remainder, resolvedBaseUrl);
+    }
+  }
+
   const token = localStorage.getItem('token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -63,7 +232,6 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Handle auth errors
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -77,27 +245,25 @@ api.interceptors.response.use(
   }
 );
 
-// Auth API
 export const authAPI = {
-  signup: (data) => api.post(buildApiEndpoint('/auth/signup'), data),
-  login: (data) => api.post(buildApiEndpoint('/auth/login'), data),
-  verifyLoginOtp: (data) => api.post(buildApiEndpoint('/auth/login/otp/verify'), data),
-  resendLoginOtp: (data) => api.post(buildApiEndpoint('/auth/login/otp/resend'), data),
-  sendTestEmail: () => api.post(buildApiEndpoint('/auth/email-test')),
-  me: () => api.get(buildApiEndpoint('/auth/me')),
-  updateMe: (data) => api.put(buildApiEndpoint('/auth/me'), data),
-  deleteMe: () => api.delete(buildApiEndpoint('/auth/me')),
+  signup: (data) => api.post('/auth/signup', data),
+  login: (data) => api.post('/auth/login', data),
+  verifyLoginOtp: (data) => api.post('/auth/login/otp/verify', data),
+  resendLoginOtp: (data) => api.post('/auth/login/otp/resend', data),
+  sendTestEmail: () => api.post('/auth/email-test'),
+  me: () => api.get('/auth/me'),
+  updateMe: (data) => api.put('/auth/me', data),
+  deleteMe: () => api.delete('/auth/me'),
 };
 
-// Chat API
 export const chatAPI = {
-  sendMessage: (data) => api.post(buildApiEndpoint('/chat'), data),
-  regenerate: (data) => api.post(buildApiEndpoint('/chat/regenerate'), data),
-  getConversations: () => api.get(buildApiEndpoint('/chat/conversations')),
-  getConversation: (id) => api.get(buildApiEndpoint(`/chat/conversations/${id}`)),
-  updateConversation: (id, data) => api.put(buildApiEndpoint(`/chat/conversations/${id}`), data),
-  deleteConversation: (id) => api.delete(buildApiEndpoint(`/chat/conversations/${id}`)),
-  getProviders: () => api.get(buildApiEndpoint('/chat/providers')),
+  sendMessage: (data) => api.post('/chat', data),
+  regenerate: (data) => api.post('/chat/regenerate', data),
+  getConversations: () => api.get('/chat/conversations'),
+  getConversation: (id) => api.get(`/chat/conversations/${id}`),
+  updateConversation: (id, data) => api.put(`/chat/conversations/${id}`, data),
+  deleteConversation: (id) => api.delete(`/chat/conversations/${id}`),
+  getProviders: () => api.get('/chat/providers'),
 };
 
 export const sendMessage = async (message) => {
@@ -116,33 +282,29 @@ export const sendMessage = async (message) => {
   }
 };
 
-// Code API
 export const codeAPI = {
-  generate: (data) => api.post(buildApiEndpoint('/code/generate'), data),
-  explain: (data) => api.post(buildApiEndpoint('/code/explain'), data),
-  debug: (data) => api.post(buildApiEndpoint('/code/debug'), data),
-  optimize: (data) => api.post(buildApiEndpoint('/code/optimize'), data),
+  generate: (data) => api.post('/code/generate', data),
+  explain: (data) => api.post('/code/explain', data),
+  debug: (data) => api.post('/code/debug', data),
+  optimize: (data) => api.post('/code/optimize', data),
 };
 
-// Learning API
 export const learningAPI = {
-  generateRoadmap: (data) => api.post(buildApiEndpoint('/learning/roadmap'), data),
-  getProgress: () => api.get(buildApiEndpoint('/learning')),
-  updateProgress: (data) => api.post(buildApiEndpoint('/learning/progress'), data),
-  deleteProgress: (id) => api.delete(buildApiEndpoint(`/learning/${id}`)),
+  generateRoadmap: (data) => api.post('/learning/roadmap', data),
+  getProgress: () => api.get('/learning'),
+  updateProgress: (data) => api.post('/learning/progress', data),
+  deleteProgress: (id) => api.delete(`/learning/${id}`),
 };
 
-// Explain API
 export const explainAPI = {
-  explain: (data) => api.post(buildApiEndpoint('/explain'), data),
+  explain: (data) => api.post('/explain', data),
 };
 
-// Image API
 export const imageAPI = {
-  generate: (data) => api.post(buildApiEndpoint('/image/generate'), data, { timeout: 240000 }),
-  optimizePrompt: (data) => api.post(buildApiEndpoint('/image/prompt'), data, { timeout: 120000 }),
-  getProviders: () => api.get(buildApiEndpoint('/image/providers')),
-  variation: (data) => api.post(buildApiEndpoint('/image/variations'), data, { timeout: 240000 }),
+  generate: (data) => api.post('/image/generate', data, { timeout: 240000 }),
+  optimizePrompt: (data) => api.post('/image/prompt', data, { timeout: 120000 }),
+  getProviders: () => api.get('/image/providers'),
+  variation: (data) => api.post('/image/variations', data, { timeout: 240000 }),
 };
 
 export const generateImage = async (prompt, options = {}) => {

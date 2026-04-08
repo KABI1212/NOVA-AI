@@ -133,3 +133,27 @@ def test_test_email_falls_back_to_log_mode_without_debug_secret(monkeypatch: pyt
     )
 
     assert delivery_mode == "log"
+
+
+def test_delivery_status_auto_detects_smtp_when_provider_is_blank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = EmailService()
+
+    monkeypatch.setattr(email_service_module.settings, "DEBUG", False)
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_PROVIDER", "")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "sender@example.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USERNAME", "sender@example.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "secret-password")
+    monkeypatch.setattr(email_service_module.settings, "SENDGRID_API_KEY", "")
+
+    status = service.get_delivery_status()
+
+    assert status == {
+        "configured_provider": None,
+        "provider": "smtp",
+        "delivery_mode": "email",
+        "ready": True,
+    }
+    assert service.can_send_real_email() is True

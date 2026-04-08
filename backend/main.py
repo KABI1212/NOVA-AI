@@ -26,6 +26,8 @@ from routes import (
     share_router,
     voice_router,
 )
+from services.ai_service import ai_service
+from services.email_service import email_service
 from services.rate_limit_service import rate_limit_service
 from utils.warning_filters import configure_warning_filters
 
@@ -177,11 +179,20 @@ async def root():
 @app.get("/api/status")
 async def api_status():
     """API status endpoint."""
+    ai_capabilities = ai_service.get_runtime_capabilities()
+    email_capabilities = email_service.get_delivery_status()
     return {
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
         "status": "running",
         "message": "Welcome to NOVA AI - Your intelligent assistant platform",
+        "capabilities": {
+            "ai": ai_capabilities,
+            "auth": {
+                "email": email_capabilities,
+                "email_ready": bool(email_capabilities.get("ready")),
+            },
+        },
     }
 
 

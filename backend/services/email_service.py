@@ -19,6 +19,67 @@ class EmailDeliveryError(RuntimeError):
 
 
 class EmailService:
+    def _resolved_provider(self) -> str:
+        configured_provider = (settings.EMAIL_PROVIDER or "").strip().lower()
+        if configured_provider:
+            return configured_provider
+
+        if (settings.SENDGRID_API_KEY or "").strip() and (settings.EMAIL_FROM_ADDRESS or "").strip():
+            return "sendgrid"
+
+        if (settings.SMTP_HOST or "").strip() and (settings.EMAIL_FROM_ADDRESS or "").strip():
+            return "smtp"
+
+        if settings.DEBUG:
+            return "log"
+
+        return ""
+
+    def get_delivery_status(self) -> dict:
+        provider = self._resolved_provider()
+        from_address_ready = bool((settings.EMAIL_FROM_ADDRESS or "").strip())
+        smtp_host_ready = bool((settings.SMTP_HOST or "").strip())
+        smtp_username = (settings.SMTP_USERNAME or "").strip()
+        smtp_password = (settings.SMTP_PASSWORD or "").strip()
+        sendgrid_key_ready = bool((settings.SENDGRID_API_KEY or "").strip())
+
+        if provider == "sendgrid":
+            ready = from_address_ready and sendgrid_key_ready
+            return {
+                "configured_provider": (settings.EMAIL_PROVIDER or "").strip().lower() or None,
+                "provider": "sendgrid",
+                "delivery_mode": "email" if ready else "unconfigured",
+                "ready": ready,
+            }
+
+        if provider == "smtp":
+            auth_ready = (not smtp_username) or bool(smtp_password)
+            ready = from_address_ready and smtp_host_ready and auth_ready
+            return {
+                "configured_provider": (settings.EMAIL_PROVIDER or "").strip().lower() or None,
+                "provider": "smtp",
+                "delivery_mode": "email" if ready else "unconfigured",
+                "ready": ready,
+            }
+
+        if provider in {"console", "log"}:
+            return {
+                "configured_provider": (settings.EMAIL_PROVIDER or "").strip().lower() or None,
+                "provider": provider,
+                "delivery_mode": "log",
+                "ready": False,
+            }
+
+        return {
+            "configured_provider": (settings.EMAIL_PROVIDER or "").strip().lower() or None,
+            "provider": None,
+            "delivery_mode": "log" if settings.DEBUG else "unconfigured",
+            "ready": False,
+        }
+
+    def can_send_real_email(self) -> bool:
+        return bool(self.get_delivery_status().get("ready"))
+
     def send_login_otp(
         self,
         *,
@@ -63,7 +124,7 @@ class EmailService:
         html_body: str,
         debug_secret: str | None = None,
     ) -> str:
-        provider = (settings.EMAIL_PROVIDER or "").strip().lower()
+        provider = self._resolved_provider()
         if provider == "sendgrid":
             self._send_via_sendgrid(
                 recipient_email=recipient_email,
@@ -99,25 +160,9 @@ class EmailService:
                 )
             return "log"
 
-        if provider == "" and settings.DEBUG:
-            if debug_secret:
-                logger.warning(
-                    "email_delivery_console_mode recipient=%s secret=%s provider=%s",
-                    recipient_email,
-                    debug_secret,
-                    "debug-fallback",
-                )
-            else:
-                logger.warning(
-                    "email_delivery_console_mode recipient=%s provider=%s subject=%s",
-                    recipient_email,
-                    "debug-fallback",
-                    subject,
-                )
-            return "log"
-
         raise EmailDeliveryError(
-            "Email delivery is not configured. Set EMAIL_PROVIDER to smtp or sendgrid."
+            "Email delivery is not configured. Set EMAIL_PROVIDER to smtp or sendgrid, "
+            "or provide a complete SMTP / SendGrid configuration."
         )
 
     def _build_login_otp_email(

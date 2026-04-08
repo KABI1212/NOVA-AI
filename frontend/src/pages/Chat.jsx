@@ -10,32 +10,9 @@ import MouseSpark from "../components/MouseSpark";
 import Sidebar from "../components/chat/Sidebar";
 import Settings from "../components/Settings";
 import Topbar from "../components/Topbar";
-import { chatAPI, imageAPI } from "../services/api";
+import { chatAPI, fetchApi, fetchApp, imageAPI } from "../services/api";
 import { speakText, speechSupported as browserSpeechSupported, stopSpeechPlayback } from "../utils/speech";
 import { useAuthStore } from "../utils/store";
-
-const API_BASE = (import.meta.env.VITE_API_URL || "").trim();
-const API_BASE_NORMALIZED = API_BASE.replace(/\/$/, "");
-const buildApiEndpoint = (path) => API_BASE_NORMALIZED
-  ? API_BASE_NORMALIZED.endsWith("/api")
-    ? `${API_BASE_NORMALIZED}${path}`
-    : `${API_BASE_NORMALIZED}/api${path}`
-  : `/api${path}`;
-const buildCompatEndpoint = (path) => {
-  if (!API_BASE_NORMALIZED) {
-    return path;
-  }
-
-  if (API_BASE_NORMALIZED.endsWith("/api")) {
-    const rootBase = API_BASE_NORMALIZED.replace(/\/api$/, "");
-    return `${rootBase}${path}` || path;
-  }
-
-  return `${API_BASE_NORMALIZED}${path}`;
-};
-const API_ENDPOINT = buildApiEndpoint("/chat");
-const DOCUMENT_UPLOAD_ENDPOINT = buildApiEndpoint("/document/upload");
-const LEGACY_DOCUMENT_UPLOAD_ENDPOINT = buildCompatEndpoint("/upload-document");
 const REQUEST_TIMEOUT_MS = 240000;
 const SESSION_STORAGE_KEY = "nova_session_id";
 const MODEL_STORAGE_KEY = "nova_selected_model";
@@ -677,14 +654,14 @@ function Chat() {
 
       const token = localStorage.getItem("token");
       const uploadTargets = [
-        DOCUMENT_UPLOAD_ENDPOINT,
-        LEGACY_DOCUMENT_UPLOAD_ENDPOINT,
-      ].filter((value, index, array) => value && array.indexOf(value) === index);
+        { path: "/document/upload", request: fetchApi },
+        { path: "/upload-document", request: fetchApp },
+      ];
 
       let lastError = null;
 
       for (const target of uploadTargets) {
-        const response = await fetch(target, {
+        const response = await target.request(target.path, {
           method: "POST",
           headers: {
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -1185,7 +1162,7 @@ function Chat() {
           typeof crypto !== "undefined" && crypto.randomUUID
             ? crypto.randomUUID()
             : String(Date.now() + Math.random());
-        const response = await fetch(API_ENDPOINT, {
+        const response = await fetchApi("/chat", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

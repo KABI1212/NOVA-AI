@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, Volume2, VolumeX } from "lucide-react";
 import toast from "react-hot-toast";
 
-import { buildApiEndpoint } from "../../services/api";
+import { fetchApi } from "../../services/api";
 import { useAuthStore, useVoiceStore } from "../../utils/store";
 import { TTS_VOICE_OPTIONS } from "../../utils/voices";
 
@@ -50,7 +50,7 @@ export default function TTSButton({ text }) {
     try {
       setPlaying(true);
 
-      const res = await fetch(buildApiEndpoint('/voice/speak'), {
+      const res = await fetchApi('/voice/speak', {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

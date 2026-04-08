@@ -2444,6 +2444,36 @@ class AIService:
         )
         return list(result.get("images") or [])
 
+    def has_available_text_provider(
+        self,
+        provider: Optional[str] = None,
+        use_case: Optional[str] = None,
+    ) -> bool:
+        return any(_provider_available(candidate) for candidate in _provider_chain(provider, use_case=use_case))
+
+    def get_runtime_capabilities(self) -> Dict[str, Any]:
+        available_text_providers = [
+            provider
+            for provider in dict.fromkeys([*_provider_chain(None), *_FALLBACK_CHAIN])
+            if _provider_available(provider)
+        ]
+        available_image_providers = [
+            provider
+            for provider in ("google", "openrouter", "openai")
+            if _image_provider_available(provider)
+        ]
+
+        return {
+            "configured_provider": _configured_provider_override() or "auto",
+            "configured_model": _configured_model_override(),
+            "text_ready": bool(available_text_providers),
+            "available_text_providers": available_text_providers,
+            "preferred_text_provider": available_text_providers[0] if available_text_providers else None,
+            "image_ready": bool(available_image_providers),
+            "available_image_providers": available_image_providers,
+            "preferred_image_provider": available_image_providers[0] if available_image_providers else None,
+        }
+
     def has_available_image_provider(self, provider: Optional[str] = None) -> bool:
         return bool(_resolve_image_provider_chain(provider))
 
