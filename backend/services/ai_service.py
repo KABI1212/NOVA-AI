@@ -10,6 +10,7 @@ import base64
 import io
 import json
 import logging
+import os
 import re
 import time
 from urllib.parse import urlparse
@@ -26,8 +27,7 @@ from prompts import get_presentation_style_prompt
 logger = logging.getLogger(__name__)
 
 LOCAL_FALLBACK_MESSAGE = (
-    "NOVA AI is in local fallback mode right now. "
-    "Groq, Ollama, and the other providers did not return a usable response. "
+    "NOVA AI couldn't get a usable response from the configured AI providers right now. "
     "Please try again in a moment."
 )
 
@@ -35,7 +35,7 @@ _OFFLINE_TEXT = (
     "NOVA AI is running in offline mode. "
     "Configure an AI provider (OPENAI_API_KEY / DEEPSEEK_API_KEY / "
     "GOOGLE_API_KEY / GROQ_API_KEY / ANTHROPIC_API_KEY) "
-    "or start Ollama (ollama serve)."
+    "or point OLLAMA_BASE_URL at a reachable Ollama server."
 )
 
 _DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
@@ -50,6 +50,16 @@ _DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 _DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 _DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-5"
 _DEFAULT_OLLAMA_MODEL = "llama3"
+_HOSTED_RUNTIME_ENV_VARS = (
+    "RENDER",
+    "RENDER_SERVICE_ID",
+    "RENDER_EXTERNAL_URL",
+    "RAILWAY_ENVIRONMENT",
+    "FLY_APP_NAME",
+    "K_SERVICE",
+    "DYNO",
+    "VERCEL",
+)
 
 _FALLBACK_CHAIN = ["groq", "ollama", "google", "openai", "anthropic", "deepseek"]
 _PROVIDER_DISABLE_SECONDS = 900.0
@@ -379,7 +389,7 @@ def _resolve_provider() -> str:
         return configured
     if getattr(settings, "GROQ_API_KEY", "") and not _provider_temporarily_disabled("groq"):
         return "groq"
-    if getattr(settings, "OLLAMA_BASE_URL", "") and not _provider_temporarily_disabled("ollama"):
+    if _ollama_available() and not _provider_temporarily_disabled("ollama"):
         return "ollama"
     if _google_api_key() and not _provider_temporarily_disabled("google"):
         return "google"
@@ -389,7 +399,35 @@ def _resolve_provider() -> str:
         return "anthropic"
     if _deepseek_api_key() and not _provider_temporarily_disabled("deepseek"):
         return "deepseek"
-    return "ollama"
+    return ""
+
+
+def _running_in_hosted_runtime() -> bool:
+    return any(str(os.getenv(name, "")).strip() for name in _HOSTED_RUNTIME_ENV_VARS)
+
+
+def _ollama_base_url() -> str:
+    return str(getattr(settings, "OLLAMA_BASE_URL", "") or "").strip()
+
+
+def _ollama_is_loopback() -> bool:
+    base_url = _ollama_base_url()
+    if not base_url:
+        return False
+    try:
+        hostname = (urlparse(base_url).hostname or "").strip().lower()
+    except Exception:
+        return False
+    return hostname in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+
+def _ollama_available() -> bool:
+    base_url = _ollama_base_url()
+    if not base_url:
+        return False
+    if _running_in_hosted_runtime() and _ollama_is_loopback():
+        return False
+    return True
 
 
 def _google_api_key() -> str:
@@ -1652,7 +1690,7 @@ def _provider_ready(provider: str) -> bool:
     if provider == "anthropic":
         return bool(getattr(settings, "ANTHROPIC_API_KEY", ""))
     if provider == "ollama":
-        return True
+        return _ollama_available()
     return False
 
 
