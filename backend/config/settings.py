@@ -96,6 +96,7 @@ class Settings(BaseSettings):
         "http://localhost:5173,"
         "http://127.0.0.1:5173"
     )
+    CORS_ORIGIN_REGEX: str = r"^https://([A-Za-z0-9-]+\.)*(vercel\.app|onrender\.com)$"
     MAX_FILE_SIZE_MB: int = 10
     UPLOAD_DIR: str = "./uploads"
     REDIS_URL: str = "redis://localhost:6379"
@@ -132,6 +133,11 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> List[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def cors_origin_regex_value(self) -> str | None:
+        value = str(getattr(self, "CORS_ORIGIN_REGEX", "") or "").strip()
+        return value or None
 
     model_config = SettingsConfigDict(
         env_file=str(_ENV_FILE),

@@ -129,6 +129,8 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("Database unavailable during startup: %s", get_database_status())
     logger.info("CORS enabled for: %s", settings.cors_origins_list)
+    if settings.cors_origin_regex_value:
+        logger.info("CORS regex enabled for: %s", settings.cors_origin_regex_value)
     yield
     await rate_limit_service.close()
     logger.info("%s shutting down", settings.APP_NAME)
@@ -148,6 +150,7 @@ if (FRONTEND_DIST / "assets").exists():
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
+    allow_origin_regex=settings.cors_origin_regex_value,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

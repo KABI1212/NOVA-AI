@@ -50,6 +50,11 @@ DEBUG=false
 AI_PROVIDER=auto
 ```
 
+The backend also accepts Vercel and Render deployment origins by default through
+`CORS_ORIGIN_REGEX`, which helps preview deployments and standard `.vercel.app` /
+`.onrender.com` frontends work without a browser CORS failure. You should still
+set `CORS_ORIGINS` to your main production frontend URL explicitly.
+
 Add whichever provider keys you want to use:
 
 ```env

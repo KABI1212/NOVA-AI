@@ -1,4 +1,5 @@
 import asyncio
+import re
 
 import pytest
 
@@ -60,3 +61,11 @@ def test_api_status_includes_runtime_capabilities(monkeypatch) -> None:
     assert payload["capabilities"]["ai"]["text_ready"] is True
     assert payload["capabilities"]["auth"]["email_ready"] is True
     assert payload["capabilities"]["auth"]["email"]["provider"] == "smtp"
+
+
+def test_default_cors_origin_regex_supports_vercel_and_render_hosts() -> None:
+    pattern = main_module.settings.cors_origin_regex_value
+
+    assert pattern is not None
+    assert re.match(pattern, "https://nova-ai.vercel.app")
+    assert re.match(pattern, "https://nova-ai-backend.onrender.com")
