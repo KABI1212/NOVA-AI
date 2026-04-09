@@ -35,11 +35,14 @@ class Settings(BaseSettings):
     AUTH_OTP_LENGTH: int = 6
 
     EMAIL_PROVIDER: str = ""
+    EMAIL_FROM: str = ""
     EMAIL_FROM_ADDRESS: str = ""
     EMAIL_FROM_NAME: str = "NOVA AI"
     EMAIL_REPLY_TO: str = ""
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASS: str = ""
     SMTP_USERNAME: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_USE_TLS: bool = True

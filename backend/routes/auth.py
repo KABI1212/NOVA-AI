@@ -85,8 +85,7 @@ class LoginChallengeResponse(BaseModel):
     challenge_token: str
     email: EmailStr
     otp_expires_at: datetime
-    delivery_mode: Literal["email", "log"]
-    dev_otp_code: str | None = None
+    delivery_mode: Literal["email"]
     message: str
 
 
@@ -94,8 +93,7 @@ class PasswordResetChallengeResponse(BaseModel):
     challenge_token: str
     email: EmailStr
     otp_expires_at: datetime
-    delivery_mode: Literal["email", "log"]
-    dev_otp_code: str | None = None
+    delivery_mode: Literal["email"]
     message: str
 
 
@@ -111,7 +109,7 @@ class UpdateAccountRequest(BaseModel):
 
 class EmailTestResponse(BaseModel):
     email: EmailStr
-    delivery_mode: Literal["email", "log"]
+    delivery_mode: Literal["email"]
     message: str
 
 
@@ -196,12 +194,7 @@ def _issue_login_otp(user: User, db: Session) -> dict:
         "email": user.email,
         "otp_expires_at": expires_at,
         "delivery_mode": delivery_mode,
-        "dev_otp_code": otp_code if delivery_mode == "log" and settings.DEBUG else None,
-        "message": (
-            "A verification code has been sent to your email address."
-            if delivery_mode == "email"
-            else "Email delivery is not configured. The verification code was logged by the backend for local development."
-        ),
+        "message": "A verification code has been sent to your email address.",
     }
 
 
@@ -242,12 +235,7 @@ def _issue_password_reset_otp(user: User, db: Session) -> dict:
         "email": user.email,
         "otp_expires_at": expires_at,
         "delivery_mode": delivery_mode,
-        "dev_otp_code": otp_code if delivery_mode == "log" and settings.DEBUG else None,
-        "message": (
-            "A password reset code has been sent to your email address."
-            if delivery_mode == "email"
-            else "Email delivery is not configured. The password reset code was logged by the backend for local development."
-        ),
+        "message": "A password reset code has been sent to your email address.",
     }
 
 
@@ -579,11 +567,7 @@ async def send_email_test(current_user: User = Depends(get_current_user)):
     return {
         "email": current_user.email,
         "delivery_mode": delivery_mode,
-        "message": (
-            "Test email sent successfully."
-            if delivery_mode == "email"
-            else "Email delivery is not configured. The test email was logged by the backend for local development."
-        ),
+        "message": "Test email sent successfully.",
     }
 
 

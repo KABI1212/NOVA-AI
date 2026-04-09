@@ -131,6 +131,7 @@ def test_signup_creates_user_and_requires_verification(
         assert response["requires_otp"] is True
         assert response["email"] == "new.user@example.com"
         assert response["delivery_mode"] == "email"
+        assert "dev_otp_code" not in response
         assert sent_email["recipient_email"] == "new.user@example.com"
         assert auth_module.verify_secret_value(
             sent_email["otp_code"],
@@ -237,7 +238,7 @@ def test_issue_login_otp_returns_challenge_and_persists_pending_state(monkeypatc
         assert response["requires_otp"] is True
         assert response["email"] == user.email
         assert response["delivery_mode"] == "email"
-        assert response["dev_otp_code"] is None
+        assert "dev_otp_code" not in response
         assert len(sent_email["otp_code"]) == auth_module.settings.AUTH_OTP_LENGTH
         assert sent_email["recipient_email"] == user.email
         assert auth_module.verify_secret_value(
@@ -253,24 +254,17 @@ def test_issue_login_otp_returns_challenge_and_persists_pending_state(monkeypatc
     asyncio.run(scenario())
 
 
-def test_issue_login_otp_returns_debug_otp_when_delivery_falls_back_to_log_mode(
+def test_issue_login_otp_never_returns_raw_otp(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user = _make_user()
     db = _FakeSession([user])
-    monkeypatch.setattr(auth_module.settings, "DEBUG", True)
 
     async def scenario() -> None:
-        response, sent_email = await _issue_login_challenge(
-            monkeypatch,
-            db,
-            user,
-            delivery_mode="log",
-        )
+        response, _sent_email = await _issue_login_challenge(monkeypatch, db, user)
 
-        assert response["delivery_mode"] == "log"
-        assert response["dev_otp_code"] == sent_email["otp_code"]
-        assert "logged by the backend" in response["message"].lower()
+        assert response["delivery_mode"] == "email"
+        assert "dev_otp_code" not in response
 
     asyncio.run(scenario())
 
@@ -318,6 +312,7 @@ def test_login_requires_otp_for_unverified_user(monkeypatch: pytest.MonkeyPatch)
         assert response["requires_otp"] is True
         assert response["email"] == user.email
         assert response["delivery_mode"] == "email"
+        assert "dev_otp_code" not in response
         assert sent_email["recipient_email"] == user.email
         assert auth_module.verify_secret_value(
             sent_email["otp_code"],
@@ -485,6 +480,7 @@ def test_forgot_password_issues_reset_challenge(monkeypatch: pytest.MonkeyPatch)
 
         assert response["email"] == user.email
         assert response["delivery_mode"] == "email"
+        assert "dev_otp_code" not in response
         assert sent_email["recipient_email"] == user.email
         assert auth_module.verify_secret_value(
             sent_email["otp_code"],

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -71,14 +72,7 @@ function Signup() {
       setChallenge(response.data);
       setOtp('');
       setStep('otp');
-
-      if (response.data.delivery_mode === 'email') {
-        toast.success(response.data.message || 'Verification code sent to your email');
-      } else {
-        toast((response.data.message || 'Verification code logged by backend').slice(0, 180), {
-          icon: 'i',
-        });
-      }
+      toast.success(response.data.message || 'OTP sent to your email.');
     } catch (error) {
       toast.error(formatApiError(error, 'Signup failed'));
     } finally {
@@ -121,14 +115,7 @@ function Signup() {
       });
       setChallenge(response.data);
       setOtp('');
-
-      if (response.data.delivery_mode === 'email') {
-        toast.success(response.data.message || 'A new verification code was sent');
-      } else {
-        toast((response.data.message || 'Verification code logged by backend').slice(0, 180), {
-          icon: 'i',
-        });
-      }
+      toast.success(response.data.message || 'A new OTP has been sent to your email.');
     } catch (error) {
       toast.error(formatApiError(error, 'Could not resend the code'));
     } finally {
@@ -248,24 +235,6 @@ function Signup() {
                 </span>
                 . {expiryLabel}
               </p>
-
-              {challenge?.delivery_mode === 'log' ? (
-                <div className="mb-6 rounded-lg border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
-                  Email delivery is not configured yet. The OTP was written to the backend logs instead of being sent by email.
-                  {challenge?.dev_otp_code ? (
-                    <div className="mt-3 flex items-center justify-between gap-3 rounded-md bg-white/70 px-3 py-2 font-mono text-base tracking-[0.3em] text-amber-950 dark:bg-black/20 dark:text-amber-50">
-                      <span>{challenge.dev_otp_code}</span>
-                      <button
-                        type="button"
-                        onClick={() => setOtp(challenge.dev_otp_code)}
-                        className="rounded-md border border-amber-400/60 px-2 py-1 text-xs font-semibold tracking-normal text-amber-900 transition hover:bg-amber-100 dark:border-amber-300/30 dark:text-amber-100 dark:hover:bg-amber-400/10"
-                      >
-                        Use Code
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
 
               <form onSubmit={handleOtpSubmit} className="space-y-4">
                 <div>

@@ -24,23 +24,20 @@ class EmailService:
         if configured_provider:
             return configured_provider
 
-        if (settings.SENDGRID_API_KEY or "").strip() and (settings.EMAIL_FROM_ADDRESS or "").strip():
+        if (settings.SENDGRID_API_KEY or "").strip() and self._configured_from_address():
             return "sendgrid"
 
-        if (settings.SMTP_HOST or "").strip() and (settings.EMAIL_FROM_ADDRESS or "").strip():
+        if (settings.SMTP_HOST or "").strip() and self._configured_from_address():
             return "smtp"
-
-        if settings.DEBUG:
-            return "log"
 
         return ""
 
     def get_delivery_status(self) -> dict:
         provider = self._resolved_provider()
-        from_address_ready = bool((settings.EMAIL_FROM_ADDRESS or "").strip())
+        from_address_ready = bool(self._configured_from_address())
         smtp_host_ready = bool((settings.SMTP_HOST or "").strip())
-        smtp_username = (settings.SMTP_USERNAME or "").strip()
-        smtp_password = (settings.SMTP_PASSWORD or "").strip()
+        smtp_username = self._configured_smtp_username()
+        smtp_password = self._configured_smtp_password()
         sendgrid_key_ready = bool((settings.SENDGRID_API_KEY or "").strip())
 
         if provider == "sendgrid":
@@ -62,18 +59,10 @@ class EmailService:
                 "ready": ready,
             }
 
-        if provider in {"console", "log"}:
-            return {
-                "configured_provider": (settings.EMAIL_PROVIDER or "").strip().lower() or None,
-                "provider": provider,
-                "delivery_mode": "log",
-                "ready": False,
-            }
-
         return {
             "configured_provider": (settings.EMAIL_PROVIDER or "").strip().lower() or None,
             "provider": None,
-            "delivery_mode": "log" if settings.DEBUG else "unconfigured",
+            "delivery_mode": "unconfigured",
             "ready": False,
         }
 
@@ -96,7 +85,6 @@ class EmailService:
             subject=subject,
             text_body=text_body,
             html_body=html_body,
-            debug_secret=otp_code,
         )
 
     def send_password_reset_otp(
@@ -115,7 +103,6 @@ class EmailService:
             subject=subject,
             text_body=text_body,
             html_body=html_body,
-            debug_secret=otp_code,
         )
 
     def send_test_email(
@@ -141,7 +128,6 @@ class EmailService:
         subject: str,
         text_body: str,
         html_body: str,
-        debug_secret: str | None = None,
     ) -> str:
         provider = self._resolved_provider()
         if provider == "sendgrid":
@@ -162,26 +148,8 @@ class EmailService:
             )
             return "email"
 
-        if provider in {"console", "log"}:
-            if debug_secret:
-                logger.warning(
-                    "email_delivery_console_mode recipient=%s secret=%s provider=%s",
-                    recipient_email,
-                    debug_secret,
-                    provider,
-                )
-            else:
-                logger.warning(
-                    "email_delivery_console_mode recipient=%s provider=%s subject=%s",
-                    recipient_email,
-                    provider,
-                    subject,
-                )
-            return "log"
-
         raise EmailDeliveryError(
-            "Email delivery is not configured. Set EMAIL_PROVIDER to smtp or sendgrid, "
-            "or provide a complete SMTP / SendGrid configuration."
+            "Email delivery is not configured. Set EMAIL_PROVIDER=smtp and provide SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and EMAIL_FROM."
         )
 
     def _build_login_otp_email(
@@ -480,8 +448,8 @@ class EmailService:
         host = (settings.SMTP_HOST or "").strip()
         from_address = self._from_address()
         from_header = self._from_header()
-        smtp_username = (settings.SMTP_USERNAME or "").strip()
-        smtp_password = (settings.SMTP_PASSWORD or "").strip()
+        smtp_username = self._configured_smtp_username()
+        smtp_password = self._configured_smtp_password()
 
         # Google shows app passwords grouped with spaces, but SMTP expects the raw 16-character value.
         if host.lower() == "smtp.gmail.com":
@@ -534,9 +502,9 @@ class EmailService:
             raise EmailDeliveryError("SMTP connection failed while sending the verification email.") from exc
 
     def _from_address(self) -> str:
-        from_address = (settings.EMAIL_FROM_ADDRESS or "").strip()
+        from_address = self._configured_from_address()
         if not from_address:
-            raise EmailDeliveryError("EMAIL_FROM_ADDRESS is required for email delivery.")
+            raise EmailDeliveryError("EMAIL_FROM is required for email delivery.")
         return from_address
 
     def _from_header(self) -> str:
@@ -545,6 +513,24 @@ class EmailService:
         if not from_name:
             return from_address
         return f"{from_name} <{from_address}>"
+
+    def _configured_from_address(self) -> str:
+        return (
+            (settings.EMAIL_FROM or "").strip()
+            or (settings.EMAIL_FROM_ADDRESS or "").strip()
+        )
+
+    def _configured_smtp_username(self) -> str:
+        return (
+            (settings.SMTP_USER or "").strip()
+            or (settings.SMTP_USERNAME or "").strip()
+        )
+
+    def _configured_smtp_password(self) -> str:
+        return (
+            (settings.SMTP_PASS or "").strip()
+            or (settings.SMTP_PASSWORD or "").strip()
+        )
 
 
 email_service = EmailService()

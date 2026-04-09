@@ -60,11 +60,14 @@ def test_gmail_smtp_auth_failure_maps_to_app_password_message(monkeypatch: pytes
 
     monkeypatch.setattr(email_service_module.settings, "SMTP_HOST", "smtp.gmail.com")
     monkeypatch.setattr(email_service_module.settings, "SMTP_PORT", 587)
-    monkeypatch.setattr(email_service_module.settings, "SMTP_USERNAME", "kabileshk702@gmail.com")
-    monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "wrong-password")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USER", "kabileshk702@gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASS", "wrong-password")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USERNAME", "")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "")
     monkeypatch.setattr(email_service_module.settings, "SMTP_USE_TLS", True)
     monkeypatch.setattr(email_service_module.settings, "SMTP_USE_SSL", False)
-    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "kabileshk702@gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM", "kabileshk702@gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "")
     monkeypatch.setattr(email_service_module.smtplib, "SMTP", _FakeSMTP)
 
     with pytest.raises(email_service_module.EmailDeliveryError) as exc_info:
@@ -104,11 +107,14 @@ def test_gmail_app_password_spaces_are_removed_before_login(monkeypatch: pytest.
 
     monkeypatch.setattr(email_service_module.settings, "SMTP_HOST", "smtp.gmail.com")
     monkeypatch.setattr(email_service_module.settings, "SMTP_PORT", 587)
-    monkeypatch.setattr(email_service_module.settings, "SMTP_USERNAME", "kabileshkofficial@gmail.com")
-    monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "gnnw osso ygck yhbx")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USER", "kabileshkofficial@gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASS", "gnnw osso ygck yhbx")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USERNAME", "")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "")
     monkeypatch.setattr(email_service_module.settings, "SMTP_USE_TLS", True)
     monkeypatch.setattr(email_service_module.settings, "SMTP_USE_SSL", False)
-    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "kabileshkofficial@gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM", "kabileshkofficial@gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "")
     monkeypatch.setattr(email_service_module.smtplib, "SMTP", _FakeSMTP)
 
     service._send_via_smtp(
@@ -122,17 +128,21 @@ def test_gmail_app_password_spaces_are_removed_before_login(monkeypatch: pytest.
     assert captured["password"] == "gnnwossoygckyhbx"
 
 
-def test_test_email_falls_back_to_log_mode_without_debug_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_test_email_raises_when_provider_is_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     service = EmailService()
 
-    monkeypatch.setattr(email_service_module.settings, "EMAIL_PROVIDER", "log")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_PROVIDER", "")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_HOST", "")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USER", "")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASS", "")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM", "")
+    monkeypatch.setattr(email_service_module.settings, "SENDGRID_API_KEY", "")
 
-    delivery_mode = service.send_test_email(
-        recipient_email="someone@example.com",
-        recipient_name="Alex",
-    )
-
-    assert delivery_mode == "log"
+    with pytest.raises(email_service_module.EmailDeliveryError):
+        service.send_test_email(
+            recipient_email="someone@example.com",
+            recipient_name="Alex",
+        )
 
 
 def test_delivery_status_auto_detects_smtp_when_provider_is_blank(
@@ -142,10 +152,13 @@ def test_delivery_status_auto_detects_smtp_when_provider_is_blank(
 
     monkeypatch.setattr(email_service_module.settings, "DEBUG", False)
     monkeypatch.setattr(email_service_module.settings, "EMAIL_PROVIDER", "")
-    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "sender@example.com")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM", "sender@example.com")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "")
     monkeypatch.setattr(email_service_module.settings, "SMTP_HOST", "smtp.example.com")
-    monkeypatch.setattr(email_service_module.settings, "SMTP_USERNAME", "sender@example.com")
-    monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "secret-password")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USER", "sender@example.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASS", "secret-password")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USERNAME", "")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "")
     monkeypatch.setattr(email_service_module.settings, "SENDGRID_API_KEY", "")
 
     status = service.get_delivery_status()
