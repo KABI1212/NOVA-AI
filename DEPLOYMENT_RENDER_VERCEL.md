@@ -67,7 +67,43 @@ GROQ_API_KEY=
 OPENROUTER_API_KEY=
 ```
 
-If you use email login OTP in production, also set SMTP or SendGrid variables.
+### Email OTP (Required For Real Verification Emails)
+
+If you want signup/login/reset OTP in real inboxes, configure one of these on Render:
+
+Option A: SMTP (example with Gmail app password)
+
+```env
+EMAIL_PROVIDER=smtp
+EMAIL_FROM_ADDRESS=yourgmail@gmail.com
+EMAIL_FROM_NAME=NOVA AI
+EMAIL_REPLY_TO=yourgmail@gmail.com
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=yourgmail@gmail.com
+SMTP_PASSWORD=your-16-char-google-app-password
+SMTP_USE_TLS=true
+SMTP_USE_SSL=false
+SMTP_TIMEOUT_SECONDS=20
+```
+
+Option B: SendGrid
+
+```env
+EMAIL_PROVIDER=sendgrid
+EMAIL_FROM_ADDRESS=verified-sender@yourdomain.com
+EMAIL_FROM_NAME=NOVA AI
+EMAIL_REPLY_TO=verified-sender@yourdomain.com
+SENDGRID_API_KEY=SG.your-sendgrid-api-key
+```
+
+Important:
+
+- Keep `DEBUG=false` on Render. If `DEBUG=true` and email is not configured, OTP may appear in the UI in dev fallback mode.
+- After adding/updating env vars, redeploy backend: Render -> Manual Deploy -> Deploy latest commit.
+- Verify status at `https://your-render-backend.onrender.com/api/status` and confirm:
+  - `capabilities.auth.email.ready` is `true`
+  - `capabilities.auth.email.delivery_mode` is `email`
 
 ## 3. Vercel Frontend
 

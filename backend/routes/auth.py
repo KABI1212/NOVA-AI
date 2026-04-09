@@ -62,6 +62,17 @@ class LoginOtpResendRequest(BaseModel):
     challenge_token: str
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    otp: str
+    challenge_token: str
+    new_password: str
+
+
 class TokenResponse(BaseModel):
     requires_otp: Literal[False] = False
     access_token: str
@@ -76,6 +87,19 @@ class LoginChallengeResponse(BaseModel):
     otp_expires_at: datetime
     delivery_mode: Literal["email", "log"]
     dev_otp_code: str | None = None
+    message: str
+
+
+class PasswordResetChallengeResponse(BaseModel):
+    challenge_token: str
+    email: EmailStr
+    otp_expires_at: datetime
+    delivery_mode: Literal["email", "log"]
+    dev_otp_code: str | None = None
+    message: str
+
+
+class PasswordResetResponse(BaseModel):
     message: str
 
 
@@ -115,6 +139,13 @@ def _clear_login_otp_state(user: User) -> None:
     user.login_otp_expires_at = None
     user.login_otp_sent_at = None
     user.login_otp_challenge_hash = None
+
+
+def _clear_password_reset_state(user: User) -> None:
+    user.password_reset_otp_code_hash = None
+    user.password_reset_otp_expires_at = None
+    user.password_reset_otp_sent_at = None
+    user.password_reset_otp_challenge_hash = None
 
 
 def _persist_user(db: Session, user: User) -> None:
@@ -174,6 +205,52 @@ def _issue_login_otp(user: User, db: Session) -> dict:
     }
 
 
+def _issue_password_reset_otp(user: User, db: Session) -> dict:
+    otp_code = generate_numeric_otp()
+    challenge_token = generate_login_challenge_token()
+    expires_at = utcnow_naive() + timedelta(minutes=settings.AUTH_OTP_EXPIRE_MINUTES)
+
+    user.password_reset_otp_code_hash = hash_secret_value(otp_code)
+    user.password_reset_otp_challenge_hash = hash_secret_value(challenge_token)
+    user.password_reset_otp_expires_at = expires_at
+    user.password_reset_otp_sent_at = utcnow_naive()
+
+    _persist_user(db, user)
+
+    try:
+        delivery_mode = email_service.send_password_reset_otp(
+            recipient_email=user.email,
+            otp_code=otp_code,
+            recipient_name=user.full_name or user.username,
+        )
+    except EmailDeliveryError as exc:
+        logger.error(
+            "password_reset_otp_email_delivery_failed user_id=%s email=%s error=%s",
+            user.id,
+            user.email,
+            exc,
+        )
+        _clear_password_reset_state(user)
+        _persist_user(db, user)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "challenge_token": challenge_token,
+        "email": user.email,
+        "otp_expires_at": expires_at,
+        "delivery_mode": delivery_mode,
+        "dev_otp_code": otp_code if delivery_mode == "log" and settings.DEBUG else None,
+        "message": (
+            "A password reset code has been sent to your email address."
+            if delivery_mode == "email"
+            else "Email delivery is not configured. The password reset code was logged by the backend for local development."
+        ),
+    }
+
+
 def _load_user_by_email(email: str, db: Session) -> User | None:
     return db.query(User).filter(User.email == email).first()
 
@@ -218,6 +295,51 @@ def _validate_pending_login(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Verification code expired. Please sign in again.",
+        )
+
+    return user
+
+
+def _validate_pending_password_reset(
+    *,
+    user: User | None,
+    challenge_token: str,
+    db: Session,
+) -> User:
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No account found with this email address.",
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is inactive",
+        )
+
+    if (
+        not user.password_reset_otp_code_hash
+        or not user.password_reset_otp_challenge_hash
+        or user.password_reset_otp_expires_at is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No active password reset request. Please request a new code.",
+        )
+
+    if not verify_secret_value(challenge_token, user.password_reset_otp_challenge_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Password reset request is invalid. Please request a new code.",
+        )
+
+    if user.password_reset_otp_expires_at < utcnow_naive():
+        _clear_password_reset_state(user)
+        _persist_user(db, user)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Verification code expired. Please request a new code.",
         )
 
     return user
@@ -359,6 +481,78 @@ async def resend_login_otp(
     )
 
     return _issue_login_otp(user, db)
+
+
+@router.post(
+    "/password/forgot",
+    response_model=PasswordResetChallengeResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def forgot_password(
+    request: ForgotPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    """Send a password-reset OTP to the registered email."""
+
+    email = request.email.strip().lower()
+    user = _load_user_by_email(email, db)
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No account found with this email address.",
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is inactive",
+        )
+
+    return _issue_password_reset_otp(user, db)
+
+
+@router.post("/password/reset", response_model=PasswordResetResponse)
+async def reset_password(
+    request: ResetPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    """Reset an account password using a valid OTP challenge."""
+
+    email = request.email.strip().lower()
+    otp = "".join(character for character in request.otp if character.isdigit())
+    new_password = request.new_password or ""
+
+    if len(otp) != settings.AUTH_OTP_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Verification code must be {settings.AUTH_OTP_LENGTH} digits.",
+        )
+
+    if len(new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be at least 8 characters.",
+        )
+
+    user = _validate_pending_password_reset(
+        user=_load_user_by_email(email, db),
+        challenge_token=request.challenge_token.strip(),
+        db=db,
+    )
+
+    if not verify_secret_value(otp, user.password_reset_otp_code_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid verification code.",
+        )
+
+    user.hashed_password = get_password_hash(new_password)
+    _clear_password_reset_state(user)
+    _clear_login_otp_state(user)
+    _persist_user(db, user)
+
+    return {"message": "Password reset successful. Please sign in with your new password."}
 
 
 @router.post("/email-test", response_model=EmailTestResponse)

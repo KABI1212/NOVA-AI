@@ -47,6 +47,14 @@ MAX_HISTORY_MESSAGES = 12
 logger = logging.getLogger(__name__)
 FALLBACK_MESSAGE = LOCAL_FALLBACK_MESSAGE
 SETUP_RETRY_MESSAGE = "That option isn't ready just yet. Want me to try again?"
+ANSWER_SOURCE_AI = "ai"
+ANSWER_SOURCE_WEB = "web"
+ANSWER_SOURCE_DOCUMENT = "document"
+ANSWER_SOURCE_SYSTEM = "system"
+_SEARCH_FALLBACK_OPENERS = (
+    "best current answer i could verify from fresh web results:",
+    "i couldn't use the ai model just now, but i found these current web results:",
+)
 REGENERATE_VARIATION_INSTRUCTION = (
     "This is a regenerate request. Give a fresh version of the answer. "
     "Do not repeat the previous wording. Improve clarity, add a useful example, or simplify the explanation."
@@ -199,6 +207,7 @@ def _payload(
     prompt_images: Optional[List[str]] = None,
     answer_images: Optional[List[str]] = None,
     sources: Optional[List[dict]] = None,
+    answer_source: Optional[str] = None,
 ) -> dict:
     resolved_answer_images = answer_images if answer_images is not None else images
     payload = {
@@ -209,6 +218,8 @@ def _payload(
         "prompt_images": prompt_images or [],
         "sources": sources or [],
     }
+    if answer_source:
+        payload["answer_source"] = answer_source
     if conversation is not None:
         payload["conversation_id"] = conversation.id
         payload["title"] = conversation.title
@@ -222,6 +233,7 @@ def _final_payload(
     prompt_images: Optional[List[str]] = None,
     answer_images: Optional[List[str]] = None,
     sources: Optional[List[dict]] = None,
+    answer_source: Optional[str] = None,
     interrupted: bool = False,
 ) -> dict:
     payload = _payload(
@@ -231,6 +243,7 @@ def _final_payload(
         prompt_images=prompt_images,
         answer_images=answer_images,
         sources=sources,
+        answer_source=answer_source,
     ) | {"type": "final"}
     if interrupted:
         payload["error"] = "retry"
@@ -1792,6 +1805,42 @@ def _format_search_fallback_answer(results: List[dict]) -> str:
     return "\n".join(lines).strip()
 
 
+def _looks_like_search_fallback_answer(answer: str) -> bool:
+    normalized = str(answer or "").strip().lower()
+    return any(normalized.startswith(prefix) for prefix in _SEARCH_FALLBACK_OPENERS)
+
+
+def _resolve_answer_source(answer: str, mode: str) -> str:
+    normalized = str(answer or "").strip()
+    if not normalized or normalized == FALLBACK_MESSAGE:
+        return ANSWER_SOURCE_SYSTEM
+    if _looks_like_search_fallback_answer(normalized):
+        return ANSWER_SOURCE_WEB
+    if mode == "documents":
+        return ANSWER_SOURCE_DOCUMENT
+    return ANSWER_SOURCE_AI
+
+
+def _log_search_fallback_trigger(
+    *,
+    mode: str,
+    provider: Optional[str],
+    model: Optional[str],
+    reason: str,
+    message: str,
+    force_search: bool,
+) -> None:
+    logger.info(
+        "Fallback triggered: using web search mode=%s provider=%s model=%s reason=%s force_search=%s message=%s",
+        mode,
+        provider or "<auto>",
+        model or "<default>",
+        reason,
+        force_search,
+        _preview_text(message),
+    )
+
+
 async def _search_backup_answer(message: str, force_search: bool = False) -> Optional[str]:
     answer, _ = await _search_backup_answer_bundle(message, force_search=force_search)
     return answer
@@ -1822,7 +1871,7 @@ async def _best_effort_answer(
     force_search: bool = False,
     max_tokens: Optional[int] = None,
 ) -> str:
-    answer, _ = await _best_effort_answer_bundle(
+    answer, _, _ = await _best_effort_answer_bundle(
         history,
         user_message,
         mode,
@@ -1846,7 +1895,7 @@ async def _best_effort_answer_bundle(
     extra_instruction: Optional[str] = None,
     force_search: bool = False,
     max_tokens: Optional[int] = None,
-) -> tuple[str, List[dict]]:
+) -> tuple[str, List[dict], str]:
     if mode == "documents":
         primary_message = user_message
         primary_sources = _document_sources_from_context(user_message, doc_context)
@@ -1883,7 +1932,8 @@ async def _best_effort_answer_bundle(
             max_tokens=resolved_max_tokens,
         )
         if mode == "documents" and _looks_like_stale_cutoff_answer(primary_answer):
-            return _fallback_document_answer_from_context(user_message, doc_context), primary_sources
+            fallback_answer = _fallback_document_answer_from_context(user_message, doc_context)
+            return fallback_answer, primary_sources, _resolve_answer_source(fallback_answer, mode)
         if _looks_like_stale_cutoff_answer(primary_answer):
             refreshed_answer, refreshed_sources = await _retry_stale_answer_with_fresh_sources_bundle(
                 history,
@@ -1896,8 +1946,12 @@ async def _best_effort_answer_bundle(
                 max_tokens=resolved_max_tokens,
             )
             if refreshed_answer:
-                return refreshed_answer, refreshed_sources or primary_sources
-        return primary_answer, primary_sources
+                return (
+                    refreshed_answer,
+                    refreshed_sources or primary_sources,
+                    _resolve_answer_source(refreshed_answer, mode),
+                )
+        return primary_answer, primary_sources, _resolve_answer_source(primary_answer, mode)
     except Exception as exc:
         logger.warning(
             "Primary AI answer failed mode=%s provider=%s model=%s error=%s",
@@ -1907,7 +1961,8 @@ async def _best_effort_answer_bundle(
             exc,
         )
         if mode == "documents":
-            return _fallback_document_answer_from_context(user_message, doc_context), primary_sources
+            fallback_answer = _fallback_document_answer_from_context(user_message, doc_context)
+            return fallback_answer, primary_sources, _resolve_answer_source(fallback_answer, mode)
 
     if mode != "documents" and primary_message == user_message:
         searched_message, searched_sources = await _maybe_enhance_temporal_message_with_sources(
@@ -1945,8 +2000,16 @@ async def _best_effort_answer_bundle(
                         force_search=True,
                     )
                     if search_backup:
-                        return search_backup, backup_sources
-                return retry_answer, searched_sources
+                        _log_search_fallback_trigger(
+                            mode=mode,
+                            provider=provider,
+                            model=model,
+                            reason="stale_cutoff_after_search_retry",
+                            message=user_message,
+                            force_search=True,
+                        )
+                        return search_backup, backup_sources, ANSWER_SOURCE_WEB
+                return retry_answer, searched_sources, _resolve_answer_source(retry_answer, mode)
             except Exception as exc:
                 logger.warning(
                     "Search-backed AI retry failed mode=%s provider=%s model=%s error=%s",
@@ -1956,6 +2019,7 @@ async def _best_effort_answer_bundle(
                     exc,
                 )
 
+    fallback_reason = "search_mode" if force_search else "primary_failure"
     search_backup, backup_sources = await _search_backup_answer_bundle(
         user_message,
         force_search=force_search,
@@ -1966,14 +2030,32 @@ async def _best_effort_answer_bundle(
             user_message,
             force_search=True,
         )
+        if search_backup:
+            fallback_reason = "forced_search_after_failure"
 
     if search_backup:
-        return search_backup, backup_sources
+        _log_search_fallback_trigger(
+            mode=mode,
+            provider=provider,
+            model=model,
+            reason=fallback_reason,
+            message=user_message,
+            force_search=force_search,
+        )
+        return search_backup, backup_sources, ANSWER_SOURCE_WEB
 
     if mode == "documents":
-        return _fallback_document_answer_from_context(user_message, doc_context), primary_sources
+        fallback_answer = _fallback_document_answer_from_context(user_message, doc_context)
+        return fallback_answer, primary_sources, _resolve_answer_source(fallback_answer, mode)
 
-    return FALLBACK_MESSAGE, []
+    logger.warning(
+        "Fallback exhausted mode=%s provider=%s model=%s message=%s",
+        mode,
+        provider or "<auto>",
+        model or "<default>",
+        _preview_text(user_message),
+    )
+    return FALLBACK_MESSAGE, [], ANSWER_SOURCE_SYSTEM
 
 
 async def _rescue_stale_compatible_provider_answer(
@@ -2006,7 +2088,7 @@ async def _rescue_stale_compatible_provider_answer_bundle(
     if not _looks_like_stale_cutoff_answer(draft_answer):
         return draft_answer, []
 
-    rescued_answer, rescued_sources = await _best_effort_answer_bundle(
+    rescued_answer, rescued_sources, _ = await _best_effort_answer_bundle(
         history,
         user_message,
         mode,
@@ -2382,6 +2464,7 @@ async def chat(
                             response_max_tokens,
                         )
                         final_sources = rescued_sources or answer_sources
+                        answer_source = _resolve_answer_source(full_response, mode)
                         prompt_images = await _await_image_task(prompt_image_task)
                         answer_images = []
                         if generate_answer_image:
@@ -2395,6 +2478,7 @@ async def chat(
                                 prompt_images=prompt_images,
                                 answer_images=answer_images,
                                 sources=final_sources,
+                                answer_source=answer_source,
                             )
                         )
                     except Exception as exc:
@@ -2432,6 +2516,7 @@ async def chat(
                     response_max_tokens,
                 )
                 final_sources = rescued_sources or answer_sources
+                answer_source = _resolve_answer_source(text or fallback_message, mode)
                 prompt_images = await _await_image_task(prompt_image_task)
                 answer_images = []
                 if text and generate_answer_image:
@@ -2445,10 +2530,11 @@ async def chat(
                     prompt_images=prompt_images,
                     answer_images=answer_images,
                     sources=final_sources,
+                    answer_source=answer_source,
                 )
             except Exception as exc:
                 logger.warning("Compatible provider public chat failed provider=%s model=%s error=%s", provider_key, request.model, exc)
-                answer, final_sources = await _best_effort_answer_bundle(
+                answer, final_sources, answer_source = await _best_effort_answer_bundle(
                     history,
                     message_text,
                     mode,
@@ -2467,6 +2553,7 @@ async def chat(
                     prompt_images=prompt_images,
                     answer_images=answer_images,
                     sources=final_sources,
+                    answer_source=answer_source,
                 )
 
         if mode == "documents":
@@ -2482,7 +2569,7 @@ async def chat(
         if mode not in {"documents", "image"}:
             prompt_image_task = _start_prompt_image_task(generate_prompt_image, message_text)
             add_message("user", message_text, session_id=session_id)
-            answer, answer_sources = await _best_effort_answer_bundle(
+            answer, answer_sources, answer_source = await _best_effort_answer_bundle(
                 history,
                 message_text,
                 mode,
@@ -2503,6 +2590,7 @@ async def chat(
                 prompt_images=prompt_images,
                 answer_images=answer_images,
                 sources=answer_sources,
+                answer_source=answer_source,
             )
             if request.stream:
                 async def generate_fast():
@@ -2512,6 +2600,7 @@ async def chat(
                             prompt_images=prompt_images,
                             answer_images=answer_images,
                             sources=answer_sources,
+                            answer_source=answer_source,
                         )
                     )
 
@@ -2764,6 +2853,7 @@ async def chat(
                         response_max_tokens,
                     )
                     final_sources = rescued_sources or answer_sources
+                    answer_source = _resolve_answer_source(full_response, mode)
                     prompt_images = await _await_image_task(prompt_image_task)
                     answer_images = []
                     if generate_answer_image:
@@ -2786,6 +2876,7 @@ async def chat(
                             images=answer_images,
                             image_origin="answer" if answer_images else None,
                             sources=final_sources,
+                            answer_source=answer_source,
                         ),
                     )
                     saved_conversation = await _save_conversation_with_summary(
@@ -2801,6 +2892,7 @@ async def chat(
                             prompt_images=prompt_images,
                             answer_images=answer_images,
                             sources=final_sources,
+                            answer_source=answer_source,
                         )
                     )
                 except Exception as exc:
@@ -2836,9 +2928,10 @@ async def chat(
                 response_max_tokens,
             )
             final_sources = rescued_sources or answer_sources
+            answer_source = _resolve_answer_source(text or fallback_message, mode)
         except Exception as exc:
             logger.warning("Compatible provider chat failed provider=%s model=%s error=%s", provider_key, request.model, exc)
-            text, final_sources = await _best_effort_answer_bundle(
+            text, final_sources, answer_source = await _best_effort_answer_bundle(
                 history,
                 message_text,
                 mode,
@@ -2869,6 +2962,7 @@ async def chat(
                 images=answer_images,
                 image_origin="answer" if answer_images else None,
                 sources=final_sources,
+                answer_source=answer_source,
             ),
         )
         conversation = await _save_conversation_with_summary(
@@ -2884,11 +2978,12 @@ async def chat(
             prompt_images=prompt_images,
             answer_images=answer_images,
             sources=final_sources,
+            answer_source=answer_source,
         )
 
     if mode not in {"documents", "image"}:
         history = _conversation_history(db, conversation, drop_last=True)
-        answer, answer_sources = await _best_effort_answer_bundle(
+        answer, answer_sources, answer_source = await _best_effort_answer_bundle(
             history,
             message_text,
             mode,
@@ -2919,6 +3014,7 @@ async def chat(
                 images=answer_images,
                 image_origin="answer" if answer_images else None,
                 sources=answer_sources,
+                answer_source=answer_source,
             ),
         )
         conversation = await _save_conversation_with_summary(
@@ -2933,6 +3029,7 @@ async def chat(
             prompt_images=prompt_images,
             answer_images=answer_images,
             sources=answer_sources,
+            answer_source=answer_source,
         )
 
         if request.stream:
@@ -2944,6 +3041,7 @@ async def chat(
                         prompt_images=prompt_images,
                         answer_images=answer_images,
                         sources=answer_sources,
+                        answer_source=answer_source,
                     )
                 )
 
@@ -2984,7 +3082,7 @@ async def chat(
                     return
 
                 if mode == "documents":
-                    full_response, answer_sources = await _best_effort_answer_bundle(
+                    full_response, answer_sources, answer_source = await _best_effort_answer_bundle(
                         history,
                         message_text,
                         mode,
@@ -3019,6 +3117,7 @@ async def chat(
                             document_id=document.id if document else None,
                             document_name=document.filename if document else None,
                             sources=answer_sources,
+                            answer_source=answer_source,
                         ),
                     )
                     saved_conversation = await _save_conversation_with_summary(
@@ -3034,6 +3133,7 @@ async def chat(
                             prompt_images=prompt_images,
                             answer_images=answer_images,
                             sources=answer_sources,
+                            answer_source=answer_source,
                         )
                     )
                     return
@@ -3116,8 +3216,9 @@ async def chat(
         return _payload("Here are your images.", conversation, images=images)
 
     answer_sources: List[dict] = []
+    answer_source: Optional[str] = None
     if mode == "documents":
-        response_text, answer_sources = await _best_effort_answer_bundle(
+        response_text, answer_sources, answer_source = await _best_effort_answer_bundle(
             history,
             message_text,
             mode,
@@ -3136,6 +3237,7 @@ async def chat(
             doc_context=doc_context,
             max_tokens=response_max_tokens,
         )
+        answer_source = _resolve_answer_source(response_text, mode)
 
     prompt_images = await _await_image_task(prompt_image_task)
     answer_images = []
@@ -3163,6 +3265,7 @@ async def chat(
             document_id=document.id if document else None,
             document_name=document.filename if document else None,
             sources=answer_sources,
+            answer_source=answer_source,
         ),
     )
     conversation = await _save_conversation_with_summary(
@@ -3177,6 +3280,7 @@ async def chat(
         prompt_images=prompt_images,
         answer_images=answer_images,
         sources=answer_sources,
+        answer_source=answer_source,
     )
 
 
@@ -3423,6 +3527,7 @@ async def regenerate(
                 extra_instruction=regenerate_instruction,
             )
             final_sources = rescued_sources or answer_sources
+            answer_source = _resolve_answer_source(text or fallback_message, mode)
         except Exception as exc:
             logger.warning(
                 "Compatible provider regenerate failed provider=%s model=%s error=%s",
@@ -3430,7 +3535,7 @@ async def regenerate(
                 request.model,
                 exc,
             )
-            text, final_sources = await _best_effort_answer_bundle(
+            text, final_sources, answer_source = await _best_effort_answer_bundle(
                 history,
                 last_user_message_content,
                 mode,
@@ -3457,6 +3562,7 @@ async def regenerate(
                 images=answer_images,
                 image_origin="answer" if answer_images else None,
                 sources=final_sources,
+                answer_source=answer_source,
             ),
         )
         conversation = await _save_conversation_with_summary(
@@ -3472,11 +3578,12 @@ async def regenerate(
             prompt_images=prompt_images,
             answer_images=answer_images,
             sources=final_sources,
+            answer_source=answer_source,
         )
 
     if mode not in {"documents", "image"}:
         history = _conversation_history(db, conversation, drop_last=True)
-        answer, answer_sources = await _best_effort_answer_bundle(
+        answer, answer_sources, answer_source = await _best_effort_answer_bundle(
             history,
             last_user_message_content,
             mode,
@@ -3503,6 +3610,7 @@ async def regenerate(
                 images=answer_images,
                 image_origin="answer" if answer_images else None,
                 sources=answer_sources,
+                answer_source=answer_source,
             ),
         )
         conversation = await _save_conversation_with_summary(
@@ -3517,6 +3625,7 @@ async def regenerate(
             prompt_images=prompt_images,
             answer_images=answer_images,
             sources=answer_sources,
+            answer_source=answer_source,
         )
 
         if request.stream:
@@ -3528,6 +3637,7 @@ async def regenerate(
                         prompt_images=prompt_images,
                         answer_images=answer_images,
                         sources=answer_sources,
+                        answer_source=answer_source,
                     )
                 )
 
@@ -3595,7 +3705,7 @@ async def regenerate(
                     return
 
                 if mode == "documents":
-                    full_response, answer_sources = await _best_effort_answer_bundle(
+                    full_response, answer_sources, answer_source = await _best_effort_answer_bundle(
                         history,
                         last_user_message_content,
                         mode,
@@ -3624,6 +3734,7 @@ async def regenerate(
                             document_id=document.id if document else None,
                             document_name=document.filename if document else None,
                             sources=answer_sources,
+                            answer_source=answer_source,
                         ),
                     )
                     saved_conversation = await _save_conversation_with_summary(
@@ -3639,6 +3750,7 @@ async def regenerate(
                             prompt_images=prompt_images,
                             answer_images=answer_images,
                             sources=answer_sources,
+                            answer_source=answer_source,
                         )
                     )
                     return
@@ -3713,8 +3825,9 @@ async def regenerate(
         return _payload("Here are your images.", conversation, images=images)
 
     answer_sources: List[dict] = []
+    answer_source: Optional[str] = None
     if mode == "documents":
-        response_text, answer_sources = await _best_effort_answer_bundle(
+        response_text, answer_sources, answer_source = await _best_effort_answer_bundle(
             history,
             last_user_message_content,
             mode,
@@ -3735,6 +3848,7 @@ async def regenerate(
             extra_instruction=regenerate_instruction,
             max_tokens=response_max_tokens,
         )
+        answer_source = _resolve_answer_source(response_text, mode)
     response_text = _resolve_regenerated_text(response_text, previous_answer)
     prompt_images = _message_images(last_user_message)
     answer_images = []
@@ -3754,6 +3868,7 @@ async def regenerate(
             document_id=document.id if document else None,
             document_name=document.filename if document else None,
             sources=answer_sources,
+            answer_source=answer_source,
         ),
     )
     conversation = await _save_conversation_with_summary(
@@ -3768,6 +3883,7 @@ async def regenerate(
         prompt_images=prompt_images,
         answer_images=answer_images,
         sources=answer_sources,
+        answer_source=answer_source,
     )
 
 

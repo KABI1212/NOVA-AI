@@ -99,6 +99,25 @@ class EmailService:
             debug_secret=otp_code,
         )
 
+    def send_password_reset_otp(
+        self,
+        *,
+        recipient_email: str,
+        otp_code: str,
+        recipient_name: str = "",
+    ) -> str:
+        subject, text_body, html_body = self._build_password_reset_otp_email(
+            otp_code=otp_code,
+            recipient_name=recipient_name,
+        )
+        return self._deliver_email(
+            recipient_email=recipient_email,
+            subject=subject,
+            text_body=text_body,
+            html_body=html_body,
+            debug_secret=otp_code,
+        )
+
     def send_test_email(
         self,
         *,
@@ -233,6 +252,61 @@ class EmailService:
                 "This is an automated security email from "
                 f"{escape(app_name)}. Please do not reply unless you configured a reply-to address."
             ),
+        )
+
+        return subject, text_body, html_body
+
+    def _build_password_reset_otp_email(
+        self,
+        *,
+        otp_code: str,
+        recipient_name: str,
+    ) -> tuple[str, str, str]:
+        greeting_name = recipient_name.strip() or "there"
+        app_name = settings.APP_NAME
+        expiry_minutes = settings.AUTH_OTP_EXPIRE_MINUTES
+        subject = f"{app_name} password reset code"
+
+        text_body = (
+            f"Hi {greeting_name},\n\n"
+            f"You requested a password reset for {app_name}.\n"
+            f"Use this verification code to continue:\n\n"
+            f"{otp_code}\n\n"
+            f"This code expires in {expiry_minutes} minutes.\n\n"
+            "If you did not request this, you can ignore this email."
+        )
+
+        html_body = self._build_email_shell(
+            preheader=f"Your {app_name} password reset code is {otp_code}.",
+            eyebrow="Account security",
+            title="Reset your password",
+            greeting_name=greeting_name,
+            intro_html=(
+                "Use the one-time code below to set a new password for your account. "
+                "This helps keep your account secure."
+            ),
+            highlight_html=f"""
+              <div style="margin:0 0 14px;font-size:12px;line-height:1.5;color:#cbd5e1;letter-spacing:0.12em;text-transform:uppercase;">
+                Password reset code
+              </div>
+              <div style="margin:0 0 8px;font-size:38px;line-height:1;font-weight:800;letter-spacing:10px;color:#ffffff;">
+                {escape(otp_code)}
+              </div>
+              <div style="font-size:13px;line-height:1.6;color:#bfdbfe;">
+                Expires in {expiry_minutes} minutes
+              </div>
+            """.strip(),
+            body_html="""
+              <div style="margin:0;padding:16px 18px;border-radius:16px;background:#fff7ed;border:1px solid #fed7aa;">
+                <div style="margin:0 0 8px;font-size:14px;line-height:1.5;color:#9a3412;font-weight:700;">
+                  Didn&apos;t request this?
+                </div>
+                <div style="margin:0;font-size:14px;line-height:1.7;color:#9a3412;">
+                  If this wasn&apos;t you, ignore this message. Your current password stays unchanged until a valid code is used.
+                </div>
+              </div>
+            """.strip(),
+            footer_html=f"This automated message was sent by {escape(app_name)}.",
         )
 
         return subject, text_body, html_body

@@ -266,7 +266,7 @@ def test_best_effort_answer_bundle_document_mode_uses_document_fallback_without_
     monkeypatch.setattr(chat_module, "_search_backup_answer_bundle", forbidden_search_backup_bundle)
 
     async def scenario() -> None:
-        answer, sources = await chat_module._best_effort_answer_bundle(
+        answer, sources, answer_source = await chat_module._best_effort_answer_bundle(
             history=[],
             user_message="What is the launch date?",
             mode="documents",
@@ -278,6 +278,7 @@ def test_best_effort_answer_bundle_document_mode_uses_document_fallback_without_
 
         assert "april 5, 2026" in answer.lower()
         assert sources
+        assert answer_source == "document"
         assert sources[0]["kind"] == "document"
         assert "April 5, 2026" in sources[0]["excerpt"]
 
@@ -327,7 +328,7 @@ def test_best_effort_answer_bundle_forces_search_backup_for_non_temporal_prompt_
     monkeypatch.setattr(chat_module, "_search_backup_answer_bundle", fake_search_backup_bundle)
 
     async def scenario() -> None:
-        answer, sources = await chat_module._best_effort_answer_bundle(
+        answer, sources, answer_source = await chat_module._best_effort_answer_bundle(
             history=[],
             user_message="explain digital marketing in simple terms",
             mode="chat",
@@ -338,6 +339,7 @@ def test_best_effort_answer_bundle_forces_search_backup_for_non_temporal_prompt_
 
         assert "digital marketing" in answer.lower()
         assert sources
+        assert answer_source == "web"
         assert call_sequence == [False, True]
 
     asyncio.run(scenario())

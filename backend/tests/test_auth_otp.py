@@ -440,3 +440,114 @@ def test_send_email_test_uses_current_user_email(
         assert sent_email["recipient_name"] == user.full_name
 
     asyncio.run(scenario())
+
+
+async def _issue_password_reset_challenge(
+    monkeypatch: pytest.MonkeyPatch,
+    db: _FakeSession,
+    user: User,
+    *,
+    delivery_mode: str = "email",
+) -> tuple[dict, dict]:
+    sent_email: dict = {}
+
+    def fake_send_password_reset_otp(
+        *,
+        recipient_email: str,
+        otp_code: str,
+        recipient_name: str = "",
+    ) -> str:
+        sent_email.update(
+            {
+                "recipient_email": recipient_email,
+                "otp_code": otp_code,
+                "recipient_name": recipient_name,
+            }
+        )
+        return delivery_mode
+
+    monkeypatch.setattr(auth_module.email_service, "send_password_reset_otp", fake_send_password_reset_otp)
+
+    response = await auth_module.forgot_password(
+        auth_module.ForgotPasswordRequest(email=user.email),
+        db=db,
+    )
+
+    return response, sent_email
+
+
+def test_forgot_password_issues_reset_challenge(monkeypatch: pytest.MonkeyPatch) -> None:
+    user = _make_user()
+    db = _FakeSession([user])
+
+    async def scenario() -> None:
+        response, sent_email = await _issue_password_reset_challenge(monkeypatch, db, user)
+
+        assert response["email"] == user.email
+        assert response["delivery_mode"] == "email"
+        assert sent_email["recipient_email"] == user.email
+        assert auth_module.verify_secret_value(
+            sent_email["otp_code"],
+            user.password_reset_otp_code_hash,
+        )
+        assert auth_module.verify_secret_value(
+            response["challenge_token"],
+            user.password_reset_otp_challenge_hash,
+        )
+        assert user.password_reset_otp_expires_at > auth_module.utcnow_naive()
+
+    asyncio.run(scenario())
+
+
+def test_reset_password_updates_hash_and_clears_challenge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = _make_user()
+    db = _FakeSession([user])
+
+    async def scenario() -> None:
+        response, sent_email = await _issue_password_reset_challenge(monkeypatch, db, user)
+
+        reset_response = await auth_module.reset_password(
+            auth_module.ResetPasswordRequest(
+                email=user.email,
+                otp=sent_email["otp_code"],
+                challenge_token=response["challenge_token"],
+                new_password="NewSecret123!",
+            ),
+            db=db,
+        )
+
+        assert "successful" in reset_response["message"].lower()
+        assert auth_module.verify_password("NewSecret123!", user.hashed_password)
+        assert user.password_reset_otp_code_hash is None
+        assert user.password_reset_otp_challenge_hash is None
+        assert user.password_reset_otp_expires_at is None
+
+    asyncio.run(scenario())
+
+
+def test_reset_password_rejects_invalid_reset_otp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = _make_user()
+    db = _FakeSession([user])
+
+    async def scenario() -> None:
+        response, _sent_email = await _issue_password_reset_challenge(monkeypatch, db, user)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_module.reset_password(
+                auth_module.ResetPasswordRequest(
+                    email=user.email,
+                    otp="000000",
+                    challenge_token=response["challenge_token"],
+                    new_password="NewSecret123!",
+                ),
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.detail == "Invalid verification code."
+
+    asyncio.run(scenario())

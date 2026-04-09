@@ -19,6 +19,10 @@ class User(MongoModel):
     login_otp_expires_at = Field(default=None)
     login_otp_sent_at = Field(default=None)
     login_otp_challenge_hash = Field(default=None)
+    password_reset_otp_code_hash = Field(default=None)
+    password_reset_otp_expires_at = Field(default=None)
+    password_reset_otp_sent_at = Field(default=None)
+    password_reset_otp_challenge_hash = Field(default=None)
     created_at = Field(default_factory=utc_now)
     updated_at = Field(default_factory=utc_now)
 

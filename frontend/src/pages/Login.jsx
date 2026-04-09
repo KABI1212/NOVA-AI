@@ -47,11 +47,20 @@ function Login() {
   });
   const [otp, setOtp] = useState('');
   const [challenge, setChallenge] = useState(null);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotChallenge, setForgotChallenge] = useState(null);
+  const [forgotOtp, setForgotOtp] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [submittingCredentials, setSubmittingCredentials] = useState(false);
   const [verifyingOtp, setVerifyingOtp] = useState(false);
   const [resendingOtp, setResendingOtp] = useState(false);
+  const [requestingResetCode, setRequestingResetCode] = useState(false);
+  const [resendingResetCode, setResendingResetCode] = useState(false);
+  const [resettingPassword, setResettingPassword] = useState(false);
 
   const expiryLabel = formatExpiryLabel(challenge?.otp_expires_at);
+  const forgotExpiryLabel = formatExpiryLabel(forgotChallenge?.otp_expires_at);
 
   const handleCredentialSubmit = async (e) => {
     e.preventDefault();
@@ -139,10 +148,121 @@ function Login() {
     }
   };
 
-  const handleUseDifferentEmail = () => {
+  const handleStartForgotPassword = () => {
+    setForgotEmail(formData.email.trim());
+    setForgotChallenge(null);
+    setForgotOtp('');
+    setNewPassword('');
+    setConfirmNewPassword('');
+    setStep('forgot-email');
+  };
+
+  const handleForgotPasswordRequestSubmit = async (e) => {
+    e.preventDefault();
+    const email = forgotEmail.trim();
+    if (!email) {
+      toast.error('Please enter your registered email.');
+      return;
+    }
+
+    setRequestingResetCode(true);
+    try {
+      const response = await authAPI.forgotPassword({ email });
+      setForgotChallenge(response.data);
+      setForgotOtp('');
+      setNewPassword('');
+      setConfirmNewPassword('');
+      setStep('forgot-reset');
+
+      if (response.data.delivery_mode === 'email') {
+        toast.success(response.data.message || 'Password reset code sent to your email');
+      } else {
+        toast((response.data.message || 'Password reset code logged by backend').slice(0, 180), {
+          icon: 'i',
+        });
+      }
+    } catch (error) {
+      toast.error(formatApiError(error, 'Could not send password reset code'));
+    } finally {
+      setRequestingResetCode(false);
+    }
+  };
+
+  const handleResendResetCode = async () => {
+    if (!forgotChallenge?.email) {
+      return;
+    }
+
+    setResendingResetCode(true);
+    try {
+      const response = await authAPI.forgotPassword({ email: forgotChallenge.email });
+      setForgotChallenge(response.data);
+      setForgotOtp('');
+      if (response.data.delivery_mode === 'email') {
+        toast.success(response.data.message || 'A new reset code was sent');
+      } else {
+        toast((response.data.message || 'Password reset code logged by backend').slice(0, 180), {
+          icon: 'i',
+        });
+      }
+    } catch (error) {
+      toast.error(formatApiError(error, 'Could not resend reset code'));
+    } finally {
+      setResendingResetCode(false);
+    }
+  };
+
+  const handleResetPasswordSubmit = async (e) => {
+    e.preventDefault();
+    if (!forgotChallenge?.email || !forgotChallenge?.challenge_token) {
+      toast.error('Please request a new reset code.');
+      return;
+    }
+
+    if (newPassword.length < 8) {
+      toast.error('New password must be at least 8 characters.');
+      return;
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      toast.error('Passwords do not match.');
+      return;
+    }
+
+    setResettingPassword(true);
+    try {
+      await authAPI.resetPassword({
+        email: forgotChallenge.email,
+        otp: forgotOtp,
+        challenge_token: forgotChallenge.challenge_token,
+        new_password: newPassword,
+      });
+      setFormData((previous) => ({
+        ...previous,
+        email: forgotChallenge.email || previous.email,
+        password: '',
+      }));
+      setStep('credentials');
+      setForgotChallenge(null);
+      setForgotOtp('');
+      setNewPassword('');
+      setConfirmNewPassword('');
+      toast.success('Password updated. Please sign in with your new password.');
+    } catch (error) {
+      toast.error(formatApiError(error, 'Could not reset password'));
+    } finally {
+      setResettingPassword(false);
+    }
+  };
+
+  const handleBackToCredentials = () => {
     setStep('credentials');
     setOtp('');
     setChallenge(null);
+    setForgotOtp('');
+    setForgotChallenge(null);
+    setNewPassword('');
+    setConfirmNewPassword('');
   };
 
   return (
@@ -210,13 +330,21 @@ function Login() {
                 >
                   {submittingCredentials ? 'Signing in...' : 'Sign In'}
                 </button>
+
+                <button
+                  type="button"
+                  onClick={handleStartForgotPassword}
+                  className="w-full text-sm text-primary-600 hover:text-primary-700 font-medium"
+                >
+                  Forgot password?
+                </button>
               </form>
             </>
-          ) : (
+          ) : step === 'otp' ? (
             <>
               <button
                 type="button"
-                onClick={handleUseDifferentEmail}
+                onClick={handleBackToCredentials}
                 className="inline-flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 mb-4"
               >
                 <ArrowLeft className="w-4 h-4" />
@@ -290,6 +418,172 @@ function Login() {
                 >
                   <RefreshCw className={`w-4 h-4 ${resendingOtp ? 'animate-spin' : ''}`} />
                   {resendingOtp ? 'Sending new code...' : 'Resend Code'}
+                </button>
+              </div>
+            </>
+          ) : step === 'forgot-email' ? (
+            <>
+              <button
+                type="button"
+                onClick={handleBackToCredentials}
+                className="inline-flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 mb-4"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Back to sign in
+              </button>
+
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-3">
+                Forgot Password
+              </h2>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-6 leading-6">
+                Enter your registered email and we&apos;ll send you a verification code to reset your password.
+              </p>
+
+              <form onSubmit={handleForgotPasswordRequestSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Registered Email
+                  </label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                      type="email"
+                      required
+                      className="input-field pl-10"
+                      placeholder="you@example.com"
+                      value={forgotEmail}
+                      onChange={(e) => setForgotEmail(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={requestingResetCode}
+                  className="btn-primary w-full disabled:opacity-50"
+                >
+                  {requestingResetCode ? 'Sending code...' : 'Send Reset Code'}
+                </button>
+              </form>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setStep('forgot-email')}
+                className="inline-flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 mb-4"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Use a different email
+              </button>
+
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-3">
+                Reset Your Password
+              </h2>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-6 leading-6">
+                Enter the 6-digit code sent to{' '}
+                <span className="font-medium text-gray-900 dark:text-gray-100">
+                  {maskEmail(forgotChallenge?.email || forgotEmail)}
+                </span>
+                , then set a new password. {forgotExpiryLabel}
+              </p>
+
+              {forgotChallenge?.delivery_mode === 'log' ? (
+                <div className="mb-6 rounded-lg border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
+                  Email delivery is not configured yet. The reset code was written to backend logs instead of being sent by email.
+                  {forgotChallenge?.dev_otp_code ? (
+                    <div className="mt-3 flex items-center justify-between gap-3 rounded-md bg-white/70 px-3 py-2 font-mono text-base tracking-[0.3em] text-amber-950 dark:bg-black/20 dark:text-amber-50">
+                      <span>{forgotChallenge.dev_otp_code}</span>
+                      <button
+                        type="button"
+                        onClick={() => setForgotOtp(forgotChallenge.dev_otp_code)}
+                        className="rounded-md border border-amber-400/60 px-2 py-1 text-xs font-semibold tracking-normal text-amber-900 transition hover:bg-amber-100 dark:border-amber-300/30 dark:text-amber-100 dark:hover:bg-amber-400/10"
+                      >
+                        Use Code
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <form onSubmit={handleResetPasswordSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Verification Code
+                  </label>
+                  <div className="relative">
+                    <Shield className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                      type="text"
+                      required
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      className="input-field pl-10 tracking-[0.45em]"
+                      placeholder="000000"
+                      maxLength={6}
+                      value={forgotOtp}
+                      onChange={(e) => setForgotOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    New Password
+                  </label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                      type="password"
+                      required
+                      className="input-field pl-10"
+                      placeholder="At least 8 characters"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Confirm New Password
+                  </label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                      type="password"
+                      required
+                      className="input-field pl-10"
+                      placeholder="Re-enter new password"
+                      value={confirmNewPassword}
+                      onChange={(e) => setConfirmNewPassword(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={
+                    resettingPassword ||
+                    forgotOtp.length !== 6 ||
+                    !newPassword ||
+                    !confirmNewPassword
+                  }
+                  className="btn-primary w-full disabled:opacity-50"
+                >
+                  {resettingPassword ? 'Resetting password...' : 'Reset Password'}
+                </button>
+              </form>
+
+              <div className="mt-4 flex flex-col gap-3">
+                <button
+                  type="button"
+                  onClick={handleResendResetCode}
+                  disabled={resendingResetCode}
+                  className="btn-secondary w-full disabled:opacity-50 inline-flex items-center justify-center gap-2"
+                >
+                  <RefreshCw className={`w-4 h-4 ${resendingResetCode ? 'animate-spin' : ''}`} />
+                  {resendingResetCode ? 'Sending new code...' : 'Resend Code'}
                 </button>
               </div>
             </>
