@@ -282,3 +282,62 @@ def test_best_effort_answer_bundle_document_mode_uses_document_fallback_without_
         assert "April 5, 2026" in sources[0]["excerpt"]
 
     asyncio.run(scenario())
+
+
+def test_best_effort_answer_bundle_forces_search_backup_for_non_temporal_prompt_when_ai_fails(
+    monkeypatch,
+) -> None:
+    async def failing_collect(*args, **kwargs):
+        raise RuntimeError("provider unavailable")
+
+    async def passthrough_cross_check(
+        user_message,
+        source_material,
+        draft_answer,
+        provider,
+        model,
+        max_tokens=None,
+        compatible_provider=None,
+    ):
+        return draft_answer
+
+    call_sequence = []
+
+    async def fake_search_backup_bundle(message: str, force_search: bool = False):
+        call_sequence.append(force_search)
+        if force_search:
+            return (
+                "Best current answer I could verify from fresh web results:\nDigital marketing is...",
+                [
+                    {
+                        "title": "Digital marketing guide",
+                        "url": "https://example.com/marketing",
+                    }
+                ],
+            )
+        return None, []
+
+    monkeypatch.setattr(
+        chat_module,
+        "_maybe_enhance_temporal_message_with_sources",
+        lambda message, force_search=False: asyncio.sleep(0, result=(message, [])),
+    )
+    monkeypatch.setattr(chat_module, "_collect_ai_response", failing_collect)
+    monkeypatch.setattr(chat_module, "_cross_check_answer_if_needed", passthrough_cross_check)
+    monkeypatch.setattr(chat_module, "_search_backup_answer_bundle", fake_search_backup_bundle)
+
+    async def scenario() -> None:
+        answer, sources = await chat_module._best_effort_answer_bundle(
+            history=[],
+            user_message="explain digital marketing in simple terms",
+            mode="chat",
+            provider=None,
+            model=None,
+            max_tokens=1200,
+        )
+
+        assert "digital marketing" in answer.lower()
+        assert sources
+        assert call_sequence == [False, True]
+
+    asyncio.run(scenario())

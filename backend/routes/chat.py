@@ -1960,6 +1960,13 @@ async def _best_effort_answer_bundle(
         user_message,
         force_search=force_search,
     )
+
+    if not search_backup and mode != "documents" and not force_search:
+        search_backup, backup_sources = await _search_backup_answer_bundle(
+            user_message,
+            force_search=True,
+        )
+
     if search_backup:
         return search_backup, backup_sources
 
