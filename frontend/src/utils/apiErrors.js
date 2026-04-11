@@ -49,6 +49,26 @@ const formatDetailItem = (item) => {
   return null;
 };
 
+const formatStatusFallback = (error, fallback) => {
+  const status = error?.response?.status;
+  const requestUrl = String(error?.config?.url || "").trim();
+
+  if (status === 503) {
+    if (
+      requestUrl.includes("/auth/login") ||
+      requestUrl.includes("/auth/signup") ||
+      requestUrl.includes("/auth/login/otp") ||
+      requestUrl.includes("/auth/password/forgot")
+    ) {
+      return "The backend could not send the verification email right now. Check your Render SMTP settings and backend logs.";
+    }
+
+    return "The server is temporarily unavailable. Please try again in a moment.";
+  }
+
+  return fallback;
+};
+
 export const formatApiError = (error, fallback = "Something went wrong.") => {
   const responseData = error?.response?.data;
   const detail = responseData?.detail;
@@ -71,6 +91,7 @@ export const formatApiError = (error, fallback = "Something went wrong.") => {
   return (
     normalizeText(detail) ||
     normalizeText(message) ||
+    formatStatusFallback(error, null) ||
     normalizeText(error?.message) ||
     fallback
   );
