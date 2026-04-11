@@ -156,6 +156,15 @@ def _persist_user(db: Session, user: User) -> None:
     db.refresh(user)
 
 
+def _delete_user(db: Session, user: User) -> None:
+    db.delete(user)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise
+
+
 def _issue_login_otp(user: User, db: Session) -> dict:
     otp_code = generate_numeric_otp()
     challenge_token = generate_login_challenge_token()
@@ -374,7 +383,25 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
         )
     db.refresh(new_user)
 
-    return _issue_login_otp(new_user, db)
+    try:
+        return _issue_login_otp(new_user, db)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+            logger.warning(
+                "signup_otp_delivery_failed_cleanup user_id=%s email=%s",
+                new_user.id,
+                new_user.email,
+            )
+            try:
+                _delete_user(db, new_user)
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "signup_otp_delivery_failed_cleanup_error user_id=%s email=%s",
+                    new_user.id,
+                    new_user.email,
+                )
+        raise
 
 
 @router.post("/login", response_model=TokenResponse | LoginChallengeResponse)

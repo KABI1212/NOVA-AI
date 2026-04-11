@@ -80,6 +80,10 @@ class _FakeSession:
         if isinstance(obj, User) and obj not in self.users:
             self.users.append(obj)
 
+    def delete(self, obj) -> None:
+        if isinstance(obj, User) and obj in self.users:
+            self.users.remove(obj)
+
     def commit(self) -> None:
         return None
 
@@ -139,6 +143,34 @@ def test_signup_creates_user_and_requires_verification(
         )
         assert len(db.users) == 1
         assert db.users[0].is_verified is False
+
+    monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
+    asyncio.run(scenario())
+
+
+def test_signup_cleans_up_user_when_otp_delivery_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _FakeSession()
+
+    def fake_send_login_otp(*, recipient_email: str, otp_code: str, recipient_name: str = "") -> str:
+        raise auth_module.EmailDeliveryError("SMTP could not deliver the verification email.")
+
+    async def scenario() -> None:
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_module.signup(
+                auth_module.SignupRequest(
+                    email="New.User@Example.com",
+                    username="new-user",
+                    password="Sup3rSecret!",
+                    full_name="New User",
+                ),
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 503
+        assert "verification email" in exc_info.value.detail.lower()
+        assert db.users == []
 
     monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
     asyncio.run(scenario())

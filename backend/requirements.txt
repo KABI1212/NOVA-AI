@@ -57,5 +57,4 @@ typing_extensions==4.15.0
 urllib3==2.6.3
 uvicorn==0.42.0
 websockets==16.0
-
 gunicorn==25.3.0
