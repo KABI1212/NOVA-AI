@@ -164,6 +164,11 @@ export const resolveApiBaseUrl = async (force = false) => {
     return '';
   }
 
+  if (!force && API_BASE_CANDIDATES.length === 1) {
+    preferredApiBaseUrl = API_BASE_CANDIDATES[0];
+    return preferredApiBaseUrl;
+  }
+
   if (!force && preferredApiStatus) {
     return preferredApiBaseUrl;
   }
