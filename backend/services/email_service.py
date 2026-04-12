@@ -237,21 +237,21 @@ class EmailService:
 
         text_body = (
             f"Hi {greeting_name},\n\n"
-            f"You requested a password reset for {app_name}.\n"
-            f"Use this verification code to continue:\n\n"
+            f"Use this password reset code to continue resetting your {app_name} password:\n\n"
             f"{otp_code}\n\n"
             f"This code expires in {expiry_minutes} minutes.\n\n"
+            "Enter the code on the password reset screen to continue.\n"
             "If you did not request this, you can ignore this email."
         )
 
         html_body = self._build_email_shell(
-            preheader=f"Your {app_name} password reset code is {otp_code}.",
+            preheader=f"Your {app_name} password reset code is {otp_code}. It expires in {expiry_minutes} minutes.",
             eyebrow="Account security",
-            title="Reset your password",
+            title="Your one-time password reset code",
             greeting_name=greeting_name,
             intro_html=(
-                "Use the one-time code below to set a new password for your account. "
-                "This helps keep your account secure."
+                f"Use the code below to continue resetting your <strong>{escape(app_name)}</strong> password. "
+                "For your security, this code is short-lived and can only be used once."
             ),
             highlight_html=f"""
               <div style="margin:0 0 14px;font-size:12px;line-height:1.5;color:#cbd5e1;letter-spacing:0.12em;text-transform:uppercase;">
@@ -264,17 +264,34 @@ class EmailService:
                 Expires in {expiry_minutes} minutes
               </div>
             """.strip(),
-            body_html="""
+            body_html=f"""
+              <div style="margin:0 0 18px;padding:16px 18px;border-radius:16px;background:#f8fafc;border:1px solid #e2e8f0;">
+                <div style="margin:0 0 10px;font-size:13px;line-height:1.5;color:#475569;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">
+                  How to use it
+                </div>
+                <div style="margin:0 0 8px;font-size:15px;line-height:1.7;color:#0f172a;">
+                  1. Return to the password reset screen in {escape(app_name)}.
+                </div>
+                <div style="margin:0 0 8px;font-size:15px;line-height:1.7;color:#0f172a;">
+                  2. Enter the six-digit code exactly as shown above.
+                </div>
+                <div style="margin:0;font-size:15px;line-height:1.7;color:#0f172a;">
+                  3. Set your new password before the code expires.
+                </div>
+              </div>
               <div style="margin:0;padding:16px 18px;border-radius:16px;background:#fff7ed;border:1px solid #fed7aa;">
                 <div style="margin:0 0 8px;font-size:14px;line-height:1.5;color:#9a3412;font-weight:700;">
-                  Didn&apos;t request this?
+                  Security note
                 </div>
                 <div style="margin:0;font-size:14px;line-height:1.7;color:#9a3412;">
                   If this wasn&apos;t you, ignore this message. Your current password stays unchanged until a valid code is used.
                 </div>
               </div>
             """.strip(),
-            footer_html=f"This automated message was sent by {escape(app_name)}.",
+            footer_html=(
+                "This is an automated account security email from "
+                f"{escape(app_name)}. Please do not reply unless you configured a reply-to address."
+            ),
         )
 
         return subject, text_body, html_body

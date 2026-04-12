@@ -26,6 +26,23 @@ def test_build_login_otp_email_renders_branded_html() -> None:
     assert "123456" in html_body
 
 
+def test_build_password_reset_otp_email_matches_branded_code_layout() -> None:
+    service = EmailService()
+
+    subject, text_body, html_body = service._build_password_reset_otp_email(
+        otp_code="654321",
+        recipient_name="Alex",
+    )
+
+    assert "password reset code" in subject.lower()
+    assert "654321" in text_body
+    assert "expires in 5 minutes" in text_body.lower()
+    assert "Your one-time password reset code" in html_body
+    assert "How to use it" in html_body
+    assert "Security note" in html_body
+    assert "654321" in html_body
+
+
 def test_build_test_email_renders_delivery_confirmation() -> None:
     service = EmailService()
 
