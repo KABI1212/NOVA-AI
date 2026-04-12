@@ -1534,8 +1534,9 @@ async def _collect_ai_response(
     use_case: Optional[str] = None,
 ) -> str:
     response_text = ""
-    async for chunk in ai_service.chat_stream(
+    async for chunk in ai_service.chat_completion(
         ai_messages,
+        stream=False,
         provider=provider,
         model=model,
         temperature=temperature,
@@ -1548,6 +1549,36 @@ async def _collect_ai_response(
     if not response_text:
         raise RuntimeError("AI provider returned an empty response")
     return response_text
+
+
+async def _rescue_stream_failure_answer_bundle(
+    history: List[dict],
+    user_message: str,
+    mode: str,
+    *,
+    extra_instruction: Optional[str] = None,
+    force_search: bool = False,
+    max_tokens: Optional[int] = None,
+) -> tuple[str, List[dict], str]:
+    try:
+        return await _best_effort_answer_bundle(
+            history,
+            user_message,
+            mode,
+            None,
+            None,
+            extra_instruction=extra_instruction,
+            force_search=force_search,
+            max_tokens=max_tokens,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Buffered rescue after stream failure failed mode=%s error=%s message=%s",
+            mode,
+            exc,
+            _preview_text(user_message),
+        )
+        return FALLBACK_MESSAGE, [], ANSWER_SOURCE_SYSTEM
 
 
 def _should_use_search(message: str, force_search: bool = False) -> bool:
@@ -2660,6 +2691,39 @@ async def chat(
                             )
                         )
                     except Exception as exc:
+                        logger.warning(
+                            "Compatible provider public stream failed provider=%s model=%s error=%s",
+                            provider_key,
+                            request.model,
+                            exc,
+                        )
+                        if not full_response.strip():
+                            rescued_answer, rescued_sources, rescued_answer_source = await _rescue_stream_failure_answer_bundle(
+                                history,
+                                message_text,
+                                mode,
+                                force_search=force_search,
+                                max_tokens=response_max_tokens,
+                            )
+                            prompt_images = await _await_image_task(prompt_image_task)
+                            answer_images = []
+                            if rescued_answer != FALLBACK_MESSAGE and generate_answer_image:
+                                answer_images = await _generate_images_best_effort(
+                                    _build_answer_image_prompt(message_text, rescued_answer)
+                                )
+                            if rescued_answer != FALLBACK_MESSAGE:
+                                _log_chat_response(mode, provider, model, rescued_answer)
+                            yield _sse_event(
+                                _final_payload(
+                                    rescued_answer,
+                                    prompt_images=prompt_images,
+                                    answer_images=answer_images,
+                                    sources=rescued_sources or answer_sources,
+                                    answer_source=rescued_answer_source,
+                                    interrupted=rescued_answer == FALLBACK_MESSAGE,
+                                )
+                            )
+                            return
                         yield _sse_event(_final_payload(fallback_message, interrupted=True))
 
                 return StreamingResponse(generate_provider_stream(), media_type="text/event-stream")
@@ -2814,6 +2878,26 @@ async def chat(
                     _log_chat_response(mode, provider, model, full_response)
                     yield _sse_event(_final_payload(full_response))
                 except Exception as exc:
+                    logger.warning("Public streaming chat failed mode=%s provider=%s model=%s error=%s", mode, provider, model, exc)
+                    if not full_response.strip() and mode != "image":
+                        rescued_answer, rescued_sources, rescued_answer_source = await _rescue_stream_failure_answer_bundle(
+                            [],
+                            message_text,
+                            mode,
+                            force_search=mode == "search",
+                            max_tokens=response_max_tokens,
+                        )
+                        if rescued_answer != FALLBACK_MESSAGE:
+                            _log_chat_response(mode, provider, model, rescued_answer)
+                        yield _sse_event(
+                            _final_payload(
+                                rescued_answer,
+                                sources=rescued_sources,
+                                answer_source=rescued_answer_source,
+                                interrupted=rescued_answer == FALLBACK_MESSAGE,
+                            )
+                        )
+                        return
                     yield _sse_event(_final_payload(fallback_message, interrupted=True))
 
             return StreamingResponse(generate_public(), media_type="text/event-stream")
@@ -3074,6 +3158,65 @@ async def chat(
                         )
                     )
                 except Exception as exc:
+                    logger.warning(
+                        "Compatible provider authenticated stream failed provider=%s model=%s error=%s",
+                        provider_key,
+                        request.model,
+                        exc,
+                    )
+                    if not full_response.strip():
+                        rescued_answer, rescued_sources, rescued_answer_source = await _rescue_stream_failure_answer_bundle(
+                            history,
+                            message_text,
+                            mode,
+                            force_search=force_search,
+                            max_tokens=response_max_tokens,
+                        )
+                        if rescued_answer != FALLBACK_MESSAGE:
+                            prompt_images = await _await_image_task(prompt_image_task)
+                            answer_images = []
+                            if generate_answer_image:
+                                answer_images = await _generate_images_best_effort(
+                                    _build_answer_image_prompt(message_text, rescued_answer)
+                                )
+                            _apply_images_to_message(
+                                user_message,
+                                images=prompt_images,
+                                generate_prompt_image=generate_prompt_image,
+                                generate_answer_image=generate_answer_image,
+                            )
+                            _append_message(
+                                db,
+                                conversation,
+                                "assistant",
+                                rescued_answer,
+                                meta=_merge_message_meta(
+                                    {"mode": mode},
+                                    images=answer_images,
+                                    image_origin="answer" if answer_images else None,
+                                    sources=rescued_sources or answer_sources,
+                                    answer_source=rescued_answer_source,
+                                ),
+                            )
+                            saved_conversation = await _save_conversation_with_summary(
+                                db,
+                                conversation,
+                                refresh_summary=True,
+                            )
+                            _log_chat_response(mode, provider, model, rescued_answer)
+                            yield _sse_event(
+                                _final_payload(
+                                    rescued_answer,
+                                    saved_conversation,
+                                    prompt_images=prompt_images,
+                                    answer_images=answer_images,
+                                    sources=rescued_sources or answer_sources,
+                                    answer_source=rescued_answer_source,
+                                )
+                            )
+                            return
+                        yield _sse_event(_final_payload(fallback_message, conversation, interrupted=True))
+                        return
                     yield _sse_event(_final_payload(fallback_message, conversation, interrupted=True))
 
             return StreamingResponse(generate_provider_stream_auth(), media_type="text/event-stream")
@@ -3372,6 +3515,64 @@ async def chat(
                     )
                 )
             except Exception as exc:
+                logger.warning("Authenticated streaming chat failed mode=%s provider=%s model=%s error=%s", mode, provider, model, exc)
+                if not full_response.strip() and mode != "image":
+                    rescued_answer, rescued_sources, rescued_answer_source = await _rescue_stream_failure_answer_bundle(
+                        history,
+                        message_text,
+                        mode,
+                        force_search=mode == "search",
+                        max_tokens=response_max_tokens,
+                    )
+                    if rescued_answer != FALLBACK_MESSAGE:
+                        prompt_images = await _await_image_task(prompt_image_task)
+                        answer_images = []
+                        if generate_answer_image and mode != "image":
+                            answer_images = await _generate_images_best_effort(
+                                _build_answer_image_prompt(message_text, rescued_answer)
+                            )
+                        _apply_images_to_message(
+                            user_message,
+                            images=prompt_images,
+                            generate_prompt_image=generate_prompt_image,
+                            generate_answer_image=generate_answer_image,
+                            document_id=document.id if document else None,
+                            document_name=document.filename if document else None,
+                        )
+                        _append_message(
+                            db,
+                            conversation,
+                            "assistant",
+                            rescued_answer,
+                            meta=_merge_message_meta(
+                                {"mode": mode},
+                                images=answer_images,
+                                image_origin="answer" if answer_images else None,
+                                document_id=document.id if document else None,
+                                document_name=document.filename if document else None,
+                                sources=rescued_sources,
+                                answer_source=rescued_answer_source,
+                            ),
+                        )
+                        saved_conversation = await _save_conversation_with_summary(
+                            db,
+                            conversation,
+                            refresh_summary=True,
+                        )
+                        _log_chat_response(mode, provider, model, rescued_answer)
+                        yield _sse_event(
+                            _final_payload(
+                                rescued_answer,
+                                saved_conversation,
+                                prompt_images=prompt_images,
+                                answer_images=answer_images,
+                                sources=rescued_sources,
+                                answer_source=rescued_answer_source,
+                            )
+                        )
+                        return
+                    yield _sse_event(_final_payload(fallback_message, conversation, interrupted=True))
+                    return
                 yield _sse_event(_final_payload(fallback_message, conversation, interrupted=True))
 
         return StreamingResponse(generate(), media_type="text/event-stream")

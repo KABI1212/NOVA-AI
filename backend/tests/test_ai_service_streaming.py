@@ -29,6 +29,38 @@ def test_complete_non_stream_rejects_partial_provider_output(
     asyncio.run(scenario())
 
 
+def test_complete_non_stream_recovers_from_partial_failure_when_provider_is_auto(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def partial_failure(messages, model, temperature, max_tokens):
+        yield "Half answer"
+        raise RuntimeError("stream dropped")
+
+    async def successful_provider(messages, model, temperature, max_tokens):
+        yield "Recovered answer"
+
+    monkeypatch.setattr(ai_service_module, "_provider_available", lambda provider: True)
+    monkeypatch.setattr(ai_service_module, "_provider_chain", lambda provider=None, use_case=None: ["openai", "google"])
+    monkeypatch.setattr(ai_service_module, "_configured_provider_override", lambda: None)
+    monkeypatch.setattr(ai_service_module, "_resolve_provider", lambda: "openai")
+    monkeypatch.setattr(ai_service_module, "_model_for_provider", lambda current_provider, requested_provider, model: None)
+    monkeypatch.setattr(
+        ai_service_module,
+        "_PROVIDER_STREAM_MAP",
+        {"openai": partial_failure, "google": successful_provider},
+    )
+
+    async def scenario() -> None:
+        result = await ai_service_module._complete_non_stream(
+            [{"role": "user", "content": "What is a protocol?"}],
+            provider=None,
+            model="test-model",
+        )
+        assert result == "Recovered answer"
+
+    asyncio.run(scenario())
+
+
 def test_infer_use_case_prefers_writing_for_rewrite_requests() -> None:
     assert ai_service_module.infer_use_case("chat", "Rewrite this email to sound professional.") == "writing"
 

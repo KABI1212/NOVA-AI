@@ -1901,13 +1901,93 @@ async def _complete_non_stream(
     max_tokens: Optional[int] = None,
     use_case: Optional[str] = None,
 ) -> str:
-    tokens: List[str] = []
-    async for token in _stream_with_fallback(messages, provider, model, temperature, max_tokens, use_case=use_case):
-        tokens.append(token)
-    text = "".join(tokens).strip()
-    if not text:
-        raise RuntimeError("AI completion returned an empty response")
-    return text
+    normalized_messages = _normalize_messages(messages)
+    if not normalized_messages:
+        raise RuntimeError("No valid messages were provided to the AI service")
+
+    chain = _provider_chain(provider, use_case=use_case)
+    ready_chain = [item for item in chain if _provider_available(item)]
+    if not ready_chain:
+        if provider:
+            if _provider_temporarily_disabled(provider):
+                raise RuntimeError(f"Provider temporarily unavailable: {provider}")
+            raise RuntimeError(f"Provider not configured: {provider}")
+        logger.warning("No configured AI providers were available")
+        return _OFFLINE_TEXT
+
+    requested_provider = (provider or _configured_provider_override() or _resolve_provider()).lower().strip()
+    errors: List[str] = []
+
+    for current_provider in ready_chain:
+        fn = _PROVIDER_STREAM_MAP.get(current_provider)
+        if fn is None:
+            errors.append(f"{current_provider}: unsupported provider")
+            continue
+
+        model_for_provider = (
+            _model_for_provider(current_provider, requested_provider, model)
+            or (
+                _configured_model_override()
+                if current_provider == requested_provider and _configured_provider_override() == requested_provider
+                else None
+            )
+            or _provider_default_model(current_provider, use_case)
+        )
+        resolved_temperature = temperature if temperature is not None else _default_temperature()
+        resolved_max_tokens = max_tokens or _default_max_tokens()
+
+        _log_request(
+            current_provider,
+            model_for_provider,
+            normalized_messages,
+            resolved_temperature,
+            resolved_max_tokens,
+        )
+
+        chunks: List[str] = []
+        try:
+            async for token in fn(
+                normalized_messages,
+                model_for_provider,
+                resolved_temperature,
+                resolved_max_tokens,
+            ):
+                if token:
+                    chunks.append(token)
+
+            text = "".join(chunks).strip()
+            if text:
+                _log_response(current_provider, model_for_provider, text)
+                return text
+
+            warning = f"{current_provider}: empty response"
+            logger.warning(
+                "AI provider returned no content in buffered completion provider=%s model=%s",
+                current_provider,
+                model_for_provider,
+            )
+            errors.append(warning)
+        except Exception as exc:
+            _log_failure(current_provider, model_for_provider, exc)
+            _temporarily_disable_provider(current_provider, exc)
+            errors.append(f"{current_provider}: {exc}")
+            partial = "".join(chunks).strip()
+            if partial:
+                logger.warning(
+                    "Discarding partial buffered AI response after provider failure provider=%s model=%s chars=%s",
+                    current_provider,
+                    model_for_provider,
+                    len(partial),
+                )
+                if provider:
+                    raise RuntimeError(
+                        f"Provider '{current_provider}' failed after a partial response; refusing to return an incomplete answer"
+                    ) from exc
+
+        if provider:
+            break
+
+    raise RuntimeError("All configured AI providers failed or returned empty responses: " + "; ".join(errors))
 
 
 class AIService:
