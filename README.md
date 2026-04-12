@@ -112,7 +112,8 @@ SENDGRID_API_KEY=your-sendgrid-key
 - Image generation uses Gemini when Google keys are present and Gemini is selected or OpenAI is unavailable.
 - Backend voice endpoints still require `OPENAI_API_KEY`.
 - Document retrieval works without FAISS; the app falls back to lexical search when embedding/vector extras are unavailable.
-- Login OTP email delivery supports `EMAIL_PROVIDER=smtp` or `EMAIL_PROVIDER=sendgrid`. In debug mode with no provider configured, OTP codes are logged to the backend for local development.
+- Login OTP email delivery supports `EMAIL_PROVIDER=smtp` or `EMAIL_PROVIDER=sendgrid`.
+- Set `AUTH_ALLOW_PASSWORD_ONLY_FALLBACK=true` if you want signup and login to keep working when email delivery is temporarily unavailable. Password reset still requires a working email provider.
 
 ## Email Setup
 
@@ -129,7 +130,7 @@ SMTP_USERNAME=yourgmail@gmail.com
 SMTP_PASSWORD=your-16-char-google-app-password
 SMTP_USE_TLS=true
 SMTP_USE_SSL=false
-SMTP_TIMEOUT_SECONDS=20
+SMTP_TIMEOUT_SECONDS=10
 ```
 
 ### Outlook SMTP
@@ -145,7 +146,7 @@ SMTP_USERNAME=you@outlook.com
 SMTP_PASSWORD=your-outlook-password-or-app-password
 SMTP_USE_TLS=true
 SMTP_USE_SSL=false
-SMTP_TIMEOUT_SECONDS=20
+SMTP_TIMEOUT_SECONDS=10
 ```
 
 ### SendGrid
@@ -156,7 +157,7 @@ EMAIL_FROM_ADDRESS=verified-sender@yourdomain.com
 EMAIL_FROM_NAME=NOVA AI
 EMAIL_REPLY_TO=verified-sender@yourdomain.com
 SENDGRID_API_KEY=your-sendgrid-api-key
-SMTP_TIMEOUT_SECONDS=20
+SMTP_TIMEOUT_SECONDS=10
 ```
 
 Notes:
@@ -181,7 +182,7 @@ Notes:
   Make sure the backend is running and at least one provider key is configured in `backend/.env`.
 
 - OTP emails are not arriving
-  Check `EMAIL_PROVIDER`, sender address, and SMTP or SendGrid credentials in `backend/.env`, then restart the backend.
+  Check `EMAIL_PROVIDER`, sender address, and SMTP or SendGrid credentials in `backend/.env`, then restart the backend. If you need login/signup to stay available while mail is down, enable `AUTH_ALLOW_PASSWORD_ONLY_FALLBACK=true`.
 
 - I want to test inbox delivery directly
   Sign in, open `/docs`, and call `POST /api/auth/email-test` with your bearer token. It sends a test message to your account email.

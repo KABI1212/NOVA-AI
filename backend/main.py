@@ -194,6 +194,9 @@ async def api_status():
             "auth": {
                 "email": email_capabilities,
                 "email_ready": bool(email_capabilities.get("ready")),
+                "password_only_fallback_enabled": bool(
+                    settings.AUTH_ALLOW_PASSWORD_ONLY_FALLBACK
+                ),
             },
         },
     }

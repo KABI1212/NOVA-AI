@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     AUTH_OTP_LOCK_MINUTES: int = 15
     AUTH_OTP_RESEND_COOLDOWN_SECONDS: int = 60
     AUTH_OTP_MAX_RESEND_ATTEMPTS: int = 3
+    AUTH_ALLOW_PASSWORD_ONLY_FALLBACK: bool = False
 
     EMAIL_PROVIDER: str = ""
     EMAIL_FROM: str = ""
@@ -52,7 +53,7 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = ""
     SMTP_USE_TLS: bool = True
     SMTP_USE_SSL: bool = False
-    SMTP_TIMEOUT_SECONDS: int = 20
+    SMTP_TIMEOUT_SECONDS: int = 10
     SENDGRID_API_KEY: str = ""
 
     OPENAI_API_KEY: str = ""

@@ -179,6 +179,40 @@ def test_signup_cleans_up_user_when_otp_delivery_fails(
     asyncio.run(scenario())
 
 
+def test_signup_falls_back_to_password_only_auth_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _FakeSession()
+
+    def fake_send_login_otp(*, recipient_email: str, otp_code: str, recipient_name: str = "") -> str:
+        raise auth_module.EmailDeliveryError("SMTP could not deliver the verification email.")
+
+    async def scenario() -> None:
+        response = await auth_module.signup(
+            auth_module.SignupRequest(
+                email="New.User@Example.com",
+                username="new-user",
+                password="Sup3rSecret!",
+                full_name="New User",
+            ),
+            db=db,
+        )
+
+        assert response["requires_otp"] is False
+        assert response["access_token"]
+        assert response["user"]["email"] == "new.user@example.com"
+        assert len(db.users) == 1
+        assert db.users[0].is_verified is True
+
+    monkeypatch.setattr(
+        auth_module.settings,
+        "AUTH_ALLOW_PASSWORD_ONLY_FALLBACK",
+        True,
+    )
+    monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
+    asyncio.run(scenario())
+
+
 def test_signup_verification_completes_account_activation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -365,6 +399,38 @@ def test_login_requires_otp_for_unverified_user(monkeypatch: pytest.MonkeyPatch)
         )
         assert user.is_verified is False
 
+    monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
+    asyncio.run(scenario())
+
+
+def test_login_falls_back_to_password_only_auth_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = _make_user()
+    user.is_verified = False
+    db = _FakeSession([user])
+
+    def fake_send_login_otp(*, recipient_email: str, otp_code: str, recipient_name: str = "") -> str:
+        raise auth_module.EmailDeliveryError("SMTP could not deliver the verification email.")
+
+    async def scenario() -> None:
+        response = await auth_module.login(
+            auth_module.LoginRequest(email=user.email, password="Sup3rSecret!"),
+            db=db,
+        )
+
+        assert response["requires_otp"] is False
+        assert response["access_token"]
+        assert response["user"]["email"] == user.email
+        assert user.is_verified is True
+        assert user.login_otp_code_hash is None
+        assert user.login_otp_challenge_hash is None
+
+    monkeypatch.setattr(
+        auth_module.settings,
+        "AUTH_ALLOW_PASSWORD_ONLY_FALLBACK",
+        True,
+    )
     monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
     asyncio.run(scenario())
 
@@ -672,6 +738,22 @@ def test_forgot_password_issues_reset_challenge(monkeypatch: pytest.MonkeyPatch)
             user.password_reset_otp_challenge_hash,
         )
         assert user.password_reset_otp_expires_at > auth_module.utcnow_naive()
+
+    asyncio.run(scenario())
+
+
+def test_forgot_password_returns_generic_message_when_account_is_missing() -> None:
+    db = _FakeSession()
+
+    async def scenario() -> None:
+        response = await auth_module.forgot_password(
+            auth_module.ForgotPasswordRequest(email="missing@example.com"),
+            db=db,
+        )
+
+        assert response == {
+            "message": auth_module.PASSWORD_RESET_REQUEST_GENERIC_MESSAGE,
+        }
 
     asyncio.run(scenario())
 

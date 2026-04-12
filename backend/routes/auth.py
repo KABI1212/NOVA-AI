@@ -43,6 +43,9 @@ EMAIL_DELIVERY_FAILURE_MESSAGE = (
 PASSWORD_RESET_DELIVERY_FAILURE_MESSAGE = (
     "We couldn't send the password reset code right now. Please try again shortly."
 )
+PASSWORD_RESET_REQUEST_GENERIC_MESSAGE = (
+    "If an account exists for that email, a password reset code has been sent."
+)
 EMAIL_TEST_DELIVERY_FAILURE_MESSAGE = (
     "We couldn't send the test email right now. Please try again shortly."
 )
@@ -112,10 +115,10 @@ class LoginChallengeResponse(BaseModel):
 
 
 class PasswordResetChallengeResponse(BaseModel):
-    challenge_token: str
-    email: EmailStr
-    otp_expires_at: datetime
-    delivery_mode: Literal["email"]
+    challenge_token: str | None = None
+    email: EmailStr | None = None
+    otp_expires_at: datetime | None = None
+    delivery_mode: Literal["email"] | None = None
     message: str
 
 
@@ -188,6 +191,14 @@ def _build_token_response(user: User) -> dict:
     }
 
 
+def _password_only_fallback_enabled() -> bool:
+    return bool(settings.AUTH_ALLOW_PASSWORD_ONLY_FALLBACK)
+
+
+def _should_require_email_verification() -> bool:
+    return not _password_only_fallback_enabled() or email_service.can_send_real_email()
+
+
 def _clear_login_otp_challenge(user: User) -> None:
     user.login_otp_code_hash = None
     user.login_otp_expires_at = None
@@ -204,6 +215,18 @@ def _reset_login_otp_security_state(user: User) -> None:
 def _clear_login_otp_state(user: User) -> None:
     _clear_login_otp_challenge(user)
     _reset_login_otp_security_state(user)
+
+
+def _has_login_otp_state(user: User) -> bool:
+    return bool(
+        user.login_otp_code_hash
+        or user.login_otp_challenge_hash
+        or user.login_otp_expires_at is not None
+        or user.login_otp_sent_at is not None
+        or _safe_int(user.login_otp_failed_attempts) > 0
+        or _safe_int(user.login_otp_resend_count) > 0
+        or user.login_otp_locked_until is not None
+    )
 
 
 def _clear_password_reset_state(user: User) -> None:
@@ -247,6 +270,28 @@ def _snapshot_login_otp_state(user: User) -> dict[str, Any]:
 def _restore_login_otp_state(user: User, snapshot: dict[str, Any]) -> None:
     for field_name, value in snapshot.items():
         setattr(user, field_name, value)
+
+
+def _build_password_only_auth_response(
+    user: User,
+    db: Session,
+    *,
+    mark_verified: bool,
+) -> dict:
+    requires_persist = False
+
+    if mark_verified and not user.is_verified:
+        user.is_verified = True
+        requires_persist = True
+
+    if _has_login_otp_state(user):
+        _clear_login_otp_state(user)
+        requires_persist = True
+
+    if requires_persist:
+        _persist_user(db, user)
+
+    return _build_token_response(user)
 
 
 def _build_login_challenge_response(
@@ -497,7 +542,7 @@ def _validate_pending_password_reset(
 
 @router.post(
     "/signup",
-    response_model=LoginChallengeResponse,
+    response_model=TokenResponse | LoginChallengeResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def signup(request: SignupRequest, db: Session = Depends(get_db)):
@@ -506,6 +551,7 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
     email = request.email.strip().lower()
     username = request.username.strip()
     full_name = request.full_name.strip() if request.full_name else ""
+    requires_email_verification = _should_require_email_verification()
 
     existing_user = db.query(User).filter(
         (User.email == email) | (User.username == username)
@@ -522,7 +568,7 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
         username=username,
         hashed_password=get_password_hash(request.password),
         full_name=full_name,
-        is_verified=False,
+        is_verified=not requires_email_verification,
     )
 
     db.add(new_user)
@@ -536,10 +582,29 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
         )
     db.refresh(new_user)
 
+    if not requires_email_verification:
+        logger.info(
+            "signup_password_only_fallback_enabled user_id=%s email=%s",
+            new_user.id,
+            new_user.email,
+        )
+        return _build_token_response(new_user)
+
     try:
         return _issue_login_otp(new_user, db)
     except HTTPException as exc:
         if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+            if _password_only_fallback_enabled():
+                logger.warning(
+                    "signup_otp_delivery_failed_password_only_fallback user_id=%s email=%s",
+                    new_user.id,
+                    new_user.email,
+                )
+                return _build_password_only_auth_response(
+                    new_user,
+                    db,
+                    mark_verified=True,
+                )
             logger.warning(
                 "signup_otp_delivery_failed_cleanup user_id=%s email=%s",
                 new_user.id,
@@ -577,25 +642,42 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         )
 
     if not user.is_verified:
-        return _issue_login_otp(user, db)
+        if not _should_require_email_verification():
+            logger.info(
+                "login_password_only_fallback_enabled user_id=%s email=%s",
+                user.id,
+                user.email,
+            )
+            return _build_password_only_auth_response(
+                user,
+                db,
+                mark_verified=True,
+            )
 
-    requires_persist = False
-    if (
-        user.login_otp_code_hash
-        or user.login_otp_challenge_hash
-        or user.login_otp_expires_at is not None
-        or user.login_otp_sent_at is not None
-        or _safe_int(user.login_otp_failed_attempts) > 0
-        or _safe_int(user.login_otp_resend_count) > 0
-        or user.login_otp_locked_until is not None
-    ):
-        _clear_login_otp_state(user)
-        requires_persist = True
+        try:
+            return _issue_login_otp(user, db)
+        except HTTPException as exc:
+            if (
+                exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+                and _password_only_fallback_enabled()
+            ):
+                logger.warning(
+                    "login_otp_delivery_failed_password_only_fallback user_id=%s email=%s",
+                    user.id,
+                    user.email,
+                )
+                return _build_password_only_auth_response(
+                    user,
+                    db,
+                    mark_verified=True,
+                )
+            raise
 
-    if requires_persist:
-        _persist_user(db, user)
-
-    return _build_token_response(user)
+    return _build_password_only_auth_response(
+        user,
+        db,
+        mark_verified=False,
+    )
 
 
 @router.post("/login/otp/verify", response_model=TokenResponse)
@@ -682,21 +764,24 @@ async def forgot_password(
     request: ForgotPasswordRequest,
     db: Session = Depends(get_db),
 ):
-    """Send a password-reset OTP to the registered email."""
+    """Send a password-reset OTP when an active account exists."""
 
     email = request.email.strip().lower()
     user = _load_user_by_email(email, db)
 
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No account found with this email address.",
-        )
+        return {"message": PASSWORD_RESET_REQUEST_GENERIC_MESSAGE}
 
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive",
+        )
+
+    if not email_service.can_send_real_email():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=PASSWORD_RESET_DELIVERY_FAILURE_MESSAGE,
         )
 
     return _issue_password_reset_otp(user, db)

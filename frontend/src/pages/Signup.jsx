@@ -106,10 +106,17 @@ function Signup() {
 
       const response = await authAPI.signup(payload);
 
-      setChallenge(response.data);
-      setOtp('');
-      setStep('otp');
-      toast.success(response.data.message || 'OTP sent to your email.');
+      if (response.data?.requires_otp) {
+        setChallenge(response.data);
+        setOtp('');
+        setStep('otp');
+        toast.success(response.data.message || 'OTP sent to your email.');
+      } else {
+        const { access_token, user } = response.data;
+        setAuth(user, access_token);
+        toast.success('Account created successfully!');
+        navigate('/chat');
+      }
     } catch (error) {
       toast.error(formatApiError(error, 'Signup failed'));
     } finally {

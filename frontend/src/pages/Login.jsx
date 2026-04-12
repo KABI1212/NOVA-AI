@@ -192,12 +192,16 @@ function Login() {
     setRequestingResetCode(true);
     try {
       const response = await authAPI.forgotPassword({ email });
-      setForgotChallenge(response.data);
-      setForgotOtp('');
-      setNewPassword('');
-      setConfirmNewPassword('');
-      setStep('forgot-reset');
-      toast.success(response.data.message || 'Password reset OTP sent to your email.');
+      if (response.data?.challenge_token && response.data?.email) {
+        setForgotChallenge(response.data);
+        setForgotOtp('');
+        setNewPassword('');
+        setConfirmNewPassword('');
+        setStep('forgot-reset');
+      } else {
+        setForgotChallenge(null);
+      }
+      toast.success(response.data.message || 'If an account exists, a password reset code has been sent.');
     } catch (error) {
       toast.error(formatApiError(error, 'Could not send password reset code'));
     } finally {
@@ -213,9 +217,14 @@ function Login() {
     setResendingResetCode(true);
     try {
       const response = await authAPI.forgotPassword({ email: forgotChallenge.email });
-      setForgotChallenge(response.data);
-      setForgotOtp('');
-      toast.success(response.data.message || 'A new password reset OTP has been sent.');
+      if (response.data?.challenge_token && response.data?.email) {
+        setForgotChallenge(response.data);
+        setForgotOtp('');
+      } else {
+        setForgotChallenge(null);
+        setStep('forgot-email');
+      }
+      toast.success(response.data.message || 'If an account exists, a password reset code has been sent.');
     } catch (error) {
       toast.error(formatApiError(error, 'Could not resend reset code'));
     } finally {

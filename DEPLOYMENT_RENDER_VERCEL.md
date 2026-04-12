@@ -49,6 +49,7 @@ REDIS_URL=<attach from Render key value service>
 UPLOAD_DIR=/app/uploads
 DEBUG=false
 AI_PROVIDER=auto
+AUTH_ALLOW_PASSWORD_ONLY_FALLBACK=true
 ```
 
 The backend also accepts Vercel and Render deployment origins by default through
@@ -85,7 +86,7 @@ SMTP_USER=yourgmail@gmail.com
 SMTP_PASS=your-16-char-google-app-password
 SMTP_USE_TLS=true
 SMTP_USE_SSL=false
-SMTP_TIMEOUT_SECONDS=20
+SMTP_TIMEOUT_SECONDS=10
 ```
 
 Legacy aliases still supported: `EMAIL_FROM_ADDRESS`, `SMTP_USERNAME`, `SMTP_PASSWORD`.
@@ -93,6 +94,7 @@ Legacy aliases still supported: `EMAIL_FROM_ADDRESS`, `SMTP_USERNAME`, `SMTP_PAS
 Important:
 
 - Keep `DEBUG=false` on Render.
+- If SMTP is still being set up, `AUTH_ALLOW_PASSWORD_ONLY_FALLBACK=true` lets signup and login continue without waiting on email OTP delivery.
 - After adding/updating env vars, redeploy backend: Render -> Manual Deploy -> Deploy latest commit.
 - Verify status at `https://your-render-backend.onrender.com/api/status` and confirm:
   - `capabilities.auth.email.ready` is `true`
