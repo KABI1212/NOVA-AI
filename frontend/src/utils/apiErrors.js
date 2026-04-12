@@ -52,14 +52,23 @@ const formatDetailItem = (item) => {
 const formatStatusFallback = (error, fallback) => {
   const status = error?.response?.status;
   const requestUrl = String(error?.config?.url || "").trim();
+  const isAuthRequest =
+    requestUrl.includes("/auth/login") ||
+    requestUrl.includes("/auth/signup") ||
+    requestUrl.includes("/auth/login/otp") ||
+    requestUrl.includes("/auth/password/forgot") ||
+    requestUrl.includes("/auth/password/reset");
+
+  if (status === 404 && isAuthRequest) {
+    return "Auth API route was not found. Check that VITE_API_URL points to your backend service and that the backend deployment is live.";
+  }
+
+  if (status === 401 && requestUrl.includes("/auth/login")) {
+    return "Login failed. Check the email and password, or complete OTP verification if the account was just created.";
+  }
 
   if (status === 503) {
-    if (
-      requestUrl.includes("/auth/login") ||
-      requestUrl.includes("/auth/signup") ||
-      requestUrl.includes("/auth/login/otp") ||
-      requestUrl.includes("/auth/password/forgot")
-    ) {
+    if (isAuthRequest) {
       return "The backend could not send the verification email right now. Check your Render SMTP settings and backend logs.";
     }
 
