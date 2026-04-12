@@ -104,6 +104,7 @@ class Settings(BaseSettings):
     AI_DEBUG_LOGGING: bool = False
     AI_LOG_PREVIEW_CHARS: int = 400
     CHAT_AUTO_WEB_SEARCH_IN_CHAT: bool = False
+    CHAT_AUTO_WEB_FALLBACK_IN_CHAT: bool = False
 
     CORS_ORIGINS: str = (
         "http://localhost,"

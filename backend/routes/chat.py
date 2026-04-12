@@ -1539,6 +1539,15 @@ def _should_enhance_message_with_search(
     return _should_use_search(message, force_search=False)
 
 
+def _should_allow_automatic_web_fallback(mode: str) -> bool:
+    normalized_mode = str(mode or "chat").strip().lower()
+    if normalized_mode == "search":
+        return True
+    if normalized_mode in {"documents", "image"}:
+        return False
+    return bool(getattr(settings, "CHAT_AUTO_WEB_FALLBACK_IN_CHAT", False))
+
+
 def _verification_max_tokens(max_tokens: Optional[int]) -> int:
     if max_tokens is None:
         return 768
@@ -1699,6 +1708,9 @@ async def _retry_stale_answer_with_fresh_sources_bundle(
     extra_instruction: Optional[str] = None,
     max_tokens: Optional[int] = None,
 ) -> tuple[Optional[str], List[dict]]:
+    if not _should_allow_automatic_web_fallback(mode):
+        return None, []
+
     searched_message, searched_sources = await _maybe_enhance_temporal_message_with_sources(
         user_message,
         force_search=True,
@@ -1911,6 +1923,8 @@ async def _best_effort_answer_bundle(
     force_search: bool = False,
     max_tokens: Optional[int] = None,
 ) -> tuple[str, List[dict], str]:
+    allow_automatic_web_fallback = _should_allow_automatic_web_fallback(mode)
+
     if mode == "documents":
         primary_message = user_message
         primary_sources = _document_sources_from_context(user_message, doc_context)
@@ -1952,7 +1966,7 @@ async def _best_effort_answer_bundle(
         if mode == "documents" and _looks_like_stale_cutoff_answer(primary_answer):
             fallback_answer = _fallback_document_answer_from_context(user_message, doc_context)
             return fallback_answer, primary_sources, _resolve_answer_source(fallback_answer, mode)
-        if _looks_like_stale_cutoff_answer(primary_answer):
+        if _looks_like_stale_cutoff_answer(primary_answer) and allow_automatic_web_fallback:
             refreshed_answer, refreshed_sources = await _retry_stale_answer_with_fresh_sources_bundle(
                 history,
                 user_message,
@@ -1982,7 +1996,7 @@ async def _best_effort_answer_bundle(
             fallback_answer = _fallback_document_answer_from_context(user_message, doc_context)
             return fallback_answer, primary_sources, _resolve_answer_source(fallback_answer, mode)
 
-    if mode != "documents" and primary_message == user_message:
+    if mode != "documents" and primary_message == user_message and allow_automatic_web_fallback:
         searched_message, searched_sources = await _maybe_enhance_temporal_message_with_sources(
             user_message,
             force_search=True,
@@ -2037,19 +2051,22 @@ async def _best_effort_answer_bundle(
                     exc,
                 )
 
+    search_backup: Optional[str] = None
+    backup_sources: List[dict] = []
     fallback_reason = "search_mode" if force_search else "primary_failure"
-    search_backup, backup_sources = await _search_backup_answer_bundle(
-        user_message,
-        force_search=force_search,
-    )
-
-    if not search_backup and mode != "documents" and not force_search:
+    if allow_automatic_web_fallback:
         search_backup, backup_sources = await _search_backup_answer_bundle(
             user_message,
-            force_search=True,
+            force_search=force_search,
         )
-        if search_backup:
-            fallback_reason = "forced_search_after_failure"
+
+        if not search_backup and mode != "documents" and not force_search:
+            search_backup, backup_sources = await _search_backup_answer_bundle(
+                user_message,
+                force_search=True,
+            )
+            if search_backup:
+                fallback_reason = "forced_search_after_failure"
 
     if search_backup:
         _log_search_fallback_trigger(
@@ -2104,6 +2121,8 @@ async def _rescue_stale_compatible_provider_answer_bundle(
     extra_instruction: Optional[str] = None,
 ) -> tuple[str, List[dict]]:
     if not _looks_like_stale_cutoff_answer(draft_answer):
+        return draft_answer, []
+    if not _should_allow_automatic_web_fallback(mode):
         return draft_answer, []
 
     rescued_answer, rescued_sources, _ = await _best_effort_answer_bundle(

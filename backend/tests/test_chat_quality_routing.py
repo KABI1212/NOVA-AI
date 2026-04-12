@@ -211,6 +211,8 @@ def test_looks_like_stale_cutoff_answer_detects_cutoff_language() -> None:
 def test_best_effort_answer_retries_with_fresh_sources_when_draft_is_stale(
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr(chat_module.settings, "CHAT_AUTO_WEB_FALLBACK_IN_CHAT", True)
+
     async def fake_enhance_with_sources(message: str, force_search: bool = False):
         return (f"SEARCHED::{message}", [{"title": "IPL 2024", "url": "https://example.com/ipl"}]) if force_search else (message, [])
 
@@ -285,9 +287,56 @@ def test_best_effort_answer_bundle_document_mode_uses_document_fallback_without_
     asyncio.run(scenario())
 
 
-def test_best_effort_answer_bundle_forces_search_backup_for_non_temporal_prompt_when_ai_fails(
+def test_best_effort_answer_bundle_keeps_default_chat_provider_only_when_ai_fails(
     monkeypatch,
 ) -> None:
+    async def failing_collect(*args, **kwargs):
+        raise RuntimeError("provider unavailable")
+
+    async def passthrough_cross_check(
+        user_message,
+        source_material,
+        draft_answer,
+        provider,
+        model,
+        max_tokens=None,
+        compatible_provider=None,
+    ):
+        return draft_answer
+
+    async def forbidden_enhance(message: str, force_search: bool = False):
+        raise AssertionError("default chat should not auto-search after provider failure")
+
+    async def forbidden_search_backup_bundle(message: str, force_search: bool = False):
+        raise AssertionError("default chat should not fall back to a web-only answer")
+
+    monkeypatch.setattr(chat_module, "_maybe_enhance_temporal_message_with_sources", forbidden_enhance)
+    monkeypatch.setattr(chat_module, "_collect_ai_response", failing_collect)
+    monkeypatch.setattr(chat_module, "_cross_check_answer_if_needed", passthrough_cross_check)
+    monkeypatch.setattr(chat_module, "_search_backup_answer_bundle", forbidden_search_backup_bundle)
+
+    async def scenario() -> None:
+        answer, sources, answer_source = await chat_module._best_effort_answer_bundle(
+            history=[],
+            user_message="explain digital marketing in simple terms",
+            mode="chat",
+            provider=None,
+            model=None,
+            max_tokens=1200,
+        )
+
+        assert answer == chat_module.FALLBACK_MESSAGE
+        assert sources == []
+        assert answer_source == "system"
+
+    asyncio.run(scenario())
+
+
+def test_best_effort_answer_bundle_uses_search_backup_when_chat_web_fallback_is_enabled(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(chat_module.settings, "CHAT_AUTO_WEB_FALLBACK_IN_CHAT", True)
+
     async def failing_collect(*args, **kwargs):
         raise RuntimeError("provider unavailable")
 
@@ -384,5 +433,30 @@ def test_best_effort_answer_bundle_keeps_temporal_chat_provider_first_by_default
         assert answer == "Provider-first answer"
         assert sources == []
         assert answer_source == "ai"
+
+    asyncio.run(scenario())
+
+
+def test_rescue_stale_compatible_provider_answer_bundle_keeps_default_chat_answer(
+    monkeypatch,
+) -> None:
+    stale_answer = "My knowledge cutoff is 2023, so I cannot confirm newer winners."
+
+    async def forbidden_best_effort(*args, **kwargs):
+        raise AssertionError("default chat should not auto-rescue stale answers with web search")
+
+    monkeypatch.setattr(chat_module, "_best_effort_answer_bundle", forbidden_best_effort)
+
+    async def scenario() -> None:
+        answer, sources = await chat_module._rescue_stale_compatible_provider_answer_bundle(
+            history=[],
+            user_message="Who won IPL 2024?",
+            draft_answer=stale_answer,
+            mode="chat",
+            max_tokens=900,
+        )
+
+        assert answer == stale_answer
+        assert sources == []
 
     asyncio.run(scenario())
