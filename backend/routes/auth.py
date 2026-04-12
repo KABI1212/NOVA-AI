@@ -112,6 +112,7 @@ class LoginChallengeResponse(BaseModel):
     resend_attempts_remaining: int
     otp_attempts_remaining: int
     message: str
+    dev_otp_code: str | None = None
 
 
 class PasswordResetChallengeResponse(BaseModel):
@@ -120,6 +121,7 @@ class PasswordResetChallengeResponse(BaseModel):
     otp_expires_at: datetime | None = None
     delivery_mode: Literal["email"] | None = None
     message: str
+    dev_otp_code: str | None = None
 
 
 class PasswordResetResponse(BaseModel):
@@ -300,9 +302,10 @@ def _build_login_challenge_response(
     challenge_token: str,
     expires_at: datetime,
     delivery_mode: str,
+    otp_code: str | None = None,
 ) -> dict:
     masked_email = _mask_email(user.email)
-    return {
+    response = {
         "requires_otp": True,
         "challenge_token": challenge_token,
         "email": user.email,
@@ -318,6 +321,9 @@ def _build_login_challenge_response(
             f"code will expire in {settings.AUTH_OTP_EXPIRE_MINUTES} minutes."
         ),
     }
+    if settings.DEBUG and settings.AUTH_EXPOSE_DEBUG_OTP and otp_code:
+        response["dev_otp_code"] = otp_code
+    return response
 
 
 def _ensure_login_not_locked(user: User, db: Session) -> None:
@@ -401,6 +407,7 @@ def _issue_login_otp(user: User, db: Session, *, is_resend: bool = False) -> dic
         challenge_token=challenge_token,
         expires_at=expires_at,
         delivery_mode=delivery_mode,
+        otp_code=otp_code,
     )
 
 
@@ -436,13 +443,16 @@ def _issue_password_reset_otp(user: User, db: Session) -> dict:
             detail=PASSWORD_RESET_DELIVERY_FAILURE_MESSAGE,
         ) from exc
 
-    return {
+    response = {
         "challenge_token": challenge_token,
         "email": user.email,
         "otp_expires_at": expires_at,
         "delivery_mode": delivery_mode,
         "message": "A password reset code has been sent to your email address.",
     }
+    if settings.DEBUG and settings.AUTH_EXPOSE_DEBUG_OTP:
+        response["dev_otp_code"] = otp_code
+    return response
 
 
 def _load_user_by_email(email: str, db: Session) -> User | None:

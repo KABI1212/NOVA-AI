@@ -151,6 +151,36 @@ def test_signup_creates_user_and_requires_verification(
     asyncio.run(scenario())
 
 
+def test_signup_can_include_debug_otp_when_explicitly_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _FakeSession()
+    sent_email: dict = {}
+
+    def fake_send_login_otp(*, recipient_email: str, otp_code: str, recipient_name: str = "") -> str:
+        sent_email["otp_code"] = otp_code
+        return "email"
+
+    async def scenario() -> None:
+        response = await auth_module.signup(
+            auth_module.SignupRequest(
+                email="debug.user@example.com",
+                username="debug-user",
+                password="Sup3rSecret!",
+                full_name="Debug User",
+            ),
+            db=db,
+        )
+
+        assert response["requires_otp"] is True
+        assert response["dev_otp_code"] == sent_email["otp_code"]
+
+    monkeypatch.setattr(auth_module.settings, "DEBUG", True)
+    monkeypatch.setattr(auth_module.settings, "AUTH_EXPOSE_DEBUG_OTP", True)
+    monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
+    asyncio.run(scenario())
+
+
 def test_signup_cleans_up_user_when_otp_delivery_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -739,6 +769,40 @@ def test_forgot_password_issues_reset_challenge(monkeypatch: pytest.MonkeyPatch)
         )
         assert user.password_reset_otp_expires_at > auth_module.utcnow_naive()
 
+    asyncio.run(scenario())
+
+
+def test_forgot_password_can_include_debug_otp_when_explicitly_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = _make_user()
+    db = _FakeSession([user])
+    sent_email: dict = {}
+
+    def fake_send_password_reset_otp(
+        *,
+        recipient_email: str,
+        otp_code: str,
+        recipient_name: str = "",
+    ) -> str:
+        sent_email["otp_code"] = otp_code
+        return "email"
+
+    async def scenario() -> None:
+        response = await auth_module.forgot_password(
+            auth_module.ForgotPasswordRequest(email=user.email),
+            db=db,
+        )
+
+        assert response["dev_otp_code"] == sent_email["otp_code"]
+
+    monkeypatch.setattr(auth_module.settings, "DEBUG", True)
+    monkeypatch.setattr(auth_module.settings, "AUTH_EXPOSE_DEBUG_OTP", True)
+    monkeypatch.setattr(
+        auth_module.email_service,
+        "send_password_reset_otp",
+        fake_send_password_reset_otp,
+    )
     asyncio.run(scenario())
 
 

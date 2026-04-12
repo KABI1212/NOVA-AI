@@ -114,6 +114,7 @@ SENDGRID_API_KEY=your-sendgrid-key
 - Document retrieval works without FAISS; the app falls back to lexical search when embedding/vector extras are unavailable.
 - Login OTP email delivery supports `EMAIL_PROVIDER=smtp` or `EMAIL_PROVIDER=sendgrid`.
 - Set `AUTH_ALLOW_PASSWORD_ONLY_FALLBACK=true` if you want signup and login to keep working when email delivery is temporarily unavailable. Password reset still requires a working email provider.
+- For local testing only, set `DEBUG=true` and `AUTH_EXPOSE_DEBUG_OTP=true` to show the OTP on the verification screen in addition to sending the email.
 
 ## Email Setup
 

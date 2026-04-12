@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     AUTH_OTP_RESEND_COOLDOWN_SECONDS: int = 60
     AUTH_OTP_MAX_RESEND_ATTEMPTS: int = 3
     AUTH_ALLOW_PASSWORD_ONLY_FALLBACK: bool = False
+    AUTH_EXPOSE_DEBUG_OTP: bool = False
 
     EMAIL_PROVIDER: str = ""
     EMAIL_FROM: str = ""

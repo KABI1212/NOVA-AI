@@ -75,6 +75,7 @@ function Signup() {
   const maskedEmail = getMaskedEmailDisplay(challenge, formData.email);
   const resendAttemptsRemaining = Number(challenge?.resend_attempts_remaining ?? 0);
   const otpAttemptsRemaining = Number(challenge?.otp_attempts_remaining ?? 0);
+  const debugOtpCode = String(challenge?.dev_otp_code || '').trim();
   const resendDisabled =
     resendingOtp || resendCooldownSeconds > 0 || (challenge ? resendAttemptsRemaining <= 0 : false);
 
@@ -282,6 +283,11 @@ function Signup() {
               <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
                 {otpAttemptsRemaining} verification attempts remaining. {resendAttemptsRemaining} resend attempts remaining.
               </p>
+              {debugOtpCode ? (
+                <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  Debug OTP: <span className="font-semibold tracking-[0.3em]">{debugOtpCode}</span>
+                </div>
+              ) : null}
 
               <form onSubmit={handleOtpSubmit} className="space-y-4">
                 <div>

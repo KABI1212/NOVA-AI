@@ -82,6 +82,8 @@ function Login() {
   const maskedEmail = getMaskedEmailDisplay(challenge, formData.email);
   const resendAttemptsRemaining = Number(challenge?.resend_attempts_remaining ?? 0);
   const otpAttemptsRemaining = Number(challenge?.otp_attempts_remaining ?? 0);
+  const debugLoginOtpCode = String(challenge?.dev_otp_code || '').trim();
+  const debugResetOtpCode = String(forgotChallenge?.dev_otp_code || '').trim();
   const resendDisabled =
     resendingOtp || resendCooldownSeconds > 0 || (challenge ? resendAttemptsRemaining <= 0 : false);
 
@@ -384,6 +386,11 @@ function Login() {
               <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
                 {otpAttemptsRemaining} verification attempts remaining. {resendAttemptsRemaining} resend attempts remaining.
               </p>
+              {debugLoginOtpCode ? (
+                <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  Debug OTP: <span className="font-semibold tracking-[0.3em]">{debugLoginOtpCode}</span>
+                </div>
+              ) : null}
               <form onSubmit={handleOtpSubmit} className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -498,6 +505,11 @@ function Login() {
                 </span>
                 , then set a new password. {forgotExpiryLabel}
               </p>
+              {debugResetOtpCode ? (
+                <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  Debug reset code: <span className="font-semibold tracking-[0.3em]">{debugResetOtpCode}</span>
+                </div>
+              ) : null}
 
               <form onSubmit={handleResetPasswordSubmit} className="space-y-4">
                 <div>
