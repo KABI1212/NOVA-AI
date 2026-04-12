@@ -8,18 +8,18 @@ from services.provider_clients import (
     ask_deepseek,
     ask_gemini,
     ask_groq,
-    ask_perplexity,
+    ask_ollama,
 )
 
 TIMEOUT_SECONDS = 3.0
 
 PROVIDER_ORDER = [
-    ("gemini", ask_gemini, "gemini-1.5-flash"),
-    ("claude", ask_claude, "claude-sonnet-4-5"),
-    ("deepseek", ask_deepseek, "deepseek-chat"),
     ("chatgpt", ask_chatgpt, "gpt-4o-mini"),
-    ("perplexity", ask_perplexity, "sonar-pro"),
+    ("claude", ask_claude, "claude-sonnet-4-5"),
+    ("gemini", ask_gemini, "gemini-2.5-flash"),
+    ("deepseek", ask_deepseek, "deepseek-chat"),
     ("groq", ask_groq, "llama-3.3-70b-versatile"),
+    ("ollama", ask_ollama, "llama3"),
 ]
 
 

@@ -3,12 +3,11 @@ from typing import Dict, List, Tuple
 from services.provider_clients import ask_provider
 
 EVALUATOR_CHAIN = [
-    "anthropic",
-    "deepseek",
-    "google",
     "openai",
+    "anthropic",
+    "google",
+    "deepseek",
     "groq",
-    "perplexity",
     "ollama",
 ]
 

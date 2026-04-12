@@ -82,10 +82,10 @@ def test_provider_chain_uses_research_preferences_when_auto(monkeypatch: pytest.
 
     chain = ai_service_module._provider_chain(None, use_case="research")
 
-    assert chain[:4] == ["openai", "deepseek", "google", "anthropic"]
+    assert chain[:4] == ["google", "openai", "anthropic", "deepseek"]
 
 
-def test_resolve_provider_prefers_chatgpt_then_deepseek_before_other_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_provider_prefers_chatgpt_then_claude_before_other_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ai_service_module.settings, "AI_PROVIDER", "")
     monkeypatch.setattr(ai_service_module.settings, "GROQ_API_KEY", "groq-key")
     monkeypatch.setattr(ai_service_module.settings, "GOOGLE_API_KEY", "google-key")
@@ -112,15 +112,22 @@ def test_get_available_providers_matches_requested_priority_and_labels(monkeypat
 
         assert [provider["id"] for provider in providers] == [
             "openai",
-            "deepseek",
-            "google",
             "anthropic",
+            "google",
+            "deepseek",
             "groq",
             "ollama",
         ]
         assert providers[0]["name"] == "ChatGPT"
+        assert providers[1]["name"] == "Claude"
         assert providers[2]["name"] == "Gemini"
-        assert providers[3]["name"] == "Claude"
+        assert providers[3]["name"] == "DeepSeek"
+        assert providers[0]["recommended_for"] == [
+            "Reasoning",
+            "Coding",
+            "Writing",
+            "Strategy",
+        ]
 
     asyncio.run(scenario())
 

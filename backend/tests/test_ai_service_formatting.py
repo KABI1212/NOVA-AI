@@ -34,6 +34,28 @@ def test_generate_explanation_includes_presentation_style(monkeypatch) -> None:
     assert "supportive friend" in system_prompt
 
 
+def test_generate_code_uses_codex_grade_prompt(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_complete(messages, provider=None, model=None, temperature=None, max_tokens=None, use_case=None):
+        captured["messages"] = messages
+        captured["use_case"] = use_case
+        return "ok"
+
+    monkeypatch.setattr(ai_service_module, "_complete_non_stream", fake_complete)
+
+    async def scenario() -> None:
+        result = await ai_service.generate_code("Write a function to reverse a string.", language="python")
+        assert result == "ok"
+
+    asyncio.run(scenario())
+
+    system_prompt = captured["messages"][0]["content"]
+    assert "Codex-grade programming engine" in system_prompt
+    assert "production-ready" in system_prompt
+    assert captured["use_case"] == "coding"
+
+
 def test_document_answers_include_presentation_style(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

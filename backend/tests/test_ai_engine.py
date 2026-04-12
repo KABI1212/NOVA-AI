@@ -28,7 +28,11 @@ def test_build_messages_adds_clarity_and_presentation_instructions_for_chat_mode
         for content in system_messages
     )
     assert any(
-        "supportive friend" in content
+        "orchestration intelligence" in content
+        for content in system_messages
+    )
+    assert any(
+        "supportive expert partner" in content
         for content in system_messages
     )
 
@@ -214,5 +218,30 @@ def test_build_messages_strengthens_comparison_table_guidance() -> None:
     )
     assert any(
         "Make the first column the comparison aspect or parameter." in content
+        for content in system_messages
+    )
+
+
+def test_build_messages_enables_nova_special_mode_for_full_power_requests() -> None:
+    messages = build_messages(
+        [
+            {
+                "role": "user",
+                "content": "Use full power and explain recursion for advanced learners.",
+            }
+        ],
+        "chat",
+    )
+
+    system_messages = [
+        message["content"] for message in messages if message.get("role") == "system"
+    ]
+
+    assert any(
+        "The user explicitly requested NOVA Special Mode." in content
+        for content in system_messages
+    )
+    assert any(
+        "Optimize for quality over speed." in content
         for content in system_messages
     )

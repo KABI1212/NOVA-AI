@@ -37,6 +37,7 @@ _MINIMAL_REQUEST_PATTERN = re.compile(
     r"\b(minimal|minimally|brief|briefly|concise|short|in short|one line|few lines|summary)\b",
     re.IGNORECASE,
 )
+_FULL_POWER_PATTERN = re.compile(r"\buse full power\b", re.IGNORECASE)
 _STRICT_EXAM_PATTERN = re.compile(
     r"\b(exam-ready|exam ready|exam format|for exam|for exams|easy to write in exams|strict academic tone|internal verification|definition.*explanation.*key points.*conclusion)\b",
     re.IGNORECASE,
@@ -359,12 +360,31 @@ def _clarity_first_instruction(mode: str, message: str) -> str | None:
     )
 
 
+def _full_power_instruction(message: str) -> str | None:
+    text = " ".join((message or "").split())
+    if not text or not _FULL_POWER_PATTERN.search(text):
+        return None
+
+    return (
+        "The user explicitly requested NOVA Special Mode.\n"
+        "- Optimize for quality over speed.\n"
+        "- Reason more deeply before answering.\n"
+        "- Compare multiple valid approaches or viewpoints when useful.\n"
+        "- Produce a more polished, complete, and expert-level final answer.\n"
+        "- Keep the answer clear, decisive, and actionable."
+    )
+
+
 def contextual_system_instructions(mode: str, message: str) -> List[str]:
     instructions: List[str] = []
 
     clarity_instruction = _clarity_first_instruction(mode, message)
     if clarity_instruction:
         instructions.append(clarity_instruction)
+
+    full_power_instruction = _full_power_instruction(message)
+    if full_power_instruction:
+        instructions.append(full_power_instruction)
 
     comparison_instruction = _comparison_answer_instruction(message)
     if comparison_instruction:

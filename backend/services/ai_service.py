@@ -61,7 +61,7 @@ _HOSTED_RUNTIME_ENV_VARS = (
     "VERCEL",
 )
 
-_FALLBACK_CHAIN = ["openai", "deepseek", "google", "anthropic", "groq", "ollama"]
+_FALLBACK_CHAIN = ["openai", "anthropic", "google", "deepseek", "groq", "ollama"]
 _PROVIDER_DISABLE_SECONDS = 900.0
 _PROVIDER_DISABLED_UNTIL: Dict[str, float] = {}
 _IMAGE_PROVIDER_DISABLED_UNTIL: Dict[str, float] = {}
@@ -96,26 +96,26 @@ _IMAGE_QUALITY_HINTS = {
     "hd": "very high detail, polished lighting, crisp textures, and premium finish",
 }
 _TASK_PROVIDER_PREFERENCES = {
-    "quick": ["openai", "deepseek", "google", "anthropic", "groq", "ollama"],
-    "concept": ["openai", "deepseek", "google", "anthropic", "groq", "ollama"],
-    "writing": ["openai", "deepseek", "google", "anthropic", "groq", "ollama"],
-    "coding": ["openai", "deepseek", "google", "anthropic", "groq", "ollama"],
-    "research": ["openai", "deepseek", "google", "anthropic", "groq", "ollama"],
-    "document": ["openai", "deepseek", "google", "anthropic", "groq", "ollama"],
+    "quick": ["groq", "openai", "google", "deepseek", "anthropic", "ollama"],
+    "concept": ["openai", "anthropic", "google", "deepseek", "groq", "ollama"],
+    "writing": ["openai", "anthropic", "google", "deepseek", "groq", "ollama"],
+    "coding": ["openai", "deepseek", "anthropic", "google", "groq", "ollama"],
+    "research": ["google", "openai", "anthropic", "deepseek", "groq", "ollama"],
+    "document": ["anthropic", "google", "openai", "deepseek", "groq", "ollama"],
     "image_generation": ["google", "openrouter", "openai"],
     "image_prompting": ["openai", "deepseek", "google", "anthropic", "groq", "ollama"],
-    "budget": ["deepseek", "google", "groq", "ollama", "openai", "anthropic"],
+    "budget": ["deepseek", "groq", "google", "ollama", "openai", "anthropic"],
 }
 _TASK_LABELS = {
-    "quick": "Quick replies",
-    "concept": "Explaining concepts",
-    "writing": "Writing",
+    "quick": "Fastest high-quality replies",
+    "concept": "Reasoning and explanations",
+    "writing": "Writing and strategy",
     "coding": "Coding",
-    "research": "Research / search",
-    "document": "Speed & large files",
+    "research": "Search and current info",
+    "document": "Long context and documents",
     "image_generation": "Image generation",
     "image_prompting": "Image prompt optimization",
-    "budget": "Budget option",
+    "budget": "Budget and local fallback",
 }
 _WRITING_REQUEST_PATTERN = re.compile(
     r"\b(?:write|writing|rewrite|rephrase|improve|polish|draft|email|essay|article|story|caption|copy|content|blog|linkedin|tweet|post|proposal|letter|statement|bio|script)\b",
@@ -389,12 +389,12 @@ def _resolve_provider() -> str:
         return configured
     if _openai_api_key() and not _provider_temporarily_disabled("openai"):
         return "openai"
-    if _deepseek_api_key() and not _provider_temporarily_disabled("deepseek"):
-        return "deepseek"
-    if _google_api_key() and not _provider_temporarily_disabled("google"):
-        return "google"
     if getattr(settings, "ANTHROPIC_API_KEY", "") and not _provider_temporarily_disabled("anthropic"):
         return "anthropic"
+    if _google_api_key() and not _provider_temporarily_disabled("google"):
+        return "google"
+    if _deepseek_api_key() and not _provider_temporarily_disabled("deepseek"):
+        return "deepseek"
     if getattr(settings, "GROQ_API_KEY", "") and not _provider_temporarily_disabled("groq"):
         return "groq"
     if _ollama_available() and not _provider_temporarily_disabled("ollama"):
@@ -2039,8 +2039,8 @@ class AIService:
             {
                 "role": "system",
                 "content": (
-                    "You are an expert programmer. Generate clean, accurate, runnable "
-                    f"{language} code. Do not invent APIs or library behavior.\n\n"
+                    "You are NOVA AI's Codex-grade programming engine. Generate clean, accurate, production-ready, runnable "
+                    f"{language} code. Do not invent APIs or library behavior. If there is an obvious bug, edge case, or better practical approach, handle it proactively.\n\n"
                     "Return markdown with exactly these sections:\n"
                     "## Summary\n"
                     "A short explanation of what the solution does.\n"
@@ -2075,8 +2075,8 @@ class AIService:
             {
                 "role": "system",
                 "content": _with_presentation_style(
-                    "You are an expert programming instructor. Explain the code clearly, "
-                    "step by step, and say when any behavior depends on external context.\n\n"
+                    "You are NOVA AI's senior coding copilot. Explain the code clearly, "
+                    "step by step, call out important edge cases, and say when any behavior depends on external context.\n\n"
                     "Return markdown with exactly these sections:\n"
                     "## Summary\n"
                     "## Explanation\n"
@@ -2108,8 +2108,8 @@ class AIService:
             {
                 "role": "system",
                 "content": _with_presentation_style(
-                    f"You are an expert {language} debugger. Identify the real issue, avoid guessing, "
-                    "and provide a corrected solution with a concise explanation.\n\n"
+                    f"You are NOVA AI's Codex-grade {language} debugger. Identify the real issue, avoid guessing, "
+                    "and provide the most reliable corrected solution with a concise explanation.\n\n"
                     "Return markdown with exactly these sections:\n"
                     "## Root cause\n"
                     f"## Fixed code\n```{language}\n...\n```\n"
@@ -2142,8 +2142,8 @@ class AIService:
             {
                 "role": "system",
                 "content": _with_presentation_style(
-                    f"You are an expert in {language} optimization. Suggest accurate, justified "
-                    "performance improvements and avoid speculative claims.\n\n"
+                    f"You are NOVA AI's {language} optimization specialist. Suggest accurate, justified "
+                    "performance improvements, prefer practical wins, and avoid speculative claims.\n\n"
                     "Return markdown with exactly these sections:\n"
                     "## Summary\n"
                     f"## Improved code\n```{language}\n...\n```\n"
@@ -2678,38 +2678,7 @@ class AIService:
                     "id": "openai",
                     "name": "ChatGPT",
                     "models": [model for model in dict.fromkeys(openai_models) if model] or ["gpt-4o"],
-                    "recommended_for": ["Everyday chat", "Coding", "Strong general fallback"],
-                }
-            )
-
-        if _deepseek_api_key():
-            deepseek_models = [
-                getattr(settings, "DEEPSEEK_MODEL", ""),
-                "deepseek-chat",
-                "deepseek-coder",
-                "deepseek-reasoner",
-            ]
-            providers.append(
-                {
-                    "id": "deepseek",
-                    "name": "DeepSeek",
-                    "models": [model for model in dict.fromkeys(deepseek_models) if model],
-                    "recommended_for": ["Budget option", "Concept explanations"],
-                }
-            )
-
-        if _google_api_key():
-            google_models = [
-                getattr(settings, "GEMINI_CHAT_MODEL", ""),
-                "gemini-2.5-flash",
-                "gemini-2.5-pro",
-            ]
-            providers.append(
-                {
-                    "id": "google",
-                    "name": "Gemini",
-                    "models": [model for model in dict.fromkeys(google_models) if model],
-                    "recommended_for": ["Research / search", "Speed & large files", "Image generation"],
+                    "recommended_for": ["Reasoning", "Coding", "Writing", "Strategy"],
                 }
             )
 
@@ -2726,7 +2695,38 @@ class AIService:
                     "id": "anthropic",
                     "name": "Claude",
                     "models": [model for model in dict.fromkeys(anthropic_models) if model],
-                    "recommended_for": ["Coding", "Writing", "Deep reasoning fallback"],
+                    "recommended_for": ["Long context", "Document analysis", "Calm reasoning"],
+                }
+            )
+
+        if _google_api_key():
+            google_models = [
+                getattr(settings, "GEMINI_CHAT_MODEL", ""),
+                "gemini-2.5-flash",
+                "gemini-2.5-pro",
+            ]
+            providers.append(
+                {
+                    "id": "google",
+                    "name": "Gemini",
+                    "models": [model for model in dict.fromkeys(google_models) if model],
+                    "recommended_for": ["Search-backed research", "Current information", "Multimodal"],
+                }
+            )
+
+        if _deepseek_api_key():
+            deepseek_models = [
+                getattr(settings, "DEEPSEEK_MODEL", ""),
+                "deepseek-chat",
+                "deepseek-coder",
+                "deepseek-reasoner",
+            ]
+            providers.append(
+                {
+                    "id": "deepseek",
+                    "name": "DeepSeek",
+                    "models": [model for model in dict.fromkeys(deepseek_models) if model],
+                    "recommended_for": ["Coding", "Math", "Logic"],
                 }
             )
 
@@ -2743,7 +2743,7 @@ class AIService:
                     "id": "groq",
                     "name": "Groq",
                     "models": [model for model in dict.fromkeys(groq_models) if model],
-                    "recommended_for": ["Fast fallback"],
+                    "recommended_for": ["Ultra-fast replies"],
                 }
             )
 
@@ -2752,7 +2752,7 @@ class AIService:
                 "id": "ollama",
                 "name": "Ollama (Local)",
                 "models": ["llama3", "mistral", "codellama"],
-                "recommended_for": ["Offline fallback"],
+                "recommended_for": ["Private local use", "Offline fallback"],
             }
         )
         return providers
