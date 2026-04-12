@@ -89,6 +89,12 @@ def test_provider_default_model_uses_gemini_chat_model_for_google(monkeypatch: p
     assert ai_service_module._provider_default_model("google", "research") == "gemini-2.5-flash"
 
 
+def test_provider_default_model_uses_configured_groq_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ai_service_module.settings, "GROQ_MODEL", "llama-3.1-8b-instant")
+
+    assert ai_service_module._provider_default_model("groq") == "llama-3.1-8b-instant"
+
+
 def test_streaming_error_body_can_be_read_without_response_not_read() -> None:
     class DummyResponse:
         status_code = 429

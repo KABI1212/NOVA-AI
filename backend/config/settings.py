@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from typing import Any, List
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BASE_DIR = Path(__file__).resolve().parents[1]
@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     APP_HOST: str = "127.0.0.1"
     APP_PORT: int = int(os.getenv("PORT", "8000"))
     UVICORN_ACCESS_LOG: bool = False
+    FRONTEND_URL: str = ""
 
     DATABASE_URL: str = "mongodb://localhost:27017/nova_ai"
     MONGODB_DB_NAME: str = ""
@@ -33,6 +34,10 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     AUTH_OTP_EXPIRE_MINUTES: int = 5
     AUTH_OTP_LENGTH: int = 6
+    AUTH_OTP_MAX_ATTEMPTS: int = 3
+    AUTH_OTP_LOCK_MINUTES: int = 15
+    AUTH_OTP_RESEND_COOLDOWN_SECONDS: int = 60
+    AUTH_OTP_MAX_RESEND_ATTEMPTS: int = 3
 
     EMAIL_PROVIDER: str = ""
     EMAIL_FROM: str = ""
@@ -51,6 +56,7 @@ class Settings(BaseSettings):
     SENDGRID_API_KEY: str = ""
 
     OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = ""
     OPENAI_CHAT_MODEL: str = "gpt-4o"
     OPENAI_FAST_MODEL: str = "gpt-4o-mini"
     OPENAI_CODE_MODEL: str = "gpt-4o"
@@ -72,8 +78,13 @@ class Settings(BaseSettings):
     TOGETHER_API_KEY: str = ""
 
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+    DEEPSEEK_MODEL: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    OPENROUTER_SITE: str = ""
+    OPENROUTER_APP: str = ""
     OPENROUTER_IMAGE_MODEL: str = "sourceful/riverflow-v2-fast-preview"
+    ANTHROPIC_MODEL: str = ""
+    GROQ_MODEL: str = ""
 
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_NUM_PREDICT: int = 512
@@ -133,6 +144,28 @@ class Settings(BaseSettings):
                 return False
         return bool(value)
 
+    @model_validator(mode="after")
+    def _apply_legacy_model_aliases(self) -> "Settings":
+        legacy_openai_model = str(self.OPENAI_MODEL or "").strip()
+        explicitly_set = set(self.model_fields_set)
+
+        if legacy_openai_model:
+            if "OPENAI_CHAT_MODEL" not in explicitly_set:
+                self.OPENAI_CHAT_MODEL = legacy_openai_model
+            if "OPENAI_CODE_MODEL" not in explicitly_set:
+                self.OPENAI_CODE_MODEL = legacy_openai_model
+            if "OPENAI_EXPLAIN_MODEL" not in explicitly_set:
+                self.OPENAI_EXPLAIN_MODEL = legacy_openai_model
+
+        return self
+
+    @staticmethod
+    def _normalize_public_url(value: Any) -> str | None:
+        candidate = str(value or "").strip().rstrip("/")
+        if candidate.startswith("http://") or candidate.startswith("https://"):
+            return candidate
+        return None
+
     @property
     def cors_origins_list(self) -> List[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
@@ -141,6 +174,33 @@ class Settings(BaseSettings):
     def cors_origin_regex_value(self) -> str | None:
         value = str(getattr(self, "CORS_ORIGIN_REGEX", "") or "").strip()
         return value or None
+
+    @property
+    def public_frontend_url(self) -> str | None:
+        for candidate in (self.OPENROUTER_SITE, self.FRONTEND_URL):
+            normalized = self._normalize_public_url(candidate)
+            if normalized:
+                return normalized
+
+        local_candidate = None
+        for candidate in self.cors_origins_list:
+            normalized = self._normalize_public_url(candidate)
+            if not normalized:
+                continue
+            if "localhost" in normalized or "127.0.0.1" in normalized:
+                local_candidate = local_candidate or normalized
+                continue
+            return normalized
+
+        return local_candidate
+
+    @property
+    def openrouter_referer(self) -> str:
+        return self.public_frontend_url or "http://localhost:3000"
+
+    @property
+    def openrouter_app_name(self) -> str:
+        return str(self.OPENROUTER_APP or "").strip() or self.APP_NAME
 
     model_config = SettingsConfigDict(
         env_file=str(_ENV_FILE),

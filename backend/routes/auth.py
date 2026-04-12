@@ -37,6 +37,24 @@ from utils.dependencies import get_current_user
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 logger = logging.getLogger(__name__)
+EMAIL_DELIVERY_FAILURE_MESSAGE = (
+    "We couldn't send the verification email right now. Please try again shortly."
+)
+PASSWORD_RESET_DELIVERY_FAILURE_MESSAGE = (
+    "We couldn't send the password reset code right now. Please try again shortly."
+)
+EMAIL_TEST_DELIVERY_FAILURE_MESSAGE = (
+    "We couldn't send the test email right now. Please try again shortly."
+)
+INVALID_LOGIN_MESSAGE = "Invalid email or password. Please try again."
+OTP_EXPIRED_MESSAGE = "Your code has expired. Click 'Resend Code' to get a new one."
+OTP_LOCKED_MESSAGE = (
+    "Too many failed attempts. Your account has been temporarily locked for "
+    f"security. Please try again after {settings.AUTH_OTP_LOCK_MINUTES} minutes."
+)
+RESEND_LIMIT_MESSAGE = (
+    "Too many resend attempts. Please sign in again to request a new code."
+)
 
 
 class SignupRequest(BaseModel):
@@ -84,8 +102,12 @@ class LoginChallengeResponse(BaseModel):
     requires_otp: Literal[True] = True
     challenge_token: str
     email: EmailStr
+    masked_email: str
     otp_expires_at: datetime
+    resend_available_at: datetime
     delivery_mode: Literal["email"]
+    resend_attempts_remaining: int
+    otp_attempts_remaining: int
     message: str
 
 
@@ -113,6 +135,40 @@ class EmailTestResponse(BaseModel):
     message: str
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _mask_email(email: str) -> str:
+    local_part, separator, domain = (email or "").partition("@")
+    if not local_part or not separator or not domain:
+        return email
+
+    return f"{local_part[:1]}{'*' * max(len(local_part) - 1, 3)}@{domain}"
+
+
+def _remaining_login_otp_attempts(user: User) -> int:
+    return max(
+        settings.AUTH_OTP_MAX_ATTEMPTS - _safe_int(user.login_otp_failed_attempts),
+        0,
+    )
+
+
+def _remaining_login_otp_resends(user: User) -> int:
+    return max(
+        settings.AUTH_OTP_MAX_RESEND_ATTEMPTS - _safe_int(user.login_otp_resend_count),
+        0,
+    )
+
+
+def _login_resend_available_at(user: User) -> datetime:
+    sent_at = user.login_otp_sent_at or utcnow_naive()
+    return sent_at + timedelta(seconds=settings.AUTH_OTP_RESEND_COOLDOWN_SECONDS)
+
+
 def _serialize_user(user: User) -> dict:
     return {
         "id": user.id,
@@ -132,11 +188,22 @@ def _build_token_response(user: User) -> dict:
     }
 
 
-def _clear_login_otp_state(user: User) -> None:
+def _clear_login_otp_challenge(user: User) -> None:
     user.login_otp_code_hash = None
     user.login_otp_expires_at = None
     user.login_otp_sent_at = None
     user.login_otp_challenge_hash = None
+
+
+def _reset_login_otp_security_state(user: User) -> None:
+    user.login_otp_failed_attempts = 0
+    user.login_otp_resend_count = 0
+    user.login_otp_locked_until = None
+
+
+def _clear_login_otp_state(user: User) -> None:
+    _clear_login_otp_challenge(user)
+    _reset_login_otp_security_state(user)
 
 
 def _clear_password_reset_state(user: User) -> None:
@@ -165,15 +232,102 @@ def _delete_user(db: Session, user: User) -> None:
         raise
 
 
-def _issue_login_otp(user: User, db: Session) -> dict:
+def _snapshot_login_otp_state(user: User) -> dict[str, Any]:
+    return {
+        "login_otp_code_hash": user.login_otp_code_hash,
+        "login_otp_expires_at": user.login_otp_expires_at,
+        "login_otp_sent_at": user.login_otp_sent_at,
+        "login_otp_challenge_hash": user.login_otp_challenge_hash,
+        "login_otp_failed_attempts": _safe_int(user.login_otp_failed_attempts),
+        "login_otp_resend_count": _safe_int(user.login_otp_resend_count),
+        "login_otp_locked_until": user.login_otp_locked_until,
+    }
+
+
+def _restore_login_otp_state(user: User, snapshot: dict[str, Any]) -> None:
+    for field_name, value in snapshot.items():
+        setattr(user, field_name, value)
+
+
+def _build_login_challenge_response(
+    user: User,
+    *,
+    challenge_token: str,
+    expires_at: datetime,
+    delivery_mode: str,
+) -> dict:
+    masked_email = _mask_email(user.email)
+    return {
+        "requires_otp": True,
+        "challenge_token": challenge_token,
+        "email": user.email,
+        "masked_email": masked_email,
+        "otp_expires_at": expires_at,
+        "resend_available_at": _login_resend_available_at(user),
+        "delivery_mode": delivery_mode,
+        "resend_attempts_remaining": _remaining_login_otp_resends(user),
+        "otp_attempts_remaining": _remaining_login_otp_attempts(user),
+        "message": (
+            "A 6-digit verification code has been sent to your registered "
+            f"email address {masked_email}. Please enter the code below. The "
+            f"code will expire in {settings.AUTH_OTP_EXPIRE_MINUTES} minutes."
+        ),
+    }
+
+
+def _ensure_login_not_locked(user: User, db: Session) -> None:
+    locked_until = user.login_otp_locked_until
+    if locked_until is None:
+        return
+
+    now = utcnow_naive()
+    if locked_until <= now:
+        _reset_login_otp_security_state(user)
+        _persist_user(db, user)
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_423_LOCKED,
+        detail=OTP_LOCKED_MESSAGE,
+    )
+
+
+def _issue_login_otp(user: User, db: Session, *, is_resend: bool = False) -> dict:
+    _ensure_login_not_locked(user, db)
+
+    now = utcnow_naive()
+    snapshot = _snapshot_login_otp_state(user)
+
+    if is_resend:
+        resend_available_at = _login_resend_available_at(user)
+        if user.login_otp_sent_at and resend_available_at > now:
+            seconds_remaining = max(
+                int((resend_available_at - now).total_seconds() + 0.999),
+                1,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Please wait {seconds_remaining} seconds before requesting a new code.",
+            )
+
+        resend_count = _safe_int(user.login_otp_resend_count)
+        if resend_count >= settings.AUTH_OTP_MAX_RESEND_ATTEMPTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=RESEND_LIMIT_MESSAGE,
+            )
+        user.login_otp_resend_count = resend_count + 1
+    else:
+        _reset_login_otp_security_state(user)
+
     otp_code = generate_numeric_otp()
     challenge_token = generate_login_challenge_token()
-    expires_at = utcnow_naive() + timedelta(minutes=settings.AUTH_OTP_EXPIRE_MINUTES)
+    expires_at = now + timedelta(minutes=settings.AUTH_OTP_EXPIRE_MINUTES)
 
     user.login_otp_code_hash = hash_secret_value(otp_code)
     user.login_otp_challenge_hash = hash_secret_value(challenge_token)
     user.login_otp_expires_at = expires_at
-    user.login_otp_sent_at = utcnow_naive()
+    user.login_otp_sent_at = now
 
     _persist_user(db, user)
 
@@ -190,21 +344,19 @@ def _issue_login_otp(user: User, db: Session) -> dict:
             user.email,
             exc,
         )
-        _clear_login_otp_state(user)
+        _restore_login_otp_state(user, snapshot)
         _persist_user(db, user)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
+            detail=EMAIL_DELIVERY_FAILURE_MESSAGE,
         ) from exc
 
-    return {
-        "requires_otp": True,
-        "challenge_token": challenge_token,
-        "email": user.email,
-        "otp_expires_at": expires_at,
-        "delivery_mode": delivery_mode,
-        "message": "A verification code has been sent to your email address.",
-    }
+    return _build_login_challenge_response(
+        user,
+        challenge_token=challenge_token,
+        expires_at=expires_at,
+        delivery_mode=delivery_mode,
+    )
 
 
 def _issue_password_reset_otp(user: User, db: Session) -> dict:
@@ -236,7 +388,7 @@ def _issue_password_reset_otp(user: User, db: Session) -> dict:
         _persist_user(db, user)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
+            detail=PASSWORD_RESET_DELIVERY_FAILURE_MESSAGE,
         ) from exc
 
     return {
@@ -257,6 +409,7 @@ def _validate_pending_login(
     user: User | None,
     challenge_token: str,
     db: Session,
+    allow_expired: bool = False,
 ) -> User:
     if user is None:
         raise HTTPException(
@@ -269,6 +422,8 @@ def _validate_pending_login(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive",
         )
+
+    _ensure_login_not_locked(user, db)
 
     if (
         not user.login_otp_code_hash
@@ -286,12 +441,10 @@ def _validate_pending_login(
             detail="Verification request is invalid. Please sign in again.",
         )
 
-    if user.login_otp_expires_at < utcnow_naive():
-        _clear_login_otp_state(user)
-        _persist_user(db, user)
+    if user.login_otp_expires_at < utcnow_naive() and not allow_expired:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Verification code expired. Please sign in again.",
+            detail=OTP_EXPIRED_MESSAGE,
         )
 
     return user
@@ -414,7 +567,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
     if not user or not verify_password(request.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail=INVALID_LOGIN_MESSAGE,
         )
 
     if not user.is_active:
@@ -432,6 +585,9 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         or user.login_otp_challenge_hash
         or user.login_otp_expires_at is not None
         or user.login_otp_sent_at is not None
+        or _safe_int(user.login_otp_failed_attempts) > 0
+        or _safe_int(user.login_otp_resend_count) > 0
+        or user.login_otp_locked_until is not None
     ):
         _clear_login_otp_state(user)
         requires_persist = True
@@ -465,9 +621,27 @@ async def verify_login_otp(
     )
 
     if not verify_secret_value(otp, user.login_otp_code_hash):
+        user.login_otp_failed_attempts = _safe_int(user.login_otp_failed_attempts) + 1
+        attempts_remaining = _remaining_login_otp_attempts(user)
+        if attempts_remaining <= 0:
+            _clear_login_otp_challenge(user)
+            user.login_otp_resend_count = 0
+            user.login_otp_locked_until = utcnow_naive() + timedelta(
+                minutes=settings.AUTH_OTP_LOCK_MINUTES
+            )
+            _persist_user(db, user)
+            raise HTTPException(
+                status_code=status.HTTP_423_LOCKED,
+                detail=OTP_LOCKED_MESSAGE,
+            )
+
+        _persist_user(db, user)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid verification code.",
+            detail=(
+                "Incorrect code. Please try again. "
+                f"You have {attempts_remaining} attempts remaining."
+            ),
         )
 
     _clear_login_otp_state(user)
@@ -493,9 +667,10 @@ async def resend_login_otp(
         user=_load_user_by_email(email, db),
         challenge_token=request.challenge_token.strip(),
         db=db,
+        allow_expired=True,
     )
 
-    return _issue_login_otp(user, db)
+    return _issue_login_otp(user, db, is_resend=True)
 
 
 @router.post(
@@ -588,7 +763,7 @@ async def send_email_test(current_user: User = Depends(get_current_user)):
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
+            detail=EMAIL_TEST_DELIVERY_FAILURE_MESSAGE,
         ) from exc
 
     return {

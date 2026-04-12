@@ -31,25 +31,25 @@ async def ask_chatgpt(prompt: str, system_prompt: str, model: Optional[str] = No
 
 async def ask_gemini(prompt: str, system_prompt: str, model: Optional[str] = None) -> str:
     messages = _build_messages(system_prompt, prompt)
-    model_name = model or DEFAULT_MODELS["gemini"]
+    model_name = model or getattr(settings, "GEMINI_CHAT_MODEL", "") or DEFAULT_MODELS["gemini"]
     return await direct_completion(messages, provider="google", model=model_name)
 
 
 async def ask_claude(prompt: str, system_prompt: str, model: Optional[str] = None) -> str:
     messages = _build_messages(system_prompt, prompt)
-    model_name = model or DEFAULT_MODELS["claude"]
+    model_name = model or getattr(settings, "ANTHROPIC_MODEL", "") or DEFAULT_MODELS["claude"]
     return await direct_completion(messages, provider="anthropic", model=model_name)
 
 
 async def ask_deepseek(prompt: str, system_prompt: str, model: Optional[str] = None) -> str:
     messages = _build_messages(system_prompt, prompt)
-    model_name = model or DEFAULT_MODELS["deepseek"]
+    model_name = model or getattr(settings, "DEEPSEEK_MODEL", "") or DEFAULT_MODELS["deepseek"]
     return await direct_completion(messages, provider="deepseek", model=model_name)
 
 
 async def ask_groq(prompt: str, system_prompt: str, model: Optional[str] = None) -> str:
     messages = _build_messages(system_prompt, prompt)
-    model_name = model or DEFAULT_MODELS["groq"]
+    model_name = model or getattr(settings, "GROQ_MODEL", "") or DEFAULT_MODELS["groq"]
     return await direct_completion(messages, provider="groq", model=model_name)
 
 

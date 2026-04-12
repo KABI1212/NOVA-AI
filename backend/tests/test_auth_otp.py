@@ -134,7 +134,10 @@ def test_signup_creates_user_and_requires_verification(
 
         assert response["requires_otp"] is True
         assert response["email"] == "new.user@example.com"
+        assert response["masked_email"] == auth_module._mask_email("new.user@example.com")
         assert response["delivery_mode"] == "email"
+        assert response["resend_attempts_remaining"] == auth_module.settings.AUTH_OTP_MAX_RESEND_ATTEMPTS
+        assert response["otp_attempts_remaining"] == auth_module.settings.AUTH_OTP_MAX_ATTEMPTS
         assert "dev_otp_code" not in response
         assert sent_email["recipient_email"] == "new.user@example.com"
         assert auth_module.verify_secret_value(
@@ -169,7 +172,7 @@ def test_signup_cleans_up_user_when_otp_delivery_fails(
             )
 
         assert exc_info.value.status_code == 503
-        assert "verification email" in exc_info.value.detail.lower()
+        assert exc_info.value.detail == auth_module.EMAIL_DELIVERY_FAILURE_MESSAGE
         assert db.users == []
 
     monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
@@ -269,7 +272,10 @@ def test_issue_login_otp_returns_challenge_and_persists_pending_state(monkeypatc
 
         assert response["requires_otp"] is True
         assert response["email"] == user.email
+        assert response["masked_email"] == auth_module._mask_email(user.email)
         assert response["delivery_mode"] == "email"
+        assert response["resend_attempts_remaining"] == auth_module.settings.AUTH_OTP_MAX_RESEND_ATTEMPTS
+        assert response["otp_attempts_remaining"] == auth_module.settings.AUTH_OTP_MAX_ATTEMPTS
         assert "dev_otp_code" not in response
         assert len(sent_email["otp_code"]) == auth_module.settings.AUTH_OTP_LENGTH
         assert sent_email["recipient_email"] == user.email
@@ -343,7 +349,10 @@ def test_login_requires_otp_for_unverified_user(monkeypatch: pytest.MonkeyPatch)
 
         assert response["requires_otp"] is True
         assert response["email"] == user.email
+        assert response["masked_email"] == auth_module._mask_email(user.email)
         assert response["delivery_mode"] == "email"
+        assert response["resend_attempts_remaining"] == auth_module.settings.AUTH_OTP_MAX_RESEND_ATTEMPTS
+        assert response["otp_attempts_remaining"] == auth_module.settings.AUTH_OTP_MAX_ATTEMPTS
         assert "dev_otp_code" not in response
         assert sent_email["recipient_email"] == user.email
         assert auth_module.verify_secret_value(
@@ -409,14 +418,15 @@ def test_verify_login_otp_rejects_invalid_code(
             )
 
         assert exc_info.value.status_code == 401
-        assert exc_info.value.detail == "Invalid verification code."
+        assert exc_info.value.detail == "Incorrect code. Please try again. You have 2 attempts remaining."
+        assert user.login_otp_failed_attempts == 1
         assert user.login_otp_code_hash is not None
         assert user.login_otp_challenge_hash is not None
 
     asyncio.run(scenario())
 
 
-def test_verify_login_otp_rejects_expired_code_and_clears_pending_state(
+def test_verify_login_otp_rejects_expired_code_without_clearing_pending_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user = _make_user()
@@ -437,10 +447,149 @@ def test_verify_login_otp_rejects_expired_code_and_clears_pending_state(
             )
 
         assert exc_info.value.status_code == 401
-        assert exc_info.value.detail == "Verification code expired. Please sign in again."
+        assert exc_info.value.detail == auth_module.OTP_EXPIRED_MESSAGE
+        assert user.login_otp_code_hash is not None
+        assert user.login_otp_challenge_hash is not None
+        assert user.login_otp_expires_at is not None
+
+    asyncio.run(scenario())
+
+
+def test_verify_login_otp_locks_after_three_failed_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = _make_user()
+    db = _FakeSession([user])
+
+    async def scenario() -> None:
+        response, _sent_email = await _issue_login_challenge(monkeypatch, db, user)
+
+        for expected_remaining in [2, 1]:
+            with pytest.raises(HTTPException) as exc_info:
+                await auth_module.verify_login_otp(
+                    auth_module.LoginOtpVerifyRequest(
+                        email=user.email,
+                        otp="000000",
+                        challenge_token=response["challenge_token"],
+                    ),
+                    db=db,
+                )
+
+            assert exc_info.value.status_code == 401
+            assert f"{expected_remaining} attempts remaining" in exc_info.value.detail
+
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_module.verify_login_otp(
+                auth_module.LoginOtpVerifyRequest(
+                    email=user.email,
+                    otp="000000",
+                    challenge_token=response["challenge_token"],
+                ),
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 423
+        assert exc_info.value.detail == auth_module.OTP_LOCKED_MESSAGE
+        assert user.login_otp_locked_until is not None
         assert user.login_otp_code_hash is None
         assert user.login_otp_challenge_hash is None
-        assert user.login_otp_expires_at is None
+
+        with pytest.raises(HTTPException) as login_exc:
+            await auth_module.login(
+                auth_module.LoginRequest(email=user.email, password="Sup3rSecret!"),
+                db=db,
+            )
+
+        assert login_exc.value.status_code == 423
+        assert login_exc.value.detail == auth_module.OTP_LOCKED_MESSAGE
+
+    asyncio.run(scenario())
+
+
+def test_resend_login_otp_enforces_cooldown_and_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = _make_user()
+    db = _FakeSession([user])
+    current_time = [auth_module.utcnow_naive()]
+
+    monkeypatch.setattr(auth_module, "utcnow_naive", lambda: current_time[0])
+
+    async def scenario() -> None:
+        response, _sent_email = await _issue_login_challenge(monkeypatch, db, user)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_module.resend_login_otp(
+                auth_module.LoginOtpResendRequest(
+                    email=user.email,
+                    challenge_token=response["challenge_token"],
+                ),
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 429
+        assert "Please wait" in exc_info.value.detail
+
+        latest_response = response
+        for expected_remaining in [2, 1, 0]:
+            current_time[0] = current_time[0] + timedelta(
+                seconds=auth_module.settings.AUTH_OTP_RESEND_COOLDOWN_SECONDS + 1
+            )
+            latest_response = await auth_module.resend_login_otp(
+                auth_module.LoginOtpResendRequest(
+                    email=user.email,
+                    challenge_token=latest_response["challenge_token"],
+                ),
+                db=db,
+            )
+            assert latest_response["resend_attempts_remaining"] == expected_remaining
+
+        current_time[0] = current_time[0] + timedelta(
+            seconds=auth_module.settings.AUTH_OTP_RESEND_COOLDOWN_SECONDS + 1
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_module.resend_login_otp(
+                auth_module.LoginOtpResendRequest(
+                    email=user.email,
+                    challenge_token=latest_response["challenge_token"],
+                ),
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 429
+        assert exc_info.value.detail == auth_module.RESEND_LIMIT_MESSAGE
+
+    asyncio.run(scenario())
+
+
+def test_resend_login_otp_allows_expired_code_with_valid_challenge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = _make_user()
+    db = _FakeSession([user])
+    current_time = [auth_module.utcnow_naive()]
+
+    monkeypatch.setattr(auth_module, "utcnow_naive", lambda: current_time[0])
+
+    async def scenario() -> None:
+        response, _sent_email = await _issue_login_challenge(monkeypatch, db, user)
+        current_time[0] = current_time[0] + timedelta(
+            minutes=auth_module.settings.AUTH_OTP_EXPIRE_MINUTES,
+            seconds=1,
+        )
+
+        resend_response = await auth_module.resend_login_otp(
+            auth_module.LoginOtpResendRequest(
+                email=user.email,
+                challenge_token=response["challenge_token"],
+            ),
+            db=db,
+        )
+
+        assert resend_response["challenge_token"] != response["challenge_token"]
+        assert resend_response["resend_attempts_remaining"] == (
+            auth_module.settings.AUTH_OTP_MAX_RESEND_ATTEMPTS - 1
+        )
 
     asyncio.run(scenario())
 

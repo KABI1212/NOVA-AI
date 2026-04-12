@@ -43,6 +43,7 @@ Set these on Render:
 DATABASE_URL=mongodb+srv://USERNAME:PASSWORD@CLUSTER_URL/nova_ai?retryWrites=true&w=majority
 MONGODB_REQUIRED=true
 CORS_ORIGINS=https://your-frontend.vercel.app
+FRONTEND_URL=https://your-frontend.vercel.app
 SECRET_KEY=generate-a-long-random-secret
 REDIS_URL=<attach from Render key value service>
 UPLOAD_DIR=/app/uploads
@@ -53,7 +54,9 @@ AI_PROVIDER=auto
 The backend also accepts Vercel and Render deployment origins by default through
 `CORS_ORIGIN_REGEX`, which helps preview deployments and standard `.vercel.app` /
 `.onrender.com` frontends work without a browser CORS failure. You should still
-set `CORS_ORIGINS` to your main production frontend URL explicitly.
+set `CORS_ORIGINS` to your main production frontend URL explicitly. Set
+`FRONTEND_URL` to the same deployed frontend URL so provider headers such as
+OpenRouter use the correct public origin instead of a localhost fallback.
 
 Add whichever provider keys you want to use:
 

@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { ArrowLeft, Lock, Mail, RefreshCw, Shield } from 'lucide-react';
@@ -20,6 +20,10 @@ function maskEmail(email) {
   return `${masked}@${domain}`;
 }
 
+function getMaskedEmailDisplay(challenge, fallbackEmail) {
+  return challenge?.masked_email || maskEmail(challenge?.email || fallbackEmail);
+}
+
 function formatExpiryLabel(otpExpiresAt) {
   if (!otpExpiresAt) {
     return 'Code expires in 5 minutes.';
@@ -34,6 +38,19 @@ function formatExpiryLabel(otpExpiresAt) {
     hour: 'numeric',
     minute: '2-digit',
   })}.`;
+}
+
+function getResendCooldownSeconds(resendAvailableAt) {
+  if (!resendAvailableAt) {
+    return 0;
+  }
+
+  const parsed = new Date(resendAvailableAt);
+  if (Number.isNaN(parsed.getTime())) {
+    return 0;
+  }
+
+  return Math.max(Math.ceil((parsed.getTime() - Date.now()) / 1000), 0);
 }
 
 function Login() {
@@ -55,12 +72,32 @@ function Login() {
   const [submittingCredentials, setSubmittingCredentials] = useState(false);
   const [verifyingOtp, setVerifyingOtp] = useState(false);
   const [resendingOtp, setResendingOtp] = useState(false);
+  const [resendCooldownSeconds, setResendCooldownSeconds] = useState(0);
   const [requestingResetCode, setRequestingResetCode] = useState(false);
   const [resendingResetCode, setResendingResetCode] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
 
   const expiryLabel = formatExpiryLabel(challenge?.otp_expires_at);
   const forgotExpiryLabel = formatExpiryLabel(forgotChallenge?.otp_expires_at);
+  const maskedEmail = getMaskedEmailDisplay(challenge, formData.email);
+  const resendAttemptsRemaining = Number(challenge?.resend_attempts_remaining ?? 0);
+  const otpAttemptsRemaining = Number(challenge?.otp_attempts_remaining ?? 0);
+  const resendDisabled =
+    resendingOtp || resendCooldownSeconds > 0 || (challenge ? resendAttemptsRemaining <= 0 : false);
+
+  useEffect(() => {
+    const updateCooldown = () =>
+      setResendCooldownSeconds(getResendCooldownSeconds(challenge?.resend_available_at));
+
+    updateCooldown();
+
+    if (!challenge?.resend_available_at) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(updateCooldown, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [challenge?.resend_available_at]);
 
   const handleCredentialSubmit = async (e) => {
     e.preventDefault();
@@ -331,9 +368,12 @@ function Login() {
               <p className="text-sm text-gray-600 dark:text-gray-400 mb-6 leading-6">
                 We sent a 6-digit code to{' '}
                 <span className="font-medium text-gray-900 dark:text-gray-100">
-                  {maskEmail(challenge?.email || formData.email)}
+                  {maskedEmail}
                 </span>
                 . {expiryLabel}
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+                {otpAttemptsRemaining} verification attempts remaining. {resendAttemptsRemaining} resend attempts remaining.
               </p>
               <form onSubmit={handleOtpSubmit} className="space-y-4">
                 <div>
@@ -369,11 +409,17 @@ function Login() {
                 <button
                   type="button"
                   onClick={handleResendOtp}
-                  disabled={resendingOtp}
+                  disabled={resendDisabled}
                   className="btn-secondary w-full disabled:opacity-50 inline-flex items-center justify-center gap-2"
                 >
                   <RefreshCw className={`w-4 h-4 ${resendingOtp ? 'animate-spin' : ''}`} />
-                  {resendingOtp ? 'Sending new code...' : 'Resend Code'}
+                  {resendingOtp
+                    ? 'Sending new code...'
+                    : resendCooldownSeconds > 0
+                      ? `Resend in ${resendCooldownSeconds}s`
+                      : resendAttemptsRemaining <= 0
+                        ? 'No Resends Left'
+                        : 'Resend Code'}
                 </button>
               </div>
             </>

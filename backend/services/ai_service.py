@@ -527,6 +527,25 @@ def _configured_model_override() -> Optional[str]:
     return configured or None
 
 
+def _configured_provider_model(provider: str) -> Optional[str]:
+    mapping = {
+        "deepseek": getattr(settings, "DEEPSEEK_MODEL", ""),
+        "groq": getattr(settings, "GROQ_MODEL", ""),
+        "anthropic": getattr(settings, "ANTHROPIC_MODEL", ""),
+    }
+    configured = str(mapping.get(provider, "") or "").strip()
+    return configured or None
+
+
+def _openrouter_request_headers(api_key: str) -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": getattr(settings, "openrouter_referer", "http://localhost:3000"),
+        "X-Title": getattr(settings, "openrouter_app_name", getattr(settings, "APP_NAME", "NOVA AI")),
+    }
+
+
 def _provider_chain_for_use_case(use_case: Optional[str]) -> List[str]:
     requested_use_case = str(use_case or "").strip().lower()
     preferred = _TASK_PROVIDER_PREFERENCES.get(requested_use_case) or _FALLBACK_CHAIN
@@ -544,13 +563,13 @@ def _provider_default_model(provider: str, use_case: Optional[str] = None) -> st
             return getattr(settings, "OPENAI_EXPLAIN_MODEL", "") or getattr(settings, "OPENAI_CHAT_MODEL", "") or "gpt-4o"
         return getattr(settings, "OPENAI_CHAT_MODEL", "") or "gpt-4o"
     if provider == "deepseek":
-        return _DEFAULT_DEEPSEEK_MODEL
+        return _configured_provider_model("deepseek") or _DEFAULT_DEEPSEEK_MODEL
     if provider == "google":
         return getattr(settings, "GEMINI_CHAT_MODEL", "") or _DEFAULT_GEMINI_MODEL
     if provider == "groq":
-        return _DEFAULT_GROQ_MODEL
+        return _configured_provider_model("groq") or _DEFAULT_GROQ_MODEL
     if provider == "anthropic":
-        return _DEFAULT_ANTHROPIC_MODEL
+        return _configured_provider_model("anthropic") or _DEFAULT_ANTHROPIC_MODEL
     return _DEFAULT_OLLAMA_MODEL
 
 
@@ -1119,12 +1138,7 @@ async def _generate_image_with_openrouter(
 
     requested_images = max(1, min(int(n or 1), 4))
     endpoint = f"{str(getattr(settings, 'OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1')).rstrip('/')}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:3000",
-        "X-Title": getattr(settings, "APP_NAME", "NOVA AI"),
-    }
+    headers = _openrouter_request_headers(api_key)
 
     images: List[str] = []
     last_error: Optional[Exception] = None
@@ -1222,12 +1236,7 @@ async def _edit_image_with_openrouter(
         return []
 
     endpoint = f"{str(getattr(settings, 'OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1')).rstrip('/')}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:3000",
-        "X-Title": getattr(settings, "APP_NAME", "NOVA AI"),
-    }
+    headers = _openrouter_request_headers(api_key)
     data_url = _image_bytes_to_data_url(image_bytes, mime_type)
 
     async with httpx.AsyncClient(timeout=_image_request_timeout_seconds()) as client:
@@ -1512,7 +1521,7 @@ async def _stream_groq(
         raise RuntimeError("Missing GROQ_API_KEY")
 
     payload = {
-        "model": model or _DEFAULT_GROQ_MODEL,
+        "model": model or _provider_default_model("groq"),
         "messages": messages,
         "stream": True,
         "max_tokens": max_tokens or _default_max_tokens(),
@@ -1565,7 +1574,7 @@ async def _stream_deepseek(
         timeout=_request_timeout_seconds(),
     )
     stream = await client.chat.completions.create(
-        model=model or _DEFAULT_DEEPSEEK_MODEL,
+        model=model or _provider_default_model("deepseek"),
         messages=messages,
         stream=True,
         temperature=temperature if temperature is not None else _default_temperature(),
@@ -1594,7 +1603,7 @@ async def _stream_anthropic(
 
     client = _anthropic.AsyncAnthropic(api_key=api_key, timeout=_request_timeout_seconds())
     async with client.messages.stream(
-        model=model or _DEFAULT_ANTHROPIC_MODEL,
+        model=model or _provider_default_model("anthropic"),
         max_tokens=max_tokens or _default_max_tokens(),
         temperature=temperature if temperature is not None else _default_temperature(),
         system=system,
@@ -2571,6 +2580,7 @@ class AIService:
 
         if _openai_api_key():
             openai_models = [
+                getattr(settings, "OPENAI_FAST_MODEL", ""),
                 getattr(settings, "OPENAI_CHAT_MODEL", ""),
                 getattr(settings, "OPENAI_CODE_MODEL", ""),
                 getattr(settings, "OPENAI_EXPLAIN_MODEL", ""),
@@ -2585,11 +2595,17 @@ class AIService:
             )
 
         if _deepseek_api_key():
+            deepseek_models = [
+                getattr(settings, "DEEPSEEK_MODEL", ""),
+                "deepseek-chat",
+                "deepseek-coder",
+                "deepseek-reasoner",
+            ]
             providers.append(
                 {
                     "id": "deepseek",
                     "name": "DeepSeek",
-                    "models": ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
+                    "models": [model for model in dict.fromkeys(deepseek_models) if model],
                     "recommended_for": ["Budget option", "Concept explanations"],
                 }
             )
@@ -2610,21 +2626,35 @@ class AIService:
             )
 
         if getattr(settings, "GROQ_API_KEY", ""):
+            groq_models = [
+                getattr(settings, "GROQ_MODEL", ""),
+                "llama-3.3-70b-versatile",
+                "llama3-8b-8192",
+                "mixtral-8x7b-32768",
+                "gemma2-9b-it",
+            ]
             providers.append(
                 {
                     "id": "groq",
                     "name": "Groq",
-                    "models": ["llama-3.3-70b-versatile", "llama3-8b-8192", "mixtral-8x7b-32768", "gemma2-9b-it"],
+                    "models": [model for model in dict.fromkeys(groq_models) if model],
                     "recommended_for": ["Fast fallback"],
                 }
             )
 
         if getattr(settings, "ANTHROPIC_API_KEY", ""):
+            anthropic_models = [
+                getattr(settings, "ANTHROPIC_MODEL", ""),
+                "claude-opus-4-5",
+                "claude-sonnet-4-5",
+                "claude-3-sonnet-20240229",
+                "claude-3-haiku-20240307",
+            ]
             providers.append(
                 {
                     "id": "anthropic",
                     "name": "Claude",
-                    "models": ["claude-opus-4-5", "claude-sonnet-4-5", "claude-3-sonnet-20240229", "claude-3-haiku-20240307"],
+                    "models": [model for model in dict.fromkeys(anthropic_models) if model],
                     "recommended_for": ["Coding", "Writing", "Deep reasoning fallback"],
                 }
             )

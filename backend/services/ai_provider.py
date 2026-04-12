@@ -182,12 +182,17 @@ def _resolve_provider(provider: str, model: str) -> Tuple[str, str, Dict[str, st
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    base_url = PROVIDERS[key]["base_url"]
 
     if key == "openrouter":
-        headers["HTTP-Referer"] = os.getenv("OPENROUTER_SITE", "http://localhost:3000")
-        headers["X-Title"] = os.getenv("OPENROUTER_APP", "NOVA AI")
+        headers["HTTP-Referer"] = getattr(settings, "openrouter_referer", "http://localhost:3000")
+        headers["X-Title"] = getattr(settings, "openrouter_app_name", "NOVA AI")
+        base_url = (
+            f"{str(getattr(settings, 'OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1')).rstrip('/')}"
+            "/chat/completions"
+        )
 
-    return key, PROVIDERS[key]["base_url"], headers
+    return key, base_url, headers
 
 
 # ---------------------------------------------------------------------------
