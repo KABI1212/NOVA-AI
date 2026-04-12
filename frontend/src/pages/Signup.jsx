@@ -70,6 +70,7 @@ function Signup() {
   const [verifyingOtp, setVerifyingOtp] = useState(false);
   const [resendingOtp, setResendingOtp] = useState(false);
   const [resendCooldownSeconds, setResendCooldownSeconds] = useState(0);
+  const [authError, setAuthError] = useState('');
 
   const expiryLabel = formatExpiryLabel(challenge?.otp_expires_at);
   const maskedEmail = getMaskedEmailDisplay(challenge, formData.email);
@@ -96,6 +97,7 @@ function Signup() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSubmittingDetails(true);
+    setAuthError('');
 
     try {
       const payload = {
@@ -119,7 +121,9 @@ function Signup() {
         navigate('/chat');
       }
     } catch (error) {
-      toast.error(formatApiError(error, 'Signup failed'));
+      const message = formatApiError(error, 'Signup failed');
+      setAuthError(message);
+      toast.error(message);
     } finally {
       setSubmittingDetails(false);
     }
@@ -128,6 +132,7 @@ function Signup() {
   const handleOtpSubmit = async (e) => {
     e.preventDefault();
     setVerifyingOtp(true);
+    setAuthError('');
 
     try {
       const response = await authAPI.verifyLoginOtp({
@@ -140,7 +145,9 @@ function Signup() {
       toast.success('Account verified successfully!');
       navigate('/chat');
     } catch (error) {
-      toast.error(formatApiError(error, 'Verification failed'));
+      const message = formatApiError(error, 'Verification failed');
+      setAuthError(message);
+      toast.error(message);
     } finally {
       setVerifyingOtp(false);
     }
@@ -152,6 +159,7 @@ function Signup() {
     }
 
     setResendingOtp(true);
+    setAuthError('');
 
     try {
       const response = await authAPI.resendLoginOtp({
@@ -162,7 +170,9 @@ function Signup() {
       setOtp('');
       toast.success(response.data.message || 'A new OTP has been sent to your email.');
     } catch (error) {
-      toast.error(formatApiError(error, 'Could not resend the code'));
+      const message = formatApiError(error, 'Could not resend the code');
+      setAuthError(message);
+      toast.error(message);
     } finally {
       setResendingOtp(false);
     }
@@ -185,6 +195,11 @@ function Signup() {
         </div>
 
         <div className="card p-8">
+          {authError ? (
+            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {authError}
+            </div>
+          ) : null}
           {step === 'details' ? (
             <>
               <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">

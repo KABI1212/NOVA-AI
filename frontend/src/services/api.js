@@ -214,6 +214,25 @@ const api = axios.create({
   },
 });
 
+const PUBLIC_AUTH_401_PATHS = [
+  '/auth/login',
+  '/auth/signup',
+  '/auth/login/otp/verify',
+  '/auth/login/otp/resend',
+  '/auth/password/forgot',
+  '/auth/password/reset',
+];
+
+const shouldHandle401AsExpiredSession = (requestUrl = '') => {
+  const normalizedUrl = String(requestUrl || '').trim();
+
+  if (!normalizedUrl) {
+    return true;
+  }
+
+  return !PUBLIC_AUTH_401_PATHS.some((path) => normalizedUrl.includes(path));
+};
+
 api.interceptors.request.use(async (config) => {
   const resolvedBaseUrl = await resolveApiBaseUrl();
   const originalUrl = String(config.url || '').trim();
@@ -241,7 +260,12 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     const token = localStorage.getItem('token');
-    if (error.response?.status === 401 && token) {
+    const requestUrl = String(error?.config?.url || '').trim();
+    if (
+      error.response?.status === 401 &&
+      token &&
+      shouldHandle401AsExpiredSession(requestUrl)
+    ) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       window.location.href = '/login';

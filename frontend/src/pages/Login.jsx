@@ -76,6 +76,7 @@ function Login() {
   const [requestingResetCode, setRequestingResetCode] = useState(false);
   const [resendingResetCode, setResendingResetCode] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
+  const [authError, setAuthError] = useState('');
 
   const expiryLabel = formatExpiryLabel(challenge?.otp_expires_at);
   const forgotExpiryLabel = formatExpiryLabel(forgotChallenge?.otp_expires_at);
@@ -104,6 +105,7 @@ function Login() {
   const handleCredentialSubmit = async (e) => {
     e.preventDefault();
     setSubmittingCredentials(true);
+    setAuthError('');
 
     try {
       const payload = {
@@ -125,7 +127,9 @@ function Login() {
         navigate('/chat');
       }
     } catch (error) {
-      toast.error(formatApiError(error, 'Login failed'));
+      const message = formatApiError(error, 'Login failed');
+      setAuthError(message);
+      toast.error(message);
     } finally {
       setSubmittingCredentials(false);
     }
@@ -134,6 +138,7 @@ function Login() {
   const handleOtpSubmit = async (e) => {
     e.preventDefault();
     setVerifyingOtp(true);
+    setAuthError('');
 
     try {
       const response = await authAPI.verifyLoginOtp({
@@ -146,7 +151,9 @@ function Login() {
       toast.success('Welcome back!');
       navigate('/chat');
     } catch (error) {
-      toast.error(formatApiError(error, 'Verification failed'));
+      const message = formatApiError(error, 'Verification failed');
+      setAuthError(message);
+      toast.error(message);
     } finally {
       setVerifyingOtp(false);
     }
@@ -158,6 +165,7 @@ function Login() {
     }
 
     setResendingOtp(true);
+    setAuthError('');
 
     try {
       const response = await authAPI.resendLoginOtp({
@@ -168,13 +176,16 @@ function Login() {
       setOtp('');
       toast.success(response.data.message || 'A new OTP has been sent to your email.');
     } catch (error) {
-      toast.error(formatApiError(error, 'Could not resend the code'));
+      const message = formatApiError(error, 'Could not resend the code');
+      setAuthError(message);
+      toast.error(message);
     } finally {
       setResendingOtp(false);
     }
   };
 
   const handleStartForgotPassword = () => {
+    setAuthError('');
     setForgotEmail(formData.email.trim());
     setForgotChallenge(null);
     setForgotOtp('');
@@ -187,11 +198,14 @@ function Login() {
     e.preventDefault();
     const email = forgotEmail.trim();
     if (!email) {
-      toast.error('Please enter your registered email.');
+      const message = 'Please enter your registered email.';
+      setAuthError(message);
+      toast.error(message);
       return;
     }
 
     setRequestingResetCode(true);
+    setAuthError('');
     try {
       const response = await authAPI.forgotPassword({ email });
       if (response.data?.challenge_token && response.data?.email) {
@@ -205,7 +219,9 @@ function Login() {
       }
       toast.success(response.data.message || 'If an account exists, a password reset code has been sent.');
     } catch (error) {
-      toast.error(formatApiError(error, 'Could not send password reset code'));
+      const message = formatApiError(error, 'Could not send password reset code');
+      setAuthError(message);
+      toast.error(message);
     } finally {
       setRequestingResetCode(false);
     }
@@ -217,6 +233,7 @@ function Login() {
     }
 
     setResendingResetCode(true);
+    setAuthError('');
     try {
       const response = await authAPI.forgotPassword({ email: forgotChallenge.email });
       if (response.data?.challenge_token && response.data?.email) {
@@ -228,7 +245,9 @@ function Login() {
       }
       toast.success(response.data.message || 'If an account exists, a password reset code has been sent.');
     } catch (error) {
-      toast.error(formatApiError(error, 'Could not resend reset code'));
+      const message = formatApiError(error, 'Could not resend reset code');
+      setAuthError(message);
+      toast.error(message);
     } finally {
       setResendingResetCode(false);
     }
@@ -237,21 +256,28 @@ function Login() {
   const handleResetPasswordSubmit = async (e) => {
     e.preventDefault();
     if (!forgotChallenge?.email || !forgotChallenge?.challenge_token) {
-      toast.error('Please request a new reset code.');
+      const message = 'Please request a new reset code.';
+      setAuthError(message);
+      toast.error(message);
       return;
     }
 
     if (newPassword.length < 8) {
-      toast.error('New password must be at least 8 characters.');
+      const message = 'New password must be at least 8 characters.';
+      setAuthError(message);
+      toast.error(message);
       return;
     }
 
     if (newPassword !== confirmNewPassword) {
-      toast.error('Passwords do not match.');
+      const message = 'Passwords do not match.';
+      setAuthError(message);
+      toast.error(message);
       return;
     }
 
     setResettingPassword(true);
+    setAuthError('');
     try {
       await authAPI.resetPassword({
         email: forgotChallenge.email,
@@ -271,13 +297,16 @@ function Login() {
       setConfirmNewPassword('');
       toast.success('Password updated. Please sign in with your new password.');
     } catch (error) {
-      toast.error(formatApiError(error, 'Could not reset password'));
+      const message = formatApiError(error, 'Could not reset password');
+      setAuthError(message);
+      toast.error(message);
     } finally {
       setResettingPassword(false);
     }
   };
 
   const handleBackToCredentials = () => {
+    setAuthError('');
     setStep('credentials');
     setOtp('');
     setChallenge(null);
@@ -304,6 +333,11 @@ function Login() {
         </div>
 
         <div className="card p-8">
+          {authError ? (
+            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {authError}
+            </div>
+          ) : null}
           {step === 'credentials' ? (
             <>
               <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">
