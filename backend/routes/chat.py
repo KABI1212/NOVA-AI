@@ -113,6 +113,43 @@ _SPORTS_QUERY_REWRITES = (
     (re.compile(r"\bcaptions\b", re.IGNORECASE), "captains"),
     (re.compile(r"\bcaption\b", re.IGNORECASE), "captain"),
 )
+_SEARCH_FALLBACK_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "be",
+    "can",
+    "could",
+    "define",
+    "do",
+    "does",
+    "explain",
+    "for",
+    "from",
+    "give",
+    "how",
+    "i",
+    "in",
+    "is",
+    "it",
+    "latest",
+    "me",
+    "of",
+    "on",
+    "recent",
+    "tell",
+    "the",
+    "this",
+    "to",
+    "today",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+}
 _FILE_TAG_PATTERN = re.compile(r"(?:\s*\+\s*)?\[File:\s*([^\]]+)\]\s*", re.IGNORECASE)
 _ALL_QUESTIONS_PATTERN = re.compile(
     r"\b(?:answer|solve|write|give|provide|return|generate)\s+(?:all|every)\s+(?:the\s+)?(?:questions?|answers?)\b"
@@ -1800,36 +1837,139 @@ def _visible_search_sources(results: List[dict], max_items: int = 3) -> List[dic
     return sources
 
 
-def _format_search_fallback_answer(results: List[dict]) -> str:
-    top_result = results[0]
-    top_summary = (top_result.get("snippet") or top_result.get("title") or "").strip()
+def _search_fallback_subject(message: str) -> str:
+    cleaned = " ".join((message or "").split()).strip()
+    if not cleaned:
+        return ""
 
-    lines: List[str] = []
+    match = re.match(
+        r"(?i)^(?:what\s+is|what\s+are|define|explain|tell\s+me\s+about)\s+(.+?)(?:[?.!,]|$)",
+        cleaned,
+    )
+    if not match:
+        return ""
+
+    subject = re.sub(r"\s+", " ", match.group(1)).strip(" .,!?:;")
+    return subject[:120]
+
+
+def _search_fallback_tokens(text: str) -> List[str]:
+    tokens: List[str] = []
+    for token in re.findall(r"[a-z0-9]+", str(text or "").lower()):
+        if len(token) < 3 or token in _SEARCH_FALLBACK_STOPWORDS:
+            continue
+        if token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def _score_search_result_for_fallback(message: str, result: dict) -> int:
+    title = str(result.get("title") or "").lower()
+    snippet = str(result.get("snippet") or "").lower()
+    url = str(result.get("url") or "").lower()
+    combined = f"{title} {snippet} {url}"
+
+    score = 0
+    subject = _search_fallback_subject(message).lower()
+    if subject:
+        if subject in title:
+            score += 20
+        if subject in snippet:
+            score += 16
+        if subject in url:
+            score += 8
+
+    for token in _search_fallback_tokens(message):
+        if token in title:
+            score += 8
+        if token in snippet:
+            score += 5
+        if token in url:
+            score += 2
+
+    if re.match(r"(?i)^\s*(what\s+is|what\s+are|define)\b", str(message or "")):
+        if " is " in f" {snippet} ":
+            score += 4
+        if " definition" in combined:
+            score += 3
+
+    return score
+
+
+def _rank_search_results_for_fallback(message: str, results: List[dict]) -> List[dict]:
+    decorated = [
+        (-_score_search_result_for_fallback(message, result), index, result)
+        for index, result in enumerate(results or [])
+    ]
+    decorated.sort()
+    return [result for _, _, result in decorated]
+
+
+def _normalize_search_fallback_sentence(text: str, subject: str = "") -> str:
+    cleaned = " ".join((text or "").split()).strip()
+    if not cleaned:
+        return ""
+
+    cleaned = re.sub(r"(?i)^what\s+is\s+[^?]+\?\s*", "", cleaned)
+    cleaned = re.sub(r"(?i)^what\s+are\s+[^?]+\?\s*", "", cleaned)
+    cleaned = re.sub(r"(?i)^overview[:\-\s]+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -")
+    cleaned = cleaned.replace("..", ".")
+    if not cleaned:
+        return ""
+
+    if subject:
+        lowered = cleaned.lower()
+        normalized_subject = subject.lower()
+        if lowered.startswith(("is ", "are ")):
+            cleaned = f"{subject} {cleaned}"
+        elif normalized_subject not in lowered and lowered.startswith(("a ", "an ", "the ")):
+            cleaned = f"{subject} {cleaned}"
+
+    if cleaned and cleaned[-1] not in ".!?":
+        cleaned += "."
+    return cleaned
+
+
+def _search_fallback_sentences(message: str, results: List[dict]) -> List[str]:
+    subject = _search_fallback_subject(message)
+    sentences: List[str] = []
+
+    for result in results[:3]:
+        for field in ("snippet", "title"):
+            normalized = _normalize_search_fallback_sentence(result.get(field) or "", subject=subject)
+            if not normalized:
+                continue
+
+            lowered = normalized.lower()
+            if any(lowered == existing.lower() for existing in sentences):
+                continue
+            if sentences:
+                existing_terms = set(_search_fallback_tokens(" ".join(sentences)))
+                current_terms = set(_search_fallback_tokens(normalized))
+                if current_terms and len(current_terms - existing_terms) <= 1:
+                    continue
+            sentences.append(normalized)
+            if len(sentences) >= 2:
+                return sentences
+
+    return sentences
+
+
+def _format_search_fallback_answer(message: str, results: List[dict]) -> str:
+    ranked_results = _rank_search_results_for_fallback(message, results)
+    fallback_sentences = _search_fallback_sentences(message, ranked_results)
+    if fallback_sentences:
+        return " ".join(fallback_sentences[:2]).strip()
+
+    top_result = ranked_results[0] if ranked_results else {}
+    top_summary = _normalize_search_fallback_sentence(
+        top_result.get("snippet") or top_result.get("title") or "",
+        subject=_search_fallback_subject(message),
+    )
     if top_summary:
-        lines.append("Best current answer I could verify from fresh web results:")
-        lines.append(top_summary)
-        lines.append("")
-    else:
-        lines.append("I couldn't use the AI model just now, but I found these current web results:")
-        lines.append("")
-
-    lines.append("Sources:")
-    for index, result in enumerate(results[:3], start=1):
-        title = (result.get("title") or "Untitled result").strip()
-        snippet = (result.get("snippet") or "").strip()
-        url = (result.get("url") or "").strip()
-        meta = " | ".join(value for value in [result.get("source"), result.get("date")] if value)
-
-        line = f"{index}. {title}"
-        if meta:
-            line += f" ({meta})"
-        lines.append(line)
-        if snippet:
-            lines.append(f"   {snippet}")
-        if url:
-            lines.append(f"   {url}")
-
-    return "\n".join(lines).strip()
+        return top_summary
+    return "I found fresh web results, but they were not clear enough to turn into a reliable answer."
 
 
 def _looks_like_search_fallback_answer(answer: str) -> bool:
@@ -1884,7 +2024,8 @@ async def _search_backup_answer_bundle(
     if not results:
         return None, []
 
-    return _format_search_fallback_answer(results), _visible_search_sources(results)
+    ranked_results = _rank_search_results_for_fallback(message, results)
+    return _format_search_fallback_answer(message, ranked_results), _visible_search_sources(ranked_results)
 
 
 async def _best_effort_answer(

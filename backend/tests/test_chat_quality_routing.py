@@ -394,6 +394,71 @@ def test_best_effort_answer_bundle_uses_search_backup_when_chat_web_fallback_is_
     asyncio.run(scenario())
 
 
+def test_format_search_fallback_answer_prefers_relevant_result_and_skips_inline_sources() -> None:
+    results = [
+        {
+            "title": "About Instagram",
+            "url": "https://about.instagram.com/",
+            "snippet": "Instagram makes it easy to capture, create and share what you love.",
+            "source": "Instagram",
+        },
+        {
+            "title": "Protocol and Standard in Computer Networks",
+            "url": "https://www.geeksforgeeks.org/computer-networks/protocol-and-standard-in-computer-networks/",
+            "snippet": "A protocol is a set of rules that determines how data is sent and received over a network.",
+            "source": "GeeksforGeeks",
+        },
+        {
+            "title": "Understanding Protocol",
+            "url": "https://example.com/protocol",
+            "snippet": "Protocols define the format, timing, sequencing, and error handling used in communication.",
+            "source": "Example",
+        },
+    ]
+
+    answer = chat_module._format_search_fallback_answer("what is protocol", results)
+
+    assert "set of rules" in answer.lower()
+    assert "instagram" not in answer.lower()
+    assert "sources:" not in answer.lower()
+    assert "best current answer i could verify" not in answer.lower()
+
+
+def test_search_backup_answer_bundle_reranks_sources_for_generic_queries(
+    monkeypatch,
+) -> None:
+    async def fake_search_web(query: str, max_results: int = 5):
+        return [
+            {
+                "title": "About Instagram",
+                "url": "https://about.instagram.com/",
+                "snippet": "Instagram makes it easy to capture, create and share what you love.",
+                "source": "Instagram",
+            },
+            {
+                "title": "Protocol and Standard in Computer Networks",
+                "url": "https://www.geeksforgeeks.org/computer-networks/protocol-and-standard-in-computer-networks/",
+                "snippet": "A protocol is a set of rules that determines how data is sent and received over a network.",
+                "source": "GeeksforGeeks",
+            },
+        ]
+
+    monkeypatch.setattr(chat_module, "search_web", fake_search_web)
+
+    async def scenario() -> None:
+        answer, sources = await chat_module._search_backup_answer_bundle(
+            "what is protocol",
+            force_search=True,
+        )
+
+        assert answer is not None
+        assert "set of rules" in answer.lower()
+        assert sources
+        assert sources[0]["title"] == "Protocol and Standard in Computer Networks"
+
+    asyncio.run(scenario())
+
+
 def test_best_effort_answer_bundle_keeps_temporal_chat_provider_first_by_default(
     monkeypatch,
 ) -> None:
