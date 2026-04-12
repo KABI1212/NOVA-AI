@@ -1524,6 +1524,21 @@ def _should_use_search(message: str, force_search: bool = False) -> bool:
     return is_temporal_query(cleaned)
 
 
+def _should_enhance_message_with_search(
+    mode: str,
+    message: str,
+    force_search: bool = False,
+) -> bool:
+    normalized_mode = str(mode or "chat").strip().lower()
+    if normalized_mode in {"documents", "image"}:
+        return False
+    if force_search or normalized_mode == "search":
+        return True
+    if not getattr(settings, "CHAT_AUTO_WEB_SEARCH_IN_CHAT", False):
+        return False
+    return _should_use_search(message, force_search=False)
+
+
 def _verification_max_tokens(max_tokens: Optional[int]) -> int:
     if max_tokens is None:
         return 768
@@ -1899,11 +1914,14 @@ async def _best_effort_answer_bundle(
     if mode == "documents":
         primary_message = user_message
         primary_sources = _document_sources_from_context(user_message, doc_context)
-    else:
+    elif _should_enhance_message_with_search(mode, user_message, force_search=force_search):
         primary_message, primary_sources = await _maybe_enhance_temporal_message_with_sources(
             user_message,
             force_search=force_search,
         )
+    else:
+        primary_message = user_message
+        primary_sources = []
     use_case = "research" if force_search else infer_use_case(mode, user_message)
     resolved_max_tokens = max_tokens or _response_max_tokens(user_message, mode, doc_context)
 
@@ -2400,7 +2418,7 @@ async def chat(
         force_search = mode == "search"
         enhanced_message = message_text
         answer_sources: List[dict] = []
-        if mode not in {"documents", "image"}:
+        if _should_enhance_message_with_search(mode, message_text, force_search=force_search):
             enhanced_message, answer_sources = await _maybe_enhance_temporal_message_with_sources(
                 message_text,
                 force_search=force_search,
@@ -2795,7 +2813,7 @@ async def chat(
         history = _conversation_history(db, conversation, drop_last=(mode not in {"documents", "image"}))
         enhanced_message = message_text
         answer_sources: List[dict] = []
-        if mode not in {"documents", "image"}:
+        if _should_enhance_message_with_search(mode, message_text, force_search=force_search):
             enhanced_message, answer_sources = await _maybe_enhance_temporal_message_with_sources(
                 message_text,
                 force_search=force_search,
@@ -3400,7 +3418,11 @@ async def regenerate(
         history = _conversation_history(db, conversation, drop_last=(mode not in {"documents", "image"}))
         enhanced_message = last_user_message_content
         answer_sources: List[dict] = []
-        if mode not in {"documents", "image"}:
+        if _should_enhance_message_with_search(
+            mode,
+            last_user_message_content,
+            force_search=force_search,
+        ):
             enhanced_message, answer_sources = await _maybe_enhance_temporal_message_with_sources(
                 last_user_message_content,
                 force_search=force_search,

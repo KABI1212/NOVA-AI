@@ -50,10 +50,10 @@ def test_provider_chain_uses_research_preferences_when_auto(monkeypatch: pytest.
 
     chain = ai_service_module._provider_chain(None, use_case="research")
 
-    assert chain[:4] == ["groq", "ollama", "google", "openai"]
+    assert chain[:4] == ["openai", "deepseek", "google", "anthropic"]
 
 
-def test_resolve_provider_prefers_groq_then_ollama_before_paid_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_provider_prefers_chatgpt_then_deepseek_before_other_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ai_service_module.settings, "AI_PROVIDER", "")
     monkeypatch.setattr(ai_service_module.settings, "GROQ_API_KEY", "groq-key")
     monkeypatch.setattr(ai_service_module.settings, "GOOGLE_API_KEY", "google-key")
@@ -63,7 +63,34 @@ def test_resolve_provider_prefers_groq_then_ollama_before_paid_providers(monkeyp
     monkeypatch.setattr(ai_service_module.settings, "DEEPSEEK_API_KEY", "deepseek-key")
     monkeypatch.setattr(ai_service_module.settings, "OLLAMA_BASE_URL", "http://localhost:11434")
 
-    assert ai_service_module._resolve_provider() == "groq"
+    assert ai_service_module._resolve_provider() == "openai"
+
+
+def test_get_available_providers_matches_requested_priority_and_labels(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ai_service_module.settings, "OPENAI_API_KEY", "openai-key")
+    monkeypatch.setattr(ai_service_module.settings, "DEEPSEEK_API_KEY", "deepseek-key")
+    monkeypatch.setattr(ai_service_module.settings, "GOOGLE_API_KEY", "google-key")
+    monkeypatch.setattr(ai_service_module.settings, "GEMINI_API_KEY", "")
+    monkeypatch.setattr(ai_service_module.settings, "ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setattr(ai_service_module.settings, "GROQ_API_KEY", "groq-key")
+    monkeypatch.setattr(ai_service_module.settings, "OLLAMA_BASE_URL", "http://localhost:11434")
+
+    async def scenario() -> None:
+        providers = await ai_service_module.ai_service.get_available_providers()
+
+        assert [provider["id"] for provider in providers] == [
+            "openai",
+            "deepseek",
+            "google",
+            "anthropic",
+            "groq",
+            "ollama",
+        ]
+        assert providers[0]["name"] == "ChatGPT"
+        assert providers[2]["name"] == "Gemini"
+        assert providers[3]["name"] == "Claude"
+
+    asyncio.run(scenario())
 
 
 def test_provider_default_model_uses_code_model_for_openai_coding() -> None:

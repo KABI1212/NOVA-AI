@@ -61,7 +61,7 @@ _HOSTED_RUNTIME_ENV_VARS = (
     "VERCEL",
 )
 
-_FALLBACK_CHAIN = ["groq", "ollama", "google", "openai", "anthropic", "deepseek"]
+_FALLBACK_CHAIN = ["openai", "deepseek", "google", "anthropic", "groq", "ollama"]
 _PROVIDER_DISABLE_SECONDS = 900.0
 _PROVIDER_DISABLED_UNTIL: Dict[str, float] = {}
 _IMAGE_PROVIDER_DISABLED_UNTIL: Dict[str, float] = {}
@@ -96,15 +96,15 @@ _IMAGE_QUALITY_HINTS = {
     "hd": "very high detail, polished lighting, crisp textures, and premium finish",
 }
 _TASK_PROVIDER_PREFERENCES = {
-    "quick": ["groq", "ollama", "google", "openai", "anthropic", "deepseek"],
-    "concept": ["groq", "ollama", "google", "openai", "anthropic", "deepseek"],
-    "writing": ["groq", "ollama", "google", "anthropic", "openai", "deepseek"],
-    "coding": ["groq", "ollama", "google", "anthropic", "openai", "deepseek"],
-    "research": ["groq", "ollama", "google", "openai", "anthropic", "deepseek"],
-    "document": ["groq", "ollama", "google", "anthropic", "openai", "deepseek"],
+    "quick": ["openai", "deepseek", "google", "anthropic", "groq", "ollama"],
+    "concept": ["openai", "deepseek", "google", "anthropic", "groq", "ollama"],
+    "writing": ["openai", "deepseek", "google", "anthropic", "groq", "ollama"],
+    "coding": ["openai", "deepseek", "google", "anthropic", "groq", "ollama"],
+    "research": ["openai", "deepseek", "google", "anthropic", "groq", "ollama"],
+    "document": ["openai", "deepseek", "google", "anthropic", "groq", "ollama"],
     "image_generation": ["google", "openrouter", "openai"],
-    "image_prompting": ["groq", "ollama", "google", "openai", "anthropic", "deepseek"],
-    "budget": ["groq", "ollama", "google", "deepseek", "openai", "anthropic"],
+    "image_prompting": ["openai", "deepseek", "google", "anthropic", "groq", "ollama"],
+    "budget": ["deepseek", "google", "groq", "ollama", "openai", "anthropic"],
 }
 _TASK_LABELS = {
     "quick": "Quick replies",
@@ -387,18 +387,18 @@ def _resolve_provider() -> str:
         configured = ""
     if configured:
         return configured
+    if _openai_api_key() and not _provider_temporarily_disabled("openai"):
+        return "openai"
+    if _deepseek_api_key() and not _provider_temporarily_disabled("deepseek"):
+        return "deepseek"
+    if _google_api_key() and not _provider_temporarily_disabled("google"):
+        return "google"
+    if getattr(settings, "ANTHROPIC_API_KEY", "") and not _provider_temporarily_disabled("anthropic"):
+        return "anthropic"
     if getattr(settings, "GROQ_API_KEY", "") and not _provider_temporarily_disabled("groq"):
         return "groq"
     if _ollama_available() and not _provider_temporarily_disabled("ollama"):
         return "ollama"
-    if _google_api_key() and not _provider_temporarily_disabled("google"):
-        return "google"
-    if _openai_api_key() and not _provider_temporarily_disabled("openai"):
-        return "openai"
-    if getattr(settings, "ANTHROPIC_API_KEY", "") and not _provider_temporarily_disabled("anthropic"):
-        return "anthropic"
-    if _deepseek_api_key() and not _provider_temporarily_disabled("deepseek"):
-        return "deepseek"
     return ""
 
 
@@ -642,7 +642,15 @@ def _resolve_prompt_enhancer_provider(provider: Optional[str] = None) -> Optiona
     if configured and _provider_available(configured):
         return configured
 
-    for candidate in (_resolve_provider(), "groq", "ollama", "google", "openai", *[item for item in _FALLBACK_CHAIN if item not in {"groq", "ollama", "google", "openai"}]):
+    for candidate in (
+        _resolve_provider(),
+        "openai",
+        "deepseek",
+        "google",
+        "anthropic",
+        "groq",
+        *[item for item in _FALLBACK_CHAIN if item not in {"openai", "deepseek", "google", "anthropic", "groq"}],
+    ):
         normalized = str(candidate or "").strip().lower()
         if normalized and _provider_available(normalized):
             return normalized
@@ -2588,9 +2596,9 @@ class AIService:
             providers.append(
                 {
                     "id": "openai",
-                    "name": "OpenAI",
+                    "name": "ChatGPT",
                     "models": [model for model in dict.fromkeys(openai_models) if model] or ["gpt-4o"],
-                    "recommended_for": ["Explaining concepts", "Image generation fallback", "OpenAI coding fallback"],
+                    "recommended_for": ["Everyday chat", "Coding", "Strong general fallback"],
                 }
             )
 
@@ -2619,26 +2627,9 @@ class AIService:
             providers.append(
                 {
                     "id": "google",
-                    "name": "Gemini (Google)",
+                    "name": "Gemini",
                     "models": [model for model in dict.fromkeys(google_models) if model],
                     "recommended_for": ["Research / search", "Speed & large files", "Image generation"],
-                }
-            )
-
-        if getattr(settings, "GROQ_API_KEY", ""):
-            groq_models = [
-                getattr(settings, "GROQ_MODEL", ""),
-                "llama-3.3-70b-versatile",
-                "llama3-8b-8192",
-                "mixtral-8x7b-32768",
-                "gemma2-9b-it",
-            ]
-            providers.append(
-                {
-                    "id": "groq",
-                    "name": "Groq",
-                    "models": [model for model in dict.fromkeys(groq_models) if model],
-                    "recommended_for": ["Fast fallback"],
                 }
             )
 
@@ -2656,6 +2647,23 @@ class AIService:
                     "name": "Claude",
                     "models": [model for model in dict.fromkeys(anthropic_models) if model],
                     "recommended_for": ["Coding", "Writing", "Deep reasoning fallback"],
+                }
+            )
+
+        if getattr(settings, "GROQ_API_KEY", ""):
+            groq_models = [
+                getattr(settings, "GROQ_MODEL", ""),
+                "llama-3.3-70b-versatile",
+                "llama3-8b-8192",
+                "mixtral-8x7b-32768",
+                "gemma2-9b-it",
+            ]
+            providers.append(
+                {
+                    "id": "groq",
+                    "name": "Groq",
+                    "models": [model for model in dict.fromkeys(groq_models) if model],
+                    "recommended_for": ["Fast fallback"],
                 }
             )
 

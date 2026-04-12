@@ -343,3 +343,46 @@ def test_best_effort_answer_bundle_forces_search_backup_for_non_temporal_prompt_
         assert call_sequence == [False, True]
 
     asyncio.run(scenario())
+
+
+def test_best_effort_answer_bundle_keeps_temporal_chat_provider_first_by_default(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(chat_module.settings, "CHAT_AUTO_WEB_SEARCH_IN_CHAT", False)
+
+    async def forbidden_enhance(message: str, force_search: bool = False):
+        raise AssertionError("normal chat should not auto-search before the provider answers")
+
+    async def fake_collect(ai_messages, provider, model, temperature=None, max_tokens=None, use_case=None):
+        return "Provider-first answer"
+
+    async def passthrough_cross_check(
+        user_message,
+        source_material,
+        draft_answer,
+        provider,
+        model,
+        max_tokens=None,
+        compatible_provider=None,
+    ):
+        return draft_answer
+
+    monkeypatch.setattr(chat_module, "_maybe_enhance_temporal_message_with_sources", forbidden_enhance)
+    monkeypatch.setattr(chat_module, "_collect_ai_response", fake_collect)
+    monkeypatch.setattr(chat_module, "_cross_check_answer_if_needed", passthrough_cross_check)
+
+    async def scenario() -> None:
+        answer, sources, answer_source = await chat_module._best_effort_answer_bundle(
+            history=[],
+            user_message="What is the latest AI news?",
+            mode="chat",
+            provider=None,
+            model=None,
+            max_tokens=1200,
+        )
+
+        assert answer == "Provider-first answer"
+        assert sources == []
+        assert answer_source == "ai"
+
+    asyncio.run(scenario())

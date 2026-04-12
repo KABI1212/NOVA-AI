@@ -261,16 +261,16 @@ const buildProgressStatus = ({
     }
     return isSearch
       ? "NOVA AI is re-checking the latest information..."
-      : "NOVA AI is refining the latest answer...";
+      : "NOVA AI is refining the answer...";
   }
 
   if (withImages) {
-    return isSearch || TEMPORAL_QUERY_PATTERN.test(text)
+    return isSearch
       ? "NOVA AI is searching and generating images..."
       : "NOVA AI is preparing the answer and images...";
   }
 
-  return isSearch || TEMPORAL_QUERY_PATTERN.test(text)
+  return isSearch
     ? "NOVA AI is searching recent information..."
     : "Nova AI is thinking...";
 };
