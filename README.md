@@ -41,8 +41,12 @@ If you already run MongoDB and Redis locally, you can keep using those instead.
 
 ```bash
 cd backend
-python -m venv venv
-venv\Scripts\activate
+# Preferred in this repo if it already exists:
+venv314\Scripts\activate
+
+# Or create a fresh local environment:
+python -m venv venv314
+venv314\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env
 ```
@@ -70,6 +74,12 @@ Run the backend:
 
 ```bash
 python main.py
+```
+
+Or from the repo root, let the launcher pick the first working backend environment automatically:
+
+```bash
+.\scripts\start-nova-local.ps1
 ```
 
 Backend URL: `http://localhost:8000`
@@ -181,6 +191,9 @@ Notes:
 
 - Chat says providers failed
   Make sure the backend is running and at least one provider key is configured in `backend/.env`.
+
+- Chat sends but no answer appears locally
+  Verify the backend was started from a working environment such as `backend\venv314`. A stale `backend\venv` can exist on disk but still fail to launch Python.
 
 - OTP emails are not arriving
   Check `EMAIL_PROVIDER`, sender address, and SMTP or SendGrid credentials in `backend/.env`, then restart the backend. If you need login/signup to stay available while mail is down, enable `AUTH_ALLOW_PASSWORD_ONLY_FALLBACK=true`.

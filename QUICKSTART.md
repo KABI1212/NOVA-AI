@@ -10,11 +10,21 @@ docker compose up mongo redis -d
 
 ```bash
 cd backend
-python -m venv venv
-venv\Scripts\activate
+# Preferred in this repo if it already exists:
+venv314\Scripts\activate
+
+# Or create a fresh local environment:
+python -m venv venv314
+venv314\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env
 python main.py
+```
+
+If you want the repo to choose the right environment automatically, you can also run:
+
+```bash
+.\scripts\start-nova-local.ps1
 ```
 
 Minimum Gemini-ready `.env` values:

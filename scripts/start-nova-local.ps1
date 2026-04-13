@@ -12,7 +12,37 @@ $pythonCandidates = @(
     (Join-Path $backendDir "venv64\Scripts\python.exe"),
     (Join-Path $backendDir "venv\Scripts\python.exe")
 )
-$pythonExe = $pythonCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+function Test-PythonExecutable {
+    param(
+        [string]$Path
+    )
+
+    if (-not (Test-Path $Path)) {
+        return $false
+    }
+
+    try {
+        $null = & $Path "--version" 2>$null
+        return $LASTEXITCODE -eq 0
+    }
+    catch {
+        return $false
+    }
+}
+
+$invalidPythonCandidates = @()
+$pythonExe = $null
+foreach ($candidate in $pythonCandidates) {
+    if (Test-PythonExecutable -Path $candidate) {
+        $pythonExe = $candidate
+        break
+    }
+
+    if (Test-Path $candidate) {
+        $invalidPythonCandidates += $candidate
+    }
+}
 
 function Test-TcpPort {
     param(
@@ -61,7 +91,12 @@ if (Test-TcpPort -Port 8000) {
 }
 
 if (-not $pythonExe) {
-    Write-Error "No backend Python environment was found. Expected one of: backend\\venv314, backend\\venv64, or backend\\venv."
+    if ($invalidPythonCandidates.Count -gt 0) {
+        Write-Warning "Found backend Python environments, but they were not runnable:"
+        $invalidPythonCandidates | ForEach-Object { Write-Warning "  $_" }
+    }
+
+    Write-Error "No working backend Python environment was found. Expected a runnable interpreter in one of: backend\\venv314, backend\\venv64, or backend\\venv."
     exit 1
 }
 

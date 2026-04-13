@@ -1,0 +1,9 @@
+INFO:     Started server process [28880]
+INFO:     Waiting for application startup.
+2026-04-13 14:03:04,989 INFO [main] NOVA AI v1.0.0 starting
+2026-04-13 14:03:05,014 INFO [config.database] mongodb_event=init_success uri='mongodb://localhost:27017/nova_ai' database='nova_ai' attempt=1 attempts=3
+2026-04-13 14:03:05,016 INFO [main] Database connected: mongodb://localhost:27017/nova_ai
+2026-04-13 14:03:05,017 INFO [main] CORS enabled for: ['https://nova-ai-backend-1afi.onrender.com', 'http://localhost', 'http://127.0.0.1', 'http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173', 'http://127.0.0.1:5173']
+2026-04-13 14:03:05,018 INFO [main] CORS regex enabled for: ^https://([A-Za-z0-9-]+\.)*(vercel\.app|onrender\.com)$
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)

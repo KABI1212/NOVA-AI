@@ -11,8 +11,12 @@
 
 ```bash
 cd backend
-python -m venv venv
-venv\Scripts\activate
+# Preferred in this repo if it already exists:
+venv314\Scripts\activate
+
+# Or create a fresh local environment:
+python -m venv venv314
+venv314\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env
 ```
@@ -49,6 +53,12 @@ Start the backend:
 
 ```bash
 python main.py
+```
+
+Or from the repo root:
+
+```bash
+.\scripts\start-nova-local.ps1
 ```
 
 ## Frontend Setup
@@ -111,7 +121,7 @@ SECRET_KEY=change-me
 
 ### `No module named 'fastapi'`
 
-You are running `main.py` from a virtual environment that does not have the backend packages installed.
+You are running `main.py` from a virtual environment that does not have the backend packages installed, or from a stale environment such as a broken `backend\venv`.
 
 ### `Image generation failed for that prompt`
 
