@@ -18,11 +18,15 @@ except ImportError:
 from config.database import get_db
 from config.settings import settings
 from models.conversation import Conversation
+from models.chat_session import ChatSession
 from models.document import Document
+from models.file_record import FileRecord
 from models.learning import LearningProgress
 from models.user import User
 from services.document_service import document_service
 from services.email_service import EmailDeliveryError, email_service
+from services.retriever import retriever_service
+from services.storage import storage_service
 from utils.auth import (
     create_access_token,
     generate_login_challenge_token,
@@ -964,6 +968,8 @@ async def delete_current_account(
         Conversation.user_id == current_user.id
     ).all()
     documents = db.query(Document).filter(Document.user_id == current_user.id).all()
+    file_records = db.query(FileRecord).filter(FileRecord.user_id == current_user.id).all()
+    chat_sessions = db.query(ChatSession).filter(ChatSession.user_id == current_user.id).all()
     learning_progress = db.query(LearningProgress).filter(
         LearningProgress.user_id == current_user.id
     ).all()
@@ -980,6 +986,22 @@ async def delete_current_account(
             )
         db.delete(document)
 
+    for file_record in file_records:
+        try:
+            storage_service.delete_file(file_record.storage_path)
+        except RuntimeError as exc:
+            logger.warning(
+                "account_delete_uploaded_file_cleanup_failed user_id=%s file_id=%s error=%s",
+                current_user.id,
+                file_record.id,
+                exc,
+            )
+        retriever_service.delete_file_chunks(db, file_record.id)
+        db.delete(file_record)
+
+    for chat_session in chat_sessions:
+        db.delete(chat_session)
+
     for conversation in conversations:
         db.delete(conversation)
 
@@ -994,6 +1016,7 @@ async def delete_current_account(
         "deleted": {
             "conversations": len(conversations),
             "documents": len(documents),
+            "files": len(file_records),
             "learning_items": len(learning_progress),
         },
     }

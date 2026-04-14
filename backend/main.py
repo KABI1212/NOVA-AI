@@ -20,6 +20,7 @@ from routes import (
     compat_router,
     document_router,
     explain_router,
+    files_router,
     image_router,
     learning_router,
     search_router,
@@ -161,6 +162,7 @@ app.include_router(chat_router)
 app.include_router(code_router)
 app.include_router(document_router)
 app.include_router(explain_router)
+app.include_router(files_router)
 app.include_router(image_router)
 app.include_router(learning_router)
 app.include_router(voice_router)

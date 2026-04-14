@@ -3,6 +3,7 @@ from .chat import router as chat_router
 from .code import router as code_router
 from .document import router as document_router
 from .explain import router as explain_router
+from .files import router as files_router
 from .image import router as image_router
 from .learning import router as learning_router
 from .voice import router as voice_router
@@ -16,6 +17,7 @@ __all__ = [
     "code_router",
     "document_router",
     "explain_router",
+    "files_router",
     "image_router",
     "learning_router",
     "voice_router",

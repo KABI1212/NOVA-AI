@@ -10,7 +10,10 @@ import MouseSpark from "../components/MouseSpark";
 import Sidebar from "../components/chat/Sidebar";
 import Settings from "../components/Settings";
 import Topbar from "../components/Topbar";
-import { chatAPI, fetchApi, fetchApp, imageAPI } from "../services/api";
+import DragDropUploader from "../components/uploads/DragDropUploader";
+import FilePreviewModal from "../components/uploads/FilePreviewModal";
+import UploadedFilesPanel from "../components/uploads/UploadedFilesPanel";
+import { chatAPI, fetchApi, filesAPI, imageAPI } from "../services/api";
 import { speakText, speechSupported as browserSpeechSupported, stopSpeechPlayback } from "../utils/speech";
 import { useAuthStore } from "../utils/store";
 const REQUEST_TIMEOUT_MS = 240000;
@@ -20,6 +23,10 @@ const PROMPT_IMAGE_STORAGE_KEY = "nova_generate_prompt_image";
 const ANSWER_IMAGE_STORAGE_KEY = "nova_generate_answer_image";
 const AUTO_MODEL_KEY = "auto";
 const TEMPORAL_QUERY_PATTERN = /\b(current|latest|today|recent|news|breaking|updated|2024|2025|2026)\b/i;
+const FILE_POLL_INTERVAL_MS = 1500;
+const READY_FILE_STATUSES = new Set(["ready"]);
+const PENDING_FILE_STATUSES = new Set(["uploaded", "queued", "analyzing"]);
+const FAILED_FILE_STATUSES = new Set(["failed", "failed-upload"]);
 const IMAGE_INTENT_PATTERNS = [
   /\b(?:generate|create|make|draw|design|illustrate|paint|render|show me|give me)\b[\s\S]{0,80}\b(?:image|picture|photo|art|artwork|illustration|poster|logo|portrait|wallpaper|banner|thumbnail|cover art|sticker|icon|mascot|avatar)\b/i,
   /\b(?:need|want)\b[\s\S]{0,24}\b(?:an?|some)\b[\s\S]{0,12}\b(?:image|picture|photo|art|artwork|illustration|poster|logo|portrait|wallpaper|banner|thumbnail|cover art|sticker|icon|mascot|avatar)\b(?:[\s\S]{0,24}\b(?:of|for|showing|with)\b|[.!?]?$)/i,
@@ -356,6 +363,14 @@ const getOrCreateSessionId = () => {
   return sessionId;
 };
 
+const resetSessionId = () => {
+  if (typeof window === "undefined") {
+    return "anonymous";
+  }
+  window.localStorage.removeItem(SESSION_STORAGE_KEY);
+  return getOrCreateSessionId();
+};
+
 const IMAGE_ATTACHMENT_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"];
 
 const isImageAttachment = (file) => {
@@ -386,6 +401,58 @@ const readFileAsDataUrl = (file) =>
 
     reader.readAsDataURL(file);
   });
+
+const normalizeUploadedFile = (file) => ({
+  ...file,
+  id: file?.id || null,
+  clientId:
+    file?.clientId ||
+    (typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `file-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`),
+  original_name: file?.original_name || file?.name || file?.filename || "Uploaded file",
+  status: String(file?.status || "uploaded").toLowerCase(),
+  progress:
+    file?.progress && typeof file.progress === "object"
+      ? {
+          ...file.progress,
+          progress: Number(file.progress.progress || 0),
+        }
+      : {
+          progress: file?.status === "ready" ? 100 : 0,
+          stage: file?.status || "uploaded",
+          message: file?.status === "ready" ? "Ready to chat" : "Uploading...",
+        },
+});
+
+const mergeUploadedFiles = (previousFiles, nextFiles) => {
+  const merged = [...previousFiles];
+
+  nextFiles.forEach((file) => {
+    const normalized = normalizeUploadedFile(file);
+    const matchIndex = merged.findIndex(
+      (item) =>
+        (normalized.id && item.id === normalized.id) ||
+        (!normalized.id && normalized.clientId && item.clientId === normalized.clientId)
+    );
+
+    if (matchIndex === -1) {
+      merged.unshift(normalized);
+      return;
+    }
+
+    merged[matchIndex] = {
+      ...merged[matchIndex],
+      ...normalized,
+      progress: {
+        ...(merged[matchIndex]?.progress || {}),
+        ...(normalized.progress || {}),
+      },
+    };
+  });
+
+  return merged;
+};
 
 const readSseEvents = async (response, onEvent) => {
   if (!response.body) {
@@ -451,6 +518,8 @@ function Chat() {
   const [isTyping, setIsTyping] = useState(false);
   const [isConversationLoading, setIsConversationLoading] = useState(false);
   const [currentConversationId, setCurrentConversationId] = useState(null);
+  const [uploadedFiles, setUploadedFiles] = useState([]);
+  const [previewFile, setPreviewFile] = useState(null);
   const [speechSupported, setSpeechSupported] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState(null);
   const [generatePromptImage, setGeneratePromptImage] = useState(false);
@@ -472,6 +541,14 @@ function Chat() {
   const activeDocumentReference = useMemo(
     () => getLatestDocumentReference(messages),
     [messages]
+  );
+  const readySessionFiles = useMemo(
+    () => uploadedFiles.filter((file) => READY_FILE_STATUSES.has(String(file?.status || "").toLowerCase())),
+    [uploadedFiles]
+  );
+  const pendingSessionFiles = useMemo(
+    () => uploadedFiles.filter((file) => PENDING_FILE_STATUSES.has(String(file?.status || "").toLowerCase())),
+    [uploadedFiles]
   );
   const currentConversationTitle = useMemo(() => {
     const activeConversation = conversations.find(
@@ -647,56 +724,237 @@ function Chat() {
     }
   }, [handleUnauthorized]);
 
-  const uploadDocument = useCallback(
-    async (file) => {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const token = localStorage.getItem("token");
-      const uploadTargets = [
-        { path: "/document/upload", request: fetchApi },
-        { path: "/upload-document", request: fetchApp },
-      ];
-
-      let lastError = null;
-
-      for (const target of uploadTargets) {
-        const response = await target.request(target.path, {
-          method: "POST",
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: formData,
+  const loadUploadedFiles = useCallback(
+    async (options = {}) => {
+      const sessionId = getOrCreateSessionId();
+      try {
+        const response = await filesAPI.list({
+          session_id: sessionId,
+          ...(options?.conversationId ? { conversation_id: options.conversationId } : {}),
+          page: 1,
+          page_size: 50,
         });
-
-        if (response.status === 401 || response.status === 403) {
+        const items = Array.isArray(response?.data?.items)
+          ? response.data.items.map(normalizeUploadedFile)
+          : [];
+        startTransition(() => {
+          setUploadedFiles((previous) => {
+            const retainedPrevious = previous.filter(
+              (file) =>
+                !file.id ||
+                FAILED_FILE_STATUSES.has(String(file?.status || "").toLowerCase()) ||
+                items.some((item) => item.id && item.id === file.id)
+            );
+            return mergeUploadedFiles(retainedPrevious, items);
+          });
+        });
+        return items;
+      } catch (error) {
+        if (error?.response?.status === 401 || error?.response?.status === 403) {
           handleUnauthorized();
-          return null;
+          return [];
         }
+        return [];
+      }
+    },
+    [handleUnauthorized]
+  );
 
-        let payload = null;
-        try {
-          payload = await response.json();
-        } catch {
-          payload = null;
-        }
-
-        if (response.ok) {
-          return payload;
-        }
-
-        if (response.status === 404 || response.status === 405) {
-          lastError =
-            payload?.detail || payload?.message || `Document upload failed (${response.status})`;
-          continue;
-        }
-
-        throw new Error(
-          payload?.detail || payload?.message || `Document upload failed (${response.status})`
-        );
+  const waitForFilesReady = useCallback(
+    async (fileIds, timeoutMs = 90000) => {
+      const targetIds = fileIds.filter(Boolean);
+      if (!targetIds.length) {
+        return [];
       }
 
-      throw new Error(lastError || "Document upload failed.");
+      const startedAt = Date.now();
+      for (;;) {
+        const latestFiles = await loadUploadedFiles({ conversationId: currentConversationId });
+        const targetFiles = latestFiles.filter((file) => targetIds.includes(file.id));
+        if (targetFiles.length && targetFiles.every((file) => READY_FILE_STATUSES.has(file.status))) {
+          return targetFiles;
+        }
+        if (targetFiles.some((file) => FAILED_FILE_STATUSES.has(file.status))) {
+          return targetFiles;
+        }
+        if (Date.now() - startedAt > timeoutMs) {
+          return targetFiles;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, FILE_POLL_INTERVAL_MS));
+      }
+    },
+    [currentConversationId, loadUploadedFiles]
+  );
+
+  const uploadFilesToSession = useCallback(
+    async (files) => {
+      const sessionId = getOrCreateSessionId();
+      const uploadedServerFiles = [];
+
+      for (const file of files) {
+        const clientId =
+          typeof crypto !== "undefined" && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `local-file-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+        setUploadedFiles((previous) =>
+          mergeUploadedFiles(previous, [
+            {
+              clientId,
+              localFile: file,
+              original_name: file.name,
+              size: file.size,
+              mime_type: file.type,
+              status: "uploading",
+              preview_text: "",
+              progress: {
+                progress: 0,
+                stage: "uploading",
+                message: "Uploading...",
+              },
+            },
+          ])
+        );
+
+        try {
+          const formData = new FormData();
+          formData.append("files", file);
+          formData.append("session_id", sessionId);
+          if (currentConversationId) {
+            formData.append("conversation_id", currentConversationId);
+          }
+
+          const response = await filesAPI.upload(formData, {
+            onUploadProgress: (event) => {
+              const total = Number(event?.total || file.size || 1);
+              const loaded = Number(event?.loaded || 0);
+              const progress = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+              setUploadedFiles((previous) =>
+                mergeUploadedFiles(previous, [
+                  {
+                    clientId,
+                    progress: {
+                      progress,
+                      stage: "uploading",
+                      message: progress >= 100 ? "Upload complete" : `Uploading... ${progress}%`,
+                    },
+                    status: "uploading",
+                  },
+                ])
+              );
+            },
+          });
+
+          const serverFile = Array.isArray(response?.data?.files) ? response.data.files[0] : null;
+          if (!serverFile?.id) {
+            throw new Error("Upload succeeded, but the file record was missing.");
+          }
+
+          uploadedServerFiles.push(serverFile);
+          setUploadedFiles((previous) =>
+            mergeUploadedFiles(
+              previous.filter((item) => item.clientId !== clientId),
+              [{ ...serverFile, localFile: file }]
+            )
+          );
+        } catch (error) {
+          if (error?.response?.status === 401 || error?.response?.status === 403) {
+            handleUnauthorized();
+            return uploadedServerFiles;
+          }
+          setUploadedFiles((previous) =>
+            mergeUploadedFiles(previous, [
+              {
+                clientId,
+                localFile: file,
+                original_name: file.name,
+                size: file.size,
+                mime_type: file.type,
+                status: "failed-upload",
+                error:
+                  error?.response?.data?.detail ||
+                  error?.message ||
+                  "The file could not be uploaded.",
+                progress: {
+                  progress: 100,
+                  stage: "failed",
+                  message: "Upload failed",
+                },
+              },
+            ])
+          );
+        }
+      }
+
+      if (uploadedServerFiles.length) {
+        await loadUploadedFiles({ conversationId: currentConversationId });
+      }
+      return uploadedServerFiles;
+    },
+    [currentConversationId, handleUnauthorized, loadUploadedFiles]
+  );
+
+  const handleSelectFiles = useCallback(
+    async (files) => {
+      const selectedFiles = Array.isArray(files) ? files : Array.from(files || []);
+      if (!selectedFiles.length) {
+        return;
+      }
+      const uploaded = await uploadFilesToSession(selectedFiles);
+      if (uploaded.length) {
+        toast.success(
+          uploaded.length === 1
+            ? `${uploaded[0].original_name || uploaded[0].filename} is being analyzed.`
+            : `${uploaded.length} files are being analyzed.`
+        );
+      }
+    },
+    [uploadFilesToSession]
+  );
+
+  const handleRetryUploadedFile = useCallback(
+    async (file) => {
+      if (!file) {
+        return;
+      }
+      if (file.localFile instanceof File && !file.id) {
+        await uploadFilesToSession([file.localFile]);
+        setUploadedFiles((previous) => previous.filter((item) => item.clientId !== file.clientId));
+        return;
+      }
+      try {
+        await filesAPI.process(file.id);
+        await loadUploadedFiles({ conversationId: currentConversationId });
+      } catch (error) {
+        if (error?.response?.status === 401 || error?.response?.status === 403) {
+          handleUnauthorized();
+          return;
+        }
+        toast.error(error?.response?.data?.detail || "Could not retry file analysis.");
+      }
+    },
+    [currentConversationId, handleUnauthorized, loadUploadedFiles, uploadFilesToSession]
+  );
+
+  const handleRemoveUploadedFile = useCallback(
+    async (file) => {
+      if (!file) {
+        return;
+      }
+      if (!file.id) {
+        setUploadedFiles((previous) => previous.filter((item) => item.clientId !== file.clientId));
+        return;
+      }
+      try {
+        await filesAPI.remove(file.id);
+        setUploadedFiles((previous) => previous.filter((item) => item.id !== file.id));
+      } catch (error) {
+        if (error?.response?.status === 401 || error?.response?.status === 403) {
+          handleUnauthorized();
+          return;
+        }
+        toast.error(error?.response?.data?.detail || "Could not remove that file right now.");
+      }
     },
     [handleUnauthorized]
   );
@@ -766,6 +1024,24 @@ function Chat() {
   }, [loadConversations]);
 
   useEffect(() => {
+    loadUploadedFiles({ conversationId: currentConversationId });
+  }, [currentConversationId, loadUploadedFiles]);
+
+  useEffect(() => {
+    if (!pendingSessionFiles.length) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      loadUploadedFiles({ conversationId: currentConversationId });
+    }, FILE_POLL_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [currentConversationId, loadUploadedFiles, pendingSessionFiles.length]);
+
+  useEffect(() => {
     loadProviders();
   }, [loadProviders]);
 
@@ -788,10 +1064,13 @@ function Chat() {
 
   const handleNewChat = () => {
     stopSpeaking();
+    resetSessionId();
     setMessages([]);
     setInput("");
     setStatus("");
     setCurrentConversationId(null);
+    setUploadedFiles([]);
+    setPreviewFile(null);
     handleNavChange(DEFAULT_CHAT_NAV);
   };
 
@@ -926,6 +1205,7 @@ function Chat() {
       let trimmed = String(text || "").trim();
       const hasImageAttachment = attachmentKind === "image" || isImageAttachment(attachedFile);
       const hasDocumentAttachment = Boolean(attachedFile && !hasImageAttachment);
+      const readyFileIds = readySessionFiles.map((file) => file.id).filter(Boolean);
       const predictedImageRequest =
         !hasDocumentAttachment &&
         (forceMode === "image" || (resolvedMode === "chat" && looksLikeImageRequest(trimmed)));
@@ -935,11 +1215,14 @@ function Chat() {
         !forceMode &&
         resolvedMode === "chat" &&
         Boolean(activeDocumentReference?.id);
+      const shouldUseSessionFiles =
+        !predictedImageRequest &&
+        (hasDocumentAttachment || readyFileIds.length > 0);
       if (!trimmed && hasImageAttachment && attachedFile && !predictedImageRequest) {
         trimmed = "Describe this image clearly.";
       }
       if (!trimmed && hasDocumentAttachment) {
-        trimmed = "Summarize this document.";
+        trimmed = "Summarize these files.";
       }
       const displayValue = String(displayText || trimmed).trim();
       const effectiveGeneratePromptImage = imageGenerationAvailable && generatePromptImage;
@@ -970,6 +1253,7 @@ function Chat() {
           ...(attachedImageDataUrl ? { image_origin: "upload" } : {}),
           ...(initialDocumentReference?.id != null ? { document_id: initialDocumentReference.id } : {}),
           ...(initialDocumentReference?.name ? { document_name: initialDocumentReference.name } : {}),
+          ...(readyFileIds.length ? { file_ids: readyFileIds } : {}),
         },
       });
       setMessages((previous) => [...previous, optimisticUserMessage]);
@@ -984,6 +1268,9 @@ function Chat() {
         );
       } else {
         setStatus(
+          shouldUseSessionFiles
+            ? "NOVA AI is analyzing your uploaded files..."
+            :
           buildProgressStatus({
             text: trimmed,
             isSearch: forceMode === "search" || activeNav === "Search",
@@ -1082,18 +1369,68 @@ function Chat() {
         }
 
         let documentReference = initialDocumentReference;
+        let activeFileIds = readyFileIds;
+
+        if (!hasDocumentAttachment && pendingSessionFiles.length && !readySessionFiles.length && !predictedImageRequest) {
+          setMessages((previous) => [
+            ...previous,
+            createMessage(
+              "assistant",
+              "Your files are still being analyzed. Give me a moment and ask again as soon as they show Ready to chat.",
+              currentConversationId
+            ),
+          ]);
+          return;
+        }
 
         if (hasDocumentAttachment && attachedFile) {
           setStatus(`Uploading ${attachedFile.name || "document"}...`);
-          const uploadedDocument = await uploadDocument(attachedFile);
+          const uploadedFiles = await uploadFilesToSession([attachedFile]);
 
-          if (!uploadedDocument) {
+          if (!uploadedFiles.length) {
             return;
           }
 
+          const processedFiles = await waitForFilesReady(
+            uploadedFiles.map((file) => file.id).filter(Boolean),
+            90000
+          );
+
+          const failedProcessedFile = processedFiles.find((file) =>
+            FAILED_FILE_STATUSES.has(String(file?.status || "").toLowerCase())
+          );
+          if (failedProcessedFile) {
+            setMessages((previous) => [
+              ...previous,
+              createMessage(
+                "assistant",
+                failedProcessedFile?.error || "That file uploaded, but NOVA AI could not extract readable text from it.",
+                currentConversationId
+              ),
+            ]);
+            return;
+          }
+
+          const readyProcessedFiles = processedFiles.filter((file) =>
+            READY_FILE_STATUSES.has(String(file?.status || "").toLowerCase())
+          );
+
+          if (!readyProcessedFiles.length) {
+            setMessages((previous) => [
+              ...previous,
+              createMessage(
+                "assistant",
+                "The file is still analyzing. Ask again in a moment once it shows Ready to chat.",
+                currentConversationId
+              ),
+            ]);
+            return;
+          }
+
+          activeFileIds = readyProcessedFiles.map((file) => file.id).filter(Boolean);
           documentReference = {
-            id: uploadedDocument?.id ?? null,
-            name: uploadedDocument?.filename || attachedFile.name || null,
+            id: readyProcessedFiles[0]?.id ?? null,
+            name: readyProcessedFiles[0]?.original_name || attachedFile.name || null,
           };
 
           setMessages((previous) =>
@@ -1104,6 +1441,7 @@ function Chat() {
                     meta: {
                       ...(message.meta || {}),
                       attachment_kind: "document",
+                      file_ids: activeFileIds,
                       ...(documentReference?.id != null ? { document_id: documentReference.id } : {}),
                       ...(documentReference?.name ? { document_name: documentReference.name } : {}),
                     },
@@ -1111,35 +1449,25 @@ function Chat() {
                 : message
             )
           );
-
-          if (documentReference?.id == null) {
-            throw new Error("Document upload did not return a document id.");
-          }
-
-          if (!uploadedDocument?.is_processed) {
-            const detail =
-              uploadedDocument?.summary ||
-              "The document uploaded, but no readable text could be extracted.";
-            setMessages((previous) => [
-              ...previous,
-              createMessage("assistant", detail, currentConversationId),
-            ]);
-            return;
-          }
         }
 
-        const requestMode = hasDocumentAttachment
-          ? "documents"
-          : forceMode || (shouldContinueDocumentConversation ? "documents" : predictedImageRequest ? "image" : resolvedMode);
+        const hasActiveUploadedFiles = activeFileIds.length > 0 && !predictedImageRequest;
+        const requestMode = hasActiveUploadedFiles
+          ? "files"
+          : hasDocumentAttachment
+            ? "documents"
+            : forceMode || (shouldContinueDocumentConversation ? "documents" : predictedImageRequest ? "image" : resolvedMode);
         setStatus(
-          buildProgressStatus({
-            text: trimmed,
-            isSearch: requestMode === "search",
-            isImage: requestMode === "image",
-            isDocument: requestMode === "documents",
-            generatePromptImage: effectiveGeneratePromptImage,
-            generateAnswerImage: effectiveGenerateAnswerImage,
-          })
+          hasActiveUploadedFiles
+            ? "NOVA AI is answering from your uploaded files first..."
+            : buildProgressStatus({
+                text: trimmed,
+                isSearch: requestMode === "search",
+                isImage: requestMode === "image",
+                isDocument: requestMode === "documents",
+                generatePromptImage: effectiveGeneratePromptImage,
+                generateAnswerImage: effectiveGenerateAnswerImage,
+              })
         );
 
         const trimmedPromptPrefix = String(promptPrefix || "").trim();
@@ -1162,33 +1490,44 @@ function Chat() {
           typeof crypto !== "undefined" && crypto.randomUUID
             ? crypto.randomUUID()
             : String(Date.now() + Math.random());
-        const response = await fetchApi("/chat", {
+        const response = await fetchApi(hasActiveUploadedFiles ? "/chat/with-files" : "/chat", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "X-Session-ID": getOrCreateSessionId(),
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
-          body: JSON.stringify({
-            message: prompt,
-            stream: true,
-            mode: requestMode,
-            conversation_id: currentConversationId,
-            ...selectedProvider,
-            generate_prompt_image: effectiveGeneratePromptImage,
-            generate_answer_image: effectiveGenerateAnswerImage,
-            ...(requestMode === "documents" && documentReference?.id != null
-              ? { document_id: documentReference.id }
-              : {}),
-            ...(attachedImageDataUrl
+          body: JSON.stringify(
+            hasActiveUploadedFiles
               ? {
-                  image_b64: attachedImageDataUrl.includes(",")
-                    ? attachedImageDataUrl.split(",")[1]
-                    : attachedImageDataUrl,
-                  image_mime_type: attachedFile?.type || "image/png",
+                  message: prompt,
+                  stream: true,
+                  conversation_id: currentConversationId,
+                  session_id: getOrCreateSessionId(),
+                  file_ids: activeFileIds,
+                  ...selectedProvider,
                 }
-              : {}),
-          }),
+              : {
+                  message: prompt,
+                  stream: true,
+                  mode: requestMode,
+                  conversation_id: currentConversationId,
+                  ...selectedProvider,
+                  generate_prompt_image: effectiveGeneratePromptImage,
+                  generate_answer_image: effectiveGenerateAnswerImage,
+                  ...(requestMode === "documents" && documentReference?.id != null
+                    ? { document_id: documentReference.id }
+                    : {}),
+                  ...(attachedImageDataUrl
+                    ? {
+                        image_b64: attachedImageDataUrl.includes(",")
+                          ? attachedImageDataUrl.split(",")[1]
+                          : attachedImageDataUrl,
+                        image_mime_type: attachedFile?.type || "image/png",
+                      }
+                    : {}),
+                }
+          ),
           signal: controller.signal,
         });
 
@@ -1241,6 +1580,9 @@ function Chat() {
                     images: promptImages,
                     meta: {
                       ...(message.meta || {}),
+                      ...(requestMode === "files" && activeFileIds.length
+                        ? { file_ids: activeFileIds }
+                        : {}),
                       ...(requestMode === "documents" && documentReference?.id != null
                         ? { document_id: documentReference.id }
                         : {}),
@@ -1260,6 +1602,7 @@ function Chat() {
           });
 
           await loadConversations(nextConversationId);
+          await loadUploadedFiles({ conversationId: nextConversationId });
           return;
         }
 
@@ -1337,6 +1680,9 @@ function Chat() {
                     images: promptImages,
                     meta: {
                       ...(message.meta || {}),
+                      ...(requestMode === "files" && activeFileIds.length
+                        ? { file_ids: activeFileIds }
+                        : {}),
                       ...(requestMode === "documents" && documentReference?.id != null
                         ? { document_id: documentReference.id }
                         : {}),
@@ -1366,6 +1712,7 @@ function Chat() {
         });
 
         await loadConversations(nextConversationId);
+        await loadUploadedFiles({ conversationId: nextConversationId });
       } catch (error) {
         if (error?.response?.status === 401 || error?.response?.status === 403) {
           handleUnauthorized();
@@ -1406,13 +1753,17 @@ function Chat() {
       isConversationLoading,
       isTyping,
       loadConversations,
+      loadUploadedFiles,
       selectedModelOption,
       resolvedMode,
       stopSpeaking,
       toolPrefix,
-      uploadDocument,
+      uploadFilesToSession,
+      waitForFilesReady,
       generateAnswerImage,
       generatePromptImage,
+      pendingSessionFiles,
+      readySessionFiles,
     ]
   );
 
@@ -1434,11 +1785,19 @@ function Chat() {
         .reverse()
         .find((message) => message.role === "user")?.content || "";
       const effectiveGenerateAnswerImage = imageGenerationAvailable && generateAnswerImage;
+      const readyFileIds = readySessionFiles.map((file) => file.id).filter(Boolean);
+      const shouldUseFileMode =
+        resolvedMode === "chat" &&
+        readyFileIds.length > 0 &&
+        !looksLikeImageRequest(lastUserContent);
       const shouldUseDocumentMode =
+        !shouldUseFileMode &&
         resolvedMode === "chat" &&
         Boolean(activeDocumentReference?.id) &&
         !looksLikeImageRequest(lastUserContent);
-      const requestMode = shouldUseDocumentMode
+      const requestMode = shouldUseFileMode
+        ? "files"
+        : shouldUseDocumentMode
         ? "documents"
         : resolvedMode === "chat" && looksLikeImageRequest(lastUserContent)
           ? "image"
@@ -1455,22 +1814,36 @@ function Chat() {
       );
 
       try {
-        const response = await chatAPI.regenerate({
-          conversation_id: currentConversationId,
-          mode: requestMode,
-          stream: false,
-          previous_answer: targetMessage?.content || "",
-          ...(selectedModelOption?.provider && selectedModelOption?.model
-            ? {
-                provider: selectedModelOption.provider,
-                model: selectedModelOption.model,
-              }
-            : {}),
-          ...(requestMode === "documents" && activeDocumentReference?.id != null
-            ? { document_id: activeDocumentReference.id }
-            : {}),
-          generate_answer_image: effectiveGenerateAnswerImage,
-        });
+        const response = shouldUseFileMode
+          ? await chatAPI.sendMessageWithFiles({
+              message: lastUserContent,
+              conversation_id: currentConversationId,
+              session_id: getOrCreateSessionId(),
+              file_ids: readyFileIds,
+              stream: false,
+              ...(selectedModelOption?.provider && selectedModelOption?.model
+                ? {
+                    provider: selectedModelOption.provider,
+                    model: selectedModelOption.model,
+                  }
+                : {}),
+            })
+          : await chatAPI.regenerate({
+              conversation_id: currentConversationId,
+              mode: requestMode,
+              stream: false,
+              previous_answer: targetMessage?.content || "",
+              ...(selectedModelOption?.provider && selectedModelOption?.model
+                ? {
+                    provider: selectedModelOption.provider,
+                    model: selectedModelOption.model,
+                  }
+                : {}),
+              ...(requestMode === "documents" && activeDocumentReference?.id != null
+                ? { document_id: activeDocumentReference.id }
+                : {}),
+              generate_answer_image: effectiveGenerateAnswerImage,
+            });
         const data = response?.data || {};
         const nextConversationId = data?.conversation_id || currentConversationId;
         const reply = data?.answer || data?.message || data?.response || "";
@@ -1520,6 +1893,7 @@ function Chat() {
         });
 
         await loadConversations(nextConversationId);
+        await loadUploadedFiles({ conversationId: nextConversationId });
       } catch (error) {
         if (error?.response?.status === 401 || error?.response?.status === 403) {
           handleUnauthorized();
@@ -1545,11 +1919,13 @@ function Chat() {
       loadConversations,
       messages,
       activeDocumentReference,
+      readySessionFiles,
       regeneratableMessageId,
       selectedModelOption,
       resolvedMode,
       stopSpeaking,
       generateAnswerImage,
+      loadUploadedFiles,
     ]
   );
 
@@ -1621,30 +1997,46 @@ function Chat() {
             speakingMessageId={speakingMessageId}
             onSpeak={handleSpeak}
           />
-          <ChatInput
-            value={input}
-            onChange={setInput}
-            onSend={handleSend}
+          <DragDropUploader
+            onFilesSelected={handleSelectFiles}
             disabled={isTyping || isConversationLoading}
-            requestedPresetId={requestedPresetId}
-            modelOptions={modelOptions}
-            selectedModelKey={selectedModelOption?.id || AUTO_MODEL_KEY}
-            onSelectModel={setSelectedModelKey}
-            generatePromptImage={imageGenerationAvailable && generatePromptImage}
-            generateAnswerImage={imageGenerationAvailable && generateAnswerImage}
-            onTogglePromptImage={() => {
-              if (!imageGenerationAvailable) {
-                return;
-              }
-              setGeneratePromptImage((previous) => !previous);
-            }}
-            onToggleAnswerImage={() => {
-              if (!imageGenerationAvailable) {
-                return;
-              }
-              setGenerateAnswerImage((previous) => !previous);
-            }}
-          />
+            className="mx-auto w-full max-w-[980px]"
+          >
+            <div className="space-y-4 px-4 pb-4 md:px-5">
+              <UploadedFilesPanel
+                files={uploadedFiles}
+                onPreview={setPreviewFile}
+                onRetry={handleRetryUploadedFile}
+                onRemove={handleRemoveUploadedFile}
+                disabled={isTyping || isConversationLoading}
+              />
+              <ChatInput
+                value={input}
+                onChange={setInput}
+                onSend={handleSend}
+                onSelectFiles={handleSelectFiles}
+                disabled={isTyping || isConversationLoading}
+                requestedPresetId={requestedPresetId}
+                modelOptions={modelOptions}
+                selectedModelKey={selectedModelOption?.id || AUTO_MODEL_KEY}
+                onSelectModel={setSelectedModelKey}
+                generatePromptImage={imageGenerationAvailable && generatePromptImage}
+                generateAnswerImage={imageGenerationAvailable && generateAnswerImage}
+                onTogglePromptImage={() => {
+                  if (!imageGenerationAvailable) {
+                    return;
+                  }
+                  setGeneratePromptImage((previous) => !previous);
+                }}
+                onToggleAnswerImage={() => {
+                  if (!imageGenerationAvailable) {
+                    return;
+                  }
+                  setGenerateAnswerImage((previous) => !previous);
+                }}
+              />
+            </div>
+          </DragDropUploader>
           <Settings
             open={isSettingsOpen}
             onClose={handleCloseSettings}
@@ -1652,6 +2044,7 @@ function Chat() {
             onExportChat={handleExportChat}
             canExportChat={Boolean(messages.length)}
           />
+          <FilePreviewModal file={previewFile} open={Boolean(previewFile)} onClose={() => setPreviewFile(null)} />
         </main>
       </div>
     </>

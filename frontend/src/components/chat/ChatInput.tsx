@@ -6,6 +6,8 @@ import {
   CHAT_COMPOSER_PRESETS,
   DEFAULT_CHAT_PLACEHOLDER,
 } from "../../constants/chatExperience";
+import VoiceInput from "./VoiceInput";
+import FileUploadButton from "../uploads/FileUploadButton";
 
 type ToolMode = "search" | "image" | "documents" | null;
 type AttachmentKind = "image" | "document" | null;
@@ -61,6 +63,7 @@ interface ChatInputProps {
   answerImageLocked?: boolean;
   onTogglePromptImage?: () => void;
   onToggleAnswerImage?: () => void;
+  onSelectFiles?: (files: File[]) => void;
 }
 
 const PRESET_MAP = Object.fromEntries(
@@ -147,6 +150,7 @@ export default function ChatInput({
   answerImageLocked = false,
   onTogglePromptImage,
   onToggleAnswerImage,
+  onSelectFiles,
 }: ChatInputProps) {
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
   const [speechSupported, setSpeechSupported] = useState(false);
@@ -181,7 +185,7 @@ export default function ChatInput({
     ? isListening
       ? "Stop voice input"
       : "Start voice input"
-    : "Voice input is not supported in this browser";
+    : "Record voice input";
   const helperNote = selectedPreset
     ? selectedPreset.description
     : attachedFile
@@ -337,17 +341,7 @@ export default function ChatInput({
         return;
       }
 
-      capturedSpeechRef.current = finalSpoken;
-      previewSpeechRef.current = finalSpoken;
-      setHeardText(finalSpoken);
-      setShowVoiceDraft(true);
-
-      const nextValue = [voiceBaseValueRef.current, finalSpoken].filter(Boolean).join(" ").trim();
-      onChangeRef.current(nextValue);
-
-      window.setTimeout(() => {
-        textareaRef.current?.focus();
-      }, 0);
+      applyVoiceTranscript(finalSpoken);
     };
 
     recognitionRef.current = recognition;
@@ -378,6 +372,27 @@ export default function ChatInput({
     previewSpeechRef.current = "";
     setHeardText("");
     setShowVoiceDraft(false);
+  };
+
+  const applyVoiceTranscript = (transcript: string) => {
+    const spokenText = String(transcript || "").trim();
+    if (!spokenText) {
+      return;
+    }
+
+    const baseValue = valueRef.current.trim();
+    voiceBaseValueRef.current = baseValue;
+    capturedSpeechRef.current = spokenText;
+    previewSpeechRef.current = spokenText;
+    setHeardText(spokenText);
+    setShowVoiceDraft(true);
+
+    const nextValue = [baseValue, spokenText].filter(Boolean).join(" ").trim();
+    onChangeRef.current(nextValue);
+
+    window.setTimeout(() => {
+      textareaRef.current?.focus();
+    }, 0);
   };
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -686,6 +701,14 @@ export default function ChatInput({
             </svg>
           </button>
 
+          <FileUploadButton
+            onSelectFiles={onSelectFiles}
+            disabled={disabled}
+            accept=".pdf,.docx,.txt,.md,.csv,.xlsx,.xlsm,.xls,.pptx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.py,.js,.jsx,.ts,.tsx,.json,.html,.htm,.css,.xml,.yml,.yaml,.java,.c,.cpp,.cs,.go,.rs,.php,.sql"
+            className="input-btn ghost"
+            title="Upload files to chat"
+          />
+
           <textarea
             ref={textareaRef}
             className="input-field"
@@ -698,20 +721,30 @@ export default function ChatInput({
           />
 
           <div className="input-actions">
-            <button
-              className={`input-btn ghost${isListening ? " listening" : ""}`}
-              type="button"
-              title={voiceButtonTitle}
-              onClick={handleVoiceToggle}
-              disabled={!speechSupported || disabled}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                <line x1="12" y1="19" x2="12" y2="23" />
-                <line x1="8" y1="23" x2="16" y2="23" />
-              </svg>
-            </button>
+            {speechSupported ? (
+              <button
+                className={`input-btn ghost${isListening ? " listening" : ""}`}
+                type="button"
+                title={voiceButtonTitle}
+                onClick={handleVoiceToggle}
+                disabled={disabled}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                  <line x1="12" y1="19" x2="12" y2="23" />
+                  <line x1="8" y1="23" x2="16" y2="23" />
+                </svg>
+              </button>
+            ) : (
+              <VoiceInput
+                compact
+                disabled={disabled}
+                onTranscript={(transcript) => {
+                  applyVoiceTranscript(transcript);
+                }}
+              />
+            )}
             <button className="input-btn send send-circle" type="button" disabled={isSendDisabled} onClick={handleSend}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
                 <line x1="22" y1="2" x2="11" y2="13" />

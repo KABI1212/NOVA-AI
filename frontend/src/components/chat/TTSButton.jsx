@@ -4,12 +4,18 @@ import { ChevronDown, Volume2, VolumeX } from "lucide-react";
 import toast from "react-hot-toast";
 
 import { fetchApi } from "../../services/api";
+import {
+  speechSupported as browserSpeechSupported,
+  speakText,
+  stopSpeechPlayback,
+} from "../../utils/speech";
 import { useAuthStore, useVoiceStore } from "../../utils/store";
 import { TTS_VOICE_OPTIONS } from "../../utils/voices";
 
 export default function TTSButton({ text }) {
   const [playing, setPlaying] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  const [playbackMode, setPlaybackMode] = useState(null);
   const audioRef = useRef(null);
   const objectUrlRef = useRef(null);
   const { token } = useAuthStore();
@@ -25,6 +31,8 @@ export default function TTSButton({ text }) {
       URL.revokeObjectURL(objectUrlRef.current);
       objectUrlRef.current = null;
     }
+    stopSpeechPlayback();
+    setPlaybackMode(null);
     setPlaying(false);
   }, []);
 
@@ -50,7 +58,7 @@ export default function TTSButton({ text }) {
     try {
       setPlaying(true);
 
-      const res = await fetchApi('/voice/speak', {
+      const res = await fetchApi("/voice/speak", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -60,7 +68,8 @@ export default function TTSButton({ text }) {
       });
 
       if (!res.ok) {
-        throw new Error("TTS failed");
+        const errorPayload = await res.json().catch(() => null);
+        throw new Error(errorPayload?.detail || errorPayload?.message || "TTS failed");
       }
 
       const blob = await res.blob();
@@ -68,14 +77,32 @@ export default function TTSButton({ text }) {
       const audio = new Audio(url);
       objectUrlRef.current = url;
       audioRef.current = audio;
+      setPlaybackMode("server");
 
       audio.onended = stopAudio;
       audio.onerror = stopAudio;
 
       await audio.play();
-    } catch {
+    } catch (error) {
       stopAudio();
-      toast.error("Could not play this voice response right now.");
+
+      if (browserSpeechSupported()) {
+        const started = speakText(text, {
+          onStart: () => {
+            setPlaybackMode("browser");
+            setPlaying(true);
+          },
+          onEnd: stopAudio,
+          onError: stopAudio,
+        });
+
+        if (started) {
+          return;
+        }
+      }
+
+      stopAudio();
+      toast.error(error?.message || "Could not play this voice response right now.");
     }
   };
 
@@ -86,7 +113,13 @@ export default function TTSButton({ text }) {
     <div className="relative inline-flex items-center">
       <button
         onClick={() => speak()}
-        title={playing ? "Stop" : `Read aloud with ${selectedVoiceLabel}`}
+        title={
+          playing
+            ? playbackMode === "browser"
+              ? "Stop device voice"
+              : "Stop"
+            : `Read aloud with ${selectedVoiceLabel}`
+        }
         className={`rounded-lg p-1.5 text-xs transition-colors ${
           playing
             ? "bg-blue-500/10 text-blue-400"

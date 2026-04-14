@@ -289,12 +289,27 @@ export const authAPI = {
 
 export const chatAPI = {
   sendMessage: (data) => api.post('/chat', data),
+  sendMessageWithFiles: (data) => api.post('/chat/with-files', data),
   regenerate: (data) => api.post('/chat/regenerate', data),
   getConversations: () => api.get('/chat/conversations'),
   getConversation: (id) => api.get(`/chat/conversations/${id}`),
   updateConversation: (id, data) => api.put(`/chat/conversations/${id}`, data),
   deleteConversation: (id) => api.delete(`/chat/conversations/${id}`),
   getProviders: () => api.get('/chat/providers'),
+};
+
+export const filesAPI = {
+  upload: (formData, config = {}) =>
+    api.post('/files/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      timeout: 240000,
+      ...config,
+    }),
+  process: (fileId) => api.post(`/files/process/${fileId}`),
+  list: (params = {}) => api.get('/files/list', { params }),
+  remove: (fileId) => api.delete(`/files/${fileId}`),
 };
 
 export const sendMessage = async (message) => {

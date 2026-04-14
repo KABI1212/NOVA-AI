@@ -118,6 +118,22 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE_MB: int = 10
     UPLOAD_DIR: str = "./uploads"
     REDIS_URL: str = "redis://localhost:6379"
+    FILE_MAX_SIZE_MB: int = 25
+    FILE_PREVIEW_CHAR_LIMIT: int = 1800
+    FILE_CHUNK_SIZE: int = 1200
+    FILE_CHUNK_OVERLAP: int = 180
+    FILE_RETRIEVAL_LIMIT: int = 6
+    FILE_SESSION_TTL_SECONDS: int = 86400
+    FILE_QUEUE_NAME: str = "nova:file-processing"
+    FILE_EMBED_CACHE_TTL_SECONDS: int = 604800
+    FILE_CONTEXT_CHAR_LIMIT: int = 18000
+    FILE_ALLOWED_EXTENSIONS: str = (
+        ".pdf,.docx,.txt,.md,.csv,.xlsx,.xlsm,.xls,.pptx,.png,.jpg,.jpeg,.webp,.gif,.bmp,"
+        ".py,.js,.jsx,.ts,.tsx,.json,.html,.htm,.css,.xml,.yml,.yaml,.java,.c,.cpp,.cs,.go,.rs,.php,.sql"
+    )
+    TESSERACT_CMD: str = ""
+    MALWARE_SCAN_COMMAND: str = ""
+    MALWARE_SCAN_TIMEOUT_SECONDS: int = 20
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_WARN_ON_MEMORY_FALLBACK: bool = False
     CHAT_RATE_LIMIT_REQUESTS: int = 20
@@ -178,6 +194,18 @@ class Settings(BaseSettings):
     def cors_origin_regex_value(self) -> str | None:
         value = str(getattr(self, "CORS_ORIGIN_REGEX", "") or "").strip()
         return value or None
+
+    @property
+    def file_allowed_extensions_list(self) -> List[str]:
+        values = []
+        for raw_value in str(self.FILE_ALLOWED_EXTENSIONS or "").split(","):
+            candidate = raw_value.strip().lower()
+            if not candidate:
+                continue
+            if not candidate.startswith("."):
+                candidate = f".{candidate}"
+            values.append(candidate)
+        return values
 
     @property
     def public_frontend_url(self) -> str | None:

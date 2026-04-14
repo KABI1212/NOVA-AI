@@ -52,10 +52,76 @@ function looksLikeStructuredDiagram(value) {
   return score >= 3;
 }
 
-function MarkdownCodeBlock({ children, ...props }) {
+function extractPlainText(value) {
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => extractPlainText(item)).join("");
+  }
+
+  if (value && typeof value === "object" && "props" in value) {
+    return extractPlainText(value.props?.children);
+  }
+
+  return "";
+}
+
+function looksLikeCodeLine(line) {
+  const value = String(line || "").trim();
+  if (!value) {
+    return false;
+  }
+
+  if (
+    /^(?:import |export |from |class |public |private |protected |static |const |let |var |function |async |await |if\s*\(|else\b|for\s*\(|while\s*\(|switch\s*\(|case\b|return\b|try\b|catch\b|finally\b|def\b|interface |type |enum |#include |using |package |namespace |\{|\}|\/\/|\/\*|\*\/)/.test(
+      value
+    )
+  ) {
+    return true;
+  }
+
+  return /[;{}()[\]=<>]/.test(value) && value.length <= 180;
+}
+
+function resolvePreferredCopyValue(blockCode, fullContent) {
+  const normalizedBlockCode = extractPlainText(blockCode).replace(/\n$/, "");
+  const fullText = String(fullContent || "");
+  const fencedBlocks = [...fullText.matchAll(/```[^\n]*\n?([\s\S]*?)```/g)];
+
+  if (fencedBlocks.length !== 1) {
+    return normalizedBlockCode;
+  }
+
+  const fencedCode = String(fencedBlocks[0]?.[1] || "").replace(/\n$/, "");
+  if (fencedCode !== normalizedBlockCode) {
+    return normalizedBlockCode;
+  }
+
+  const outsideContent = fullText
+    .replace(/```[^\n]*\n?[\s\S]*?```/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/\r/g, ""))
+    .filter((line) => line.trim());
+
+  if (!outsideContent.length) {
+    return normalizedBlockCode;
+  }
+
+  const codeLikeLines = outsideContent.filter(looksLikeCodeLine);
+  if (!codeLikeLines.length || codeLikeLines.length !== outsideContent.length) {
+    return normalizedBlockCode;
+  }
+
+  return [...outsideContent, normalizedBlockCode].join("\n").trim();
+}
+
+function MarkdownCodeBlock({ children, fullContent = "", ...props }) {
   const [copied, setCopied] = useState(false);
-  const code = String(children || "").replace(/\n$/, "");
+  const code = extractPlainText(children).replace(/\n$/, "");
   const isDiagramBlock = looksLikeStructuredDiagram(code);
+  const preferredCopyValue = resolvePreferredCopyValue(code, fullContent);
 
   useEffect(() => {
     if (!copied) {
@@ -68,7 +134,7 @@ function MarkdownCodeBlock({ children, ...props }) {
 
   const handleCopy = async () => {
     try {
-      await copyToClipboard(code);
+      await copyToClipboard(preferredCopyValue);
       setCopied(true);
     } catch {
       setCopied(false);
@@ -164,7 +230,11 @@ export default function MarkdownAnswer({ content = "", className = "" }) {
               );
             }
 
-            return <MarkdownCodeBlock {...props}>{children}</MarkdownCodeBlock>;
+            return (
+              <MarkdownCodeBlock {...props} fullContent={content}>
+                {children}
+              </MarkdownCodeBlock>
+            );
           },
         }}
       >

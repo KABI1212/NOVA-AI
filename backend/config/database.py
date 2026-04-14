@@ -121,6 +121,19 @@ def _ensure_indexes(database: Database) -> None:
     database["documents"].create_index("id", unique=True)
     database["documents"].create_index([("user_id", 1), ("created_at", -1)])
 
+    database["files"].create_index("id", unique=True)
+    database["files"].create_index([("user_id", 1), ("created_at", -1)])
+    database["files"].create_index([("session_id", 1), ("created_at", -1)])
+    database["files"].create_index([("conversation_id", 1), ("created_at", -1)])
+    database["files"].create_index([("user_id", 1), ("status", 1), ("created_at", -1)])
+
+    database["file_chunks"].create_index("id", unique=True)
+    database["file_chunks"].create_index([("file_id", 1), ("chunk_index", 1)])
+    database["file_chunks"].create_index([("user_id", 1), ("file_id", 1)])
+
+    database["chat_sessions"].create_index("id", unique=True)
+    database["chat_sessions"].create_index([("user_id", 1), ("updated_at", -1)])
+
     database["learning_progress"].create_index("id", unique=True)
     database["learning_progress"].create_index([("user_id", 1), ("updated_at", -1)])
 
