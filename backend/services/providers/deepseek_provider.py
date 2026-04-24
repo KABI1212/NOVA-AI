@@ -1,7 +1,14 @@
+"""
+Legacy module retained for backward compatibility.
+
+Do not add secrets here. Use `backend/services/provider_clients.py` and the
+standard environment variables instead.
+"""
+
 import os
 import httpx
 
-API_KEY = os.getenv("sk-a4fb52ecf86c4da2ae5399e0299d86e2")
+LEGACY_PROVIDER_NOTICE = "Use DEEPSEEK_API_KEY via provider_clients.py"
 
 async def ask_deepseek(query: str):
     api_key = os.getenv("DEEPSEEK_API_KEY")

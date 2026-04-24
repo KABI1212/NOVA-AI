@@ -13,6 +13,7 @@ import {
   Menu,
   MessageSquare,
   Moon,
+  Bot,
   Search,
   ShieldCheck,
   Sun,
@@ -58,6 +59,7 @@ function Layout({ children }) {
   const workspaceItems = useMemo(
     () => [
       { icon: Search, label: "Web Search", mode: "search", path: "/search" },
+      { icon: Bot, label: "Orchestrator", mode: "orchestrator", path: "/orchestrator" },
       { icon: Link, label: "Shared Chats", mode: "my-shares", path: "/my-shares" },
     ],
     []

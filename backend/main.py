@@ -23,6 +23,7 @@ from routes import (
     files_router,
     image_router,
     learning_router,
+    orchestrator_router,
     search_router,
     share_router,
     voice_router,
@@ -165,6 +166,7 @@ app.include_router(explain_router)
 app.include_router(files_router)
 app.include_router(image_router)
 app.include_router(learning_router)
+app.include_router(orchestrator_router)
 app.include_router(voice_router)
 app.include_router(compat_router)
 app.include_router(search_router, prefix="/api")

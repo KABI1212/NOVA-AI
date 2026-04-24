@@ -6,6 +6,7 @@ from .explain import router as explain_router
 from .files import router as files_router
 from .image import router as image_router
 from .learning import router as learning_router
+from .orchestrator import router as orchestrator_router
 from .voice import router as voice_router
 from .compat import router as compat_router
 from .search import router as search_router
@@ -20,6 +21,7 @@ __all__ = [
     "files_router",
     "image_router",
     "learning_router",
+    "orchestrator_router",
     "voice_router",
     "compat_router",
     "search_router",

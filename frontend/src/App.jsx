@@ -5,12 +5,14 @@ import { Toaster } from "react-hot-toast";
 
 import Chat from "./pages/Chat";
 import CodeAssistant from "./pages/CodeAssistant";
+import DocumentAnalyzer from "./pages/DocumentAnalyzer";
 import ExplainAssistant from "./pages/ExplainAssistant";
 import ImageGenerator from "./pages/ImageGenerator";
 import KnowledgeAssistant from "./pages/KnowledgeAssistant";
 import LearningAssistant from "./pages/LearningAssistant";
 import Login from "./pages/Login";
 import MyShares from "./pages/MyShares";
+import OrchestratorStudio from "./pages/OrchestratorStudio";
 import ReasoningAssistant from "./pages/ReasoningAssistant";
 import SearchChat from "./pages/SearchChat";
 import SharedView from "./pages/SharedView";
@@ -116,6 +118,14 @@ function App() {
           )}
         />
         <Route
+          path="/documents"
+          element={(
+            <ProtectedRoute>
+              <DocumentAnalyzer />
+            </ProtectedRoute>
+          )}
+        />
+        <Route
           path="/search"
           element={(
             <ProtectedRoute>
@@ -128,6 +138,14 @@ function App() {
           element={(
             <ProtectedRoute>
               <MyShares />
+            </ProtectedRoute>
+          )}
+        />
+        <Route
+          path="/orchestrator"
+          element={(
+            <ProtectedRoute>
+              <OrchestratorStudio />
             </ProtectedRoute>
           )}
         />

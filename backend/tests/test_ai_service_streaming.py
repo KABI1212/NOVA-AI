@@ -61,6 +61,55 @@ def test_complete_non_stream_recovers_from_partial_failure_when_provider_is_auto
     asyncio.run(scenario())
 
 
+def test_complete_non_stream_limits_automatic_provider_fallback_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def failing_provider(messages, model, temperature, max_tokens):
+        if False:
+            yield ""
+        raise RuntimeError("provider down")
+
+    async def successful_provider(messages, model, temperature, max_tokens):
+        yield "Recovered answer"
+
+    monkeypatch.setattr(ai_service_module.settings, "AI_AUTO_MAX_PROVIDER_ATTEMPTS", 2)
+    monkeypatch.setattr(ai_service_module, "_provider_available", lambda provider: True)
+    monkeypatch.setattr(
+        ai_service_module,
+        "_provider_chain",
+        lambda provider=None, use_case=None: ["openai", "google", "anthropic"],
+    )
+    monkeypatch.setattr(ai_service_module, "_configured_provider_override", lambda: None)
+    monkeypatch.setattr(ai_service_module, "_resolve_provider", lambda: "openai")
+    monkeypatch.setattr(
+        ai_service_module,
+        "_model_for_provider",
+        lambda current_provider, requested_provider, model: None,
+    )
+    monkeypatch.setattr(
+        ai_service_module,
+        "_PROVIDER_STREAM_MAP",
+        {
+            "openai": failing_provider,
+            "google": failing_provider,
+            "anthropic": successful_provider,
+        },
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(
+            RuntimeError,
+            match="openai: provider down; google: provider down",
+        ):
+            await ai_service_module._complete_non_stream(
+                [{"role": "user", "content": "What is a protocol?"}],
+                provider=None,
+                model="test-model",
+            )
+
+    asyncio.run(scenario())
+
+
 def test_infer_use_case_prefers_writing_for_rewrite_requests() -> None:
     assert ai_service_module.infer_use_case("chat", "Rewrite this email to sound professional.") == "writing"
 

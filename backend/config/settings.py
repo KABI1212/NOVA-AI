@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     AI_FAST_MAX_TOKENS: int = 320
     AI_REQUEST_TIMEOUT_SECONDS: int = 60
     AI_IMAGE_REQUEST_TIMEOUT_SECONDS: int = 180
+    AI_AUTO_MAX_PROVIDER_ATTEMPTS: int = 2
     AI_DEBUG_LOGGING: bool = False
     AI_LOG_PREVIEW_CHARS: int = 400
     CHAT_AUTO_WEB_SEARCH_IN_CHAT: bool = False
@@ -237,6 +238,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(_ENV_FILE),
         case_sensitive=True,
+        extra="ignore",
     )
 
 

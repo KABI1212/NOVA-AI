@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const STATUS_REQUEST_TIMEOUT_MS = 3500;
+const STATUS_REQUEST_TIMEOUT_MS = 1500;
 const RAW_API_URL = String(import.meta.env.VITE_API_URL || '').trim();
 
 const normalizeBaseUrl = (value = '') => String(value || '').trim().replace(/\/$/, '');
@@ -312,6 +312,22 @@ export const filesAPI = {
   remove: (fileId) => api.delete(`/files/${fileId}`),
 };
 
+export const documentAPI = {
+  upload: (formData, config = {}) =>
+    api.post('/document/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      timeout: 240000,
+      ...config,
+    }),
+  getDocuments: () => api.get('/document'),
+  getDocument: (documentId) => api.get(`/document/${documentId}`),
+  askQuestion: (data) => api.post('/document/ask', data, { timeout: 120000 }),
+  rewriteQuestion: (data) => api.post('/document/rewrite-question', data),
+  deleteDocument: (documentId) => api.delete(`/document/${documentId}`),
+};
+
 export const sendMessage = async (message) => {
   try {
     const response = await chatAPI.sendMessage({
@@ -344,6 +360,11 @@ export const learningAPI = {
 
 export const explainAPI = {
   explain: (data) => api.post('/explain', data),
+};
+
+export const orchestratorAPI = {
+  compose: (data) => api.post('/orchestrator/compose', data, { timeout: 120000 }),
+  agent: (data) => api.post('/orchestrator/agent', data, { timeout: 120000 }),
 };
 
 export const imageAPI = {

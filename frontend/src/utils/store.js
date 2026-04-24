@@ -40,6 +40,25 @@ export const useChatStore = create((set) => ({
   setIsTyping: (isTyping) => set({ isTyping }),
 }));
 
+// Document Store
+export const useDocumentStore = create((set) => ({
+  documents: [],
+  currentDocument: null,
+  setDocuments: (documents) => set({ documents }),
+  setCurrentDocument: (currentDocument) => set({ currentDocument }),
+  addDocument: (document) =>
+    set((state) => ({
+      documents: [document, ...state.documents.filter((item) => item.id !== document?.id)],
+      currentDocument: document,
+    })),
+  removeDocument: (documentId) =>
+    set((state) => ({
+      documents: state.documents.filter((item) => item.id !== documentId),
+      currentDocument:
+        state.currentDocument?.id === documentId ? null : state.currentDocument,
+    })),
+}));
+
 // Theme Store
 export const useThemeStore = create((set) => ({
   isDark: localStorage.getItem('theme') === 'dark',

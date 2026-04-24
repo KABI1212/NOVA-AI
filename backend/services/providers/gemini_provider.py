@@ -1,10 +1,17 @@
+"""
+Legacy module retained for backward compatibility.
+
+Do not add secrets here. Use `backend/services/provider_clients.py` and the
+standard environment variables instead.
+"""
+
 import os
 import httpx
 
-API_KEY = os.getenv("AIzaSyD0kIpYn9LQa5dRMwQG_iRGB-fEENc19b4")
+LEGACY_PROVIDER_NOTICE = "Use GEMINI_API_KEY or GOOGLE_API_KEY via provider_clients.py"
 
 async def ask_gemini(query: str):
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
         return None
     async with httpx.AsyncClient() as client:

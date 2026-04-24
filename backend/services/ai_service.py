@@ -1715,6 +1715,11 @@ def _provider_available(provider: str) -> bool:
     return _provider_ready(provider) and not _provider_temporarily_disabled(provider)
 
 
+def _auto_provider_attempt_limit() -> int:
+    value = int(getattr(settings, "AI_AUTO_MAX_PROVIDER_ATTEMPTS", 2) or 2)
+    return max(1, value)
+
+
 def _provider_chain(provider: Optional[str], use_case: Optional[str] = None) -> List[str]:
     explicit_provider = (provider or "").lower().strip()
     if explicit_provider:
@@ -1732,6 +1737,23 @@ def _provider_chain(provider: Optional[str], use_case: Optional[str] = None) -> 
     if requested in preferred_chain:
         return [requested] + [item for item in preferred_chain if item != requested]
     return preferred_chain
+
+
+def _ready_provider_chain(provider: Optional[str], use_case: Optional[str] = None) -> List[str]:
+    chain = _provider_chain(provider, use_case=use_case)
+    ready_chain = [item for item in chain if _provider_available(item)]
+    if provider:
+        return ready_chain
+
+    attempt_limit = _auto_provider_attempt_limit()
+    if len(ready_chain) > attempt_limit:
+        logger.info(
+            "Limiting automatic AI provider fallback attempts limit=%s chain=%s use_case=%s",
+            attempt_limit,
+            ready_chain[:attempt_limit],
+            use_case or "<default>",
+        )
+    return ready_chain[:attempt_limit]
 
 
 def describe_default_provider_stack() -> List[Dict[str, Any]]:
@@ -1810,8 +1832,7 @@ async def _stream_with_fallback(
     if not normalized_messages:
         raise RuntimeError("No valid messages were provided to the AI service")
 
-    chain = _provider_chain(provider, use_case=use_case)
-    ready_chain = [item for item in chain if _provider_available(item)]
+    ready_chain = _ready_provider_chain(provider, use_case=use_case)
     if not ready_chain:
         if provider:
             if _provider_temporarily_disabled(provider):
@@ -1905,8 +1926,7 @@ async def _complete_non_stream(
     if not normalized_messages:
         raise RuntimeError("No valid messages were provided to the AI service")
 
-    chain = _provider_chain(provider, use_case=use_case)
-    ready_chain = [item for item in chain if _provider_available(item)]
+    ready_chain = _ready_provider_chain(provider, use_case=use_case)
     if not ready_chain:
         if provider:
             if _provider_temporarily_disabled(provider):
