@@ -332,6 +332,14 @@ def test_summarize_image_provider_error_compacts_openrouter_credit_message() -> 
     assert summary == "insufficient credits"
 
 
+def test_summarize_image_provider_error_compacts_openrouter_user_not_found() -> None:
+    summary = ai_service_module._summarize_image_provider_error(
+        RuntimeError("User not found. (model=google/gemini-2.5-flash-image)")
+    )
+
+    assert summary == "account or model access error"
+
+
 def test_raise_image_http_error_maps_quota_to_429() -> None:
     try:
         image_module._raise_image_http_error(RuntimeError("RESOURCE_EXHAUSTED: quota exceeded"))
@@ -383,6 +391,19 @@ def test_raise_image_http_error_maps_credit_shortage_message_to_402() -> None:
     except HTTPException as exc:
         assert exc.status_code == 402
         assert "billing" in str(exc.detail).lower()
+    else:
+        raise AssertionError("Expected HTTPException")
+
+
+def test_raise_image_http_error_maps_user_not_found_to_provider_guidance() -> None:
+    try:
+        image_module._raise_image_http_error(
+            RuntimeError("OpenRouter: User not found. (model=google/gemini-2.5-flash-image)")
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 503
+        assert "selected image provider" in str(exc.detail).lower()
+        assert "openrouter image model" in str(exc.detail).lower()
     else:
         raise AssertionError("Expected HTTPException")
 

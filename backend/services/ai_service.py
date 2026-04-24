@@ -362,6 +362,9 @@ def _should_temporarily_disable_image_provider(provider: str, exc: Exception) ->
         "invalid api key",
         "authentication",
         "unauthorized",
+        "user not found",
+        "model not found",
+        "no such user",
     )
     return any(pattern in message for pattern in patterns)
 
@@ -767,6 +770,8 @@ def _summarize_image_provider_error(exc: Exception) -> str:
     message = " ".join(str(exc or "").split()).strip()
     lowered = message.lower()
 
+    if "user not found" in lowered or "model not found" in lowered or "no such user" in lowered:
+        return "account or model access error"
     if "billing_hard_limit_reached" in lowered or "billing hard limit" in lowered:
         return "billing hard limit reached"
     if "insufficient credits" in lowered or "not enough credits" in lowered:

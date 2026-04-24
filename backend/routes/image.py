@@ -113,6 +113,14 @@ def _raise_image_http_error(exc: Exception) -> None:
 
     if lowered.startswith("all image providers failed."):
         raise HTTPException(status_code=503, detail=error_msg)
+    if "user not found" in lowered or "model not found" in lowered or "no such user" in lowered:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The selected image provider could not use the configured account or model. "
+                "Switch to Auto, Gemini, or ChatGPT, or update the OpenRouter image model."
+            ),
+        )
     if "content_policy_violation" in lowered or "content policy" in lowered:
         raise HTTPException(
             status_code=400,
