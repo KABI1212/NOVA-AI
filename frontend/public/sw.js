@@ -1,5 +1,18 @@
-const CACHE_NAME = "nova-ai-pwa-v1";
-const APP_SHELL = ["/", "/manifest.json", "/favicon.svg"];
+const CACHE_NAME = "nova-ai-pwa-v2";
+const APP_SHELL = [
+  "/",
+  "/manifest.json",
+  "/favicon.svg",
+  "/favicon.ico",
+  "/icons/nova-star-16x16.png",
+  "/icons/nova-star-32x32.png",
+  "/icons/nova-star-192x192.png",
+  "/icons/nova-star-512x512.png",
+  "/icons/nova-star-maskable-192x192.png",
+  "/icons/nova-star-maskable-512x512.png",
+  "/icons/nova-star-apple-touch.png",
+  "/icons/nova-star-splash-512x512.png",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
