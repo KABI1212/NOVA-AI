@@ -18,8 +18,3 @@ dist/
 
 # OS
 .DS_Store
-echo ".env" >> .gitignore
-echo "test_api_keys.py" >> .gitignore
-git add .gitignore
-git commit -m "Add .env to gitignore"
-git push

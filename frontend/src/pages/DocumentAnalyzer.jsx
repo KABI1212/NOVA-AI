@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Upload, FileText, Trash2, Send } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Layout from '../components/common/Layout';
@@ -13,18 +13,18 @@ function DocumentAnalyzer() {
   const [answer, setAnswer] = useState('');
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    loadDocuments();
-  }, []);
-
-  const loadDocuments = async () => {
+  const loadDocuments = useCallback(async () => {
     try {
       const response = await documentAPI.getDocuments();
       setDocuments(response.data);
     } catch (error) {
       toast.error('Failed to load documents');
     }
-  };
+  }, [setDocuments]);
+
+  useEffect(() => {
+    loadDocuments();
+  }, [loadDocuments]);
 
   const handleUpload = async (e) => {
     const file = e.target.files[0];

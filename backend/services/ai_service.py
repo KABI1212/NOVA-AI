@@ -581,6 +581,13 @@ def _normalize_image_provider(provider: Optional[str]) -> str:
     return _IMAGE_PROVIDER_ALIASES.get(normalized, normalized)
 
 
+def _is_explicit_auto_image_provider(provider: Optional[str]) -> bool:
+    if provider is None:
+        return False
+    normalized = str(provider or "").strip().lower()
+    return normalized in {"", "auto", "default"}
+
+
 def _image_provider_ready(provider: str) -> bool:
     if provider == "openai":
         return bool(_openai_api_key())
@@ -600,9 +607,10 @@ def _resolve_image_provider(provider: Optional[str] = None) -> Optional[str]:
     if requested:
         return requested if _image_provider_available(requested) else None
 
-    configured = _normalize_image_provider(getattr(settings, "AI_IMAGE_PROVIDER", "") or "")
-    if configured:
-        return configured if _image_provider_available(configured) else None
+    if not _is_explicit_auto_image_provider(provider):
+        configured = _normalize_image_provider(getattr(settings, "AI_IMAGE_PROVIDER", "") or "")
+        if configured:
+            return configured if _image_provider_available(configured) else None
 
     if _image_provider_available("google"):
         return "google"
@@ -618,12 +626,13 @@ def _resolve_image_provider_chain(provider: Optional[str] = None) -> List[str]:
     if requested:
         return [requested] if _image_provider_available(requested) else []
 
-    configured = _normalize_image_provider(getattr(settings, "AI_IMAGE_PROVIDER", "") or "")
     preferred_chain = _provider_chain_for_use_case("image_generation")
     chain: List[str] = []
 
-    if configured and _image_provider_available(configured):
-        chain.append(configured)
+    if not _is_explicit_auto_image_provider(provider):
+        configured = _normalize_image_provider(getattr(settings, "AI_IMAGE_PROVIDER", "") or "")
+        if configured and _image_provider_available(configured):
+            chain.append(configured)
 
     for candidate in preferred_chain:
         if (
