@@ -1,44 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <filter id="neon-blue-glow" x="-80%" y="-80%" width="260%" height="260%">
-      <feGaussianBlur in="SourceGraphic" stdDeviation="13" result="outerGlow"/>
-      <feColorMatrix
-        in="outerGlow"
-        type="matrix"
-        values="0 0 0 0 0.02  0 0 0 0 0.62  0 0 0 0 1  0 0 0 0.95 0"
-        result="blueGlow"
-      />
-      <feMerge>
-        <feMergeNode in="blueGlow"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
     <linearGradient id="electric-blue" x1="128" y1="96" x2="384" y2="416" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#63E8FF"/>
-      <stop offset="0.45" stop-color="#1B9DFF"/>
+      <stop offset="0.46" stop-color="#1B9DFF"/>
       <stop offset="1" stop-color="#006DFF"/>
     </linearGradient>
-    <radialGradient id="cyan-core" cx="50%" cy="45%" r="60%">
-      <stop offset="0" stop-color="#8FF6FF" stop-opacity="0.9"/>
-      <stop offset="0.42" stop-color="#2ABFFF" stop-opacity="0.34"/>
-      <stop offset="1" stop-color="#008CFF" stop-opacity="0"/>
-    </radialGradient>
   </defs>
-  <g filter="url(#neon-blue-glow)">
-    <path
-      d="M256 88 C273 179 333 239 424 256 C333 273 273 333 256 424 C239 333 179 273 88 256 C179 239 239 179 256 88 Z"
-      fill="url(#cyan-core)"
-      stroke="url(#electric-blue)"
-      stroke-width="24"
-      stroke-linejoin="round"
-    />
-    <path
-      d="M163 103 C168 132 188 152 217 157 C188 162 168 182 163 211 C158 182 138 162 109 157 C138 152 158 132 163 103 Z"
-      fill="url(#electric-blue)"
-    />
-    <path
-      d="M355 315 C359 340 376 357 401 361 C376 365 359 382 355 407 C351 382 334 365 309 361 C334 357 351 340 355 315 Z"
-      fill="url(#electric-blue)"
-    />
-  </g>
+  <path
+    d="M256 88 C273 179 333 239 424 256 C333 273 273 333 256 424 C239 333 179 273 88 256 C179 239 239 179 256 88 Z"
+    fill="none"
+    stroke="url(#electric-blue)"
+    stroke-width="28"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M163 103 C168 132 188 152 217 157 C188 162 168 182 163 211 C158 182 138 162 109 157 C138 152 158 132 163 103 Z"
+    fill="url(#electric-blue)"
+  />
+  <path
+    d="M355 315 C359 340 376 357 401 361 C376 365 359 382 355 407 C351 382 334 365 309 361 C334 357 351 340 355 315 Z"
+    fill="url(#electric-blue)"
+  />
 </svg>

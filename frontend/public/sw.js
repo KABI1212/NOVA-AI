@@ -1,4 +1,4 @@
-const CACHE_NAME = "nova-ai-pwa-v3";
+const CACHE_NAME = "nova-ai-pwa-v4";
 const APP_SHELL = [
   "/",
   "/manifest.json",

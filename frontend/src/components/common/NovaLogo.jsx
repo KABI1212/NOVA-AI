@@ -7,11 +7,10 @@ function NovaLogo({
   iconColor = '#1B9DFF',
   accentColor,
   className = '',
+  showText = true,
 }) {
   const generatedId = useId().replace(/:/g, '');
-  const glowId = `nova-neon-glow-${generatedId}`;
   const gradientId = `nova-electric-blue-${generatedId}`;
-  const coreId = `nova-cyan-core-${generatedId}`;
   const resolvedAccent = accentColor || textColor;
   const textScale = size >= 40 ? 0.9 : 0.6;
   const fontSize = Math.round(size * textScale);
@@ -28,34 +27,16 @@ function NovaLogo({
         focusable="false"
       >
         <defs>
-          <filter id={glowId} x="-80%" y="-80%" width="260%" height="260%">
-            <feGaussianBlur in="SourceGraphic" stdDeviation="2.8" result="outerGlow" />
-            <feColorMatrix
-              in="outerGlow"
-              type="matrix"
-              values="0 0 0 0 0.02  0 0 0 0 0.62  0 0 0 0 1  0 0 0 0.95 0"
-              result="blueGlow"
-            />
-            <feMerge>
-              <feMergeNode in="blueGlow" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
           <linearGradient id={gradientId} x1="18" y1="12" x2="62" y2="68">
             <stop offset="0" stopColor="#63E8FF" />
             <stop offset="0.45" stopColor={iconColor} />
             <stop offset="1" stopColor="#006DFF" />
           </linearGradient>
-          <radialGradient id={coreId} cx="50%" cy="45%" r="60%">
-            <stop offset="0" stopColor="#8FF6FF" stopOpacity="0.9" />
-            <stop offset="0.42" stopColor="#2ABFFF" stopOpacity="0.34" />
-            <stop offset="1" stopColor="#008CFF" stopOpacity="0" />
-          </radialGradient>
         </defs>
-        <g filter={`url(#${glowId})`}>
+        <g>
           <path
             d="M40 12 C42.7 26.2 52.1 37.3 66 40 C52.1 42.7 42.7 53.8 40 68 C37.3 53.8 27.9 42.7 14 40 C27.9 37.3 37.3 26.2 40 12 Z"
-            fill={`url(#${coreId})`}
+            fill="none"
             stroke={`url(#${gradientId})`}
             strokeWidth="4.8"
             strokeLinejoin="round"
@@ -70,18 +51,20 @@ function NovaLogo({
           />
         </g>
       </svg>
-      <span
-        className="font-bold"
-        style={{
-          color: textColor,
-          fontSize,
-          lineHeight: 1,
-          letterSpacing,
-          fontFamily: "'Times New Roman', Times, serif",
-        }}
-      >
-        NOVA <span style={{ color: resolvedAccent }}>AI</span>
-      </span>
+      {showText ? (
+        <span
+          className="font-bold"
+          style={{
+            color: textColor,
+            fontSize,
+            lineHeight: 1,
+            letterSpacing,
+            fontFamily: "'Times New Roman', Times, serif",
+          }}
+        >
+          NOVA <span style={{ color: resolvedAccent }}>AI</span>
+        </span>
+      ) : null}
     </div>
   );
 }

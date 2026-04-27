@@ -17,13 +17,15 @@ import ReasoningAssistant from "./pages/ReasoningAssistant";
 import SearchChat from "./pages/SearchChat";
 import SharedView from "./pages/SharedView";
 import Signup from "./pages/Signup";
+import NovaLogo from "./components/common/NovaLogo";
 import { authAPI } from "./services/api";
 import { useAuthStore, useThemeStore } from "./utils/store";
 
 function SessionLoader() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 text-sm font-medium text-gray-600 dark:bg-gray-950 dark:text-gray-300">
-      Checking your session...
+    <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-gray-50 text-sm font-medium text-gray-600 dark:bg-gray-950 dark:text-gray-300">
+      <NovaLogo size={44} showText={false} />
+      <span>Checking your session...</span>
     </div>
   );
 }

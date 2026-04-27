@@ -4,6 +4,7 @@ import toast from "react-hot-toast";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { authAPI } from "../../services/api";
+import NovaLogo from "../common/NovaLogo";
 import { formatApiError } from "../../utils/apiErrors";
 import { useAuthStore } from "../../utils/store";
 
@@ -405,29 +406,7 @@ export default function Sidebar({
     <>
       <aside className={`sb claude${resolvedCollapsed ? " col" : ""}`}>
         <div className="logo">
-          <svg className="li" viewBox="0 0 80 80" fill="none" aria-hidden="true">
-            <g transform="translate(40,40)">
-              <path
-                d="M0,-28 C2,-10 10,-2 28,0 C10,2 2,10 0,28 C-2,10 -10,2 -28,0 C-10,-2 -2,-10 0,-28 Z"
-                fill="none"
-                stroke="#1B8FE8"
-                strokeWidth="4.5"
-                strokeLinejoin="round"
-              />
-              <g transform="translate(-22,-23)">
-                <path
-                  d="M0,-7.5 C0.5,-3 3,-0.5 7.5,0 C3,0.5 0.5,3 0,7.5 C-0.5,3 -3,0.5 -7.5,0 C-3,-0.5 -0.5,-3 0,-7.5 Z"
-                  fill="#1B8FE8"
-                />
-              </g>
-              <g transform="translate(22,22)">
-                <path
-                  d="M0,-6 C0.4,-2.5 2.5,-0.4 6,0 C2.5,0.4 0.4,2.5 0,6 C-0.4,2.5 -2.5,0.4 -6,0 C-2.5,-0.4 -0.4,-2.5 0,-6 Z"
-                  fill="#1B8FE8"
-                />
-              </g>
-            </g>
-          </svg>
+          <NovaLogo size={30} showText={false} className="li" />
           <span className="lt">
             NOVA <span>AI</span>
           </span>
