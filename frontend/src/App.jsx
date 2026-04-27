@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 
@@ -17,38 +17,98 @@ import ReasoningAssistant from "./pages/ReasoningAssistant";
 import SearchChat from "./pages/SearchChat";
 import SharedView from "./pages/SharedView";
 import Signup from "./pages/Signup";
+import { authAPI } from "./services/api";
 import { useAuthStore, useThemeStore } from "./utils/store";
 
-function ProtectedRoute({ children }) {
+function SessionLoader() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 text-sm font-medium text-gray-600 dark:bg-gray-950 dark:text-gray-300">
+      Checking your session...
+    </div>
+  );
+}
+
+function ProtectedRoute({ children, isCheckingSession }) {
   const token = useAuthStore((state) => state.token);
+  if (isCheckingSession) {
+    return <SessionLoader />;
+  }
   return token ? children : <Navigate to="/login" replace />;
 }
 
-function PublicRoute({ children }) {
+function PublicRoute({ children, isCheckingSession }) {
   const token = useAuthStore((state) => state.token);
+  if (isCheckingSession) {
+    return <SessionLoader />;
+  }
   return token ? <Navigate to="/chat" replace /> : children;
 }
 
-function DefaultRoute() {
+function DefaultRoute({ isCheckingSession }) {
   const token = useAuthStore((state) => state.token);
+  if (isCheckingSession) {
+    return <SessionLoader />;
+  }
   return <Navigate to={token ? "/chat" : "/login"} replace />;
 }
 
 function App() {
   const isDark = useThemeStore((state) => state.isDark);
+  const token = useAuthStore((state) => state.token);
+  const setUser = useAuthStore((state) => state.setUser);
+  const logout = useAuthStore((state) => state.logout);
+  const [isCheckingSession, setIsCheckingSession] = useState(Boolean(token));
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
   }, [isDark]);
 
+  useEffect(() => {
+    let isActive = true;
+
+    if (!token) {
+      setIsCheckingSession(false);
+      return () => {
+        isActive = false;
+      };
+    }
+
+    setIsCheckingSession(true);
+    authAPI.me()
+      .then((response) => {
+        if (!isActive) {
+          return;
+        }
+
+        const user = response.data?.user;
+        if (user) {
+          setUser(user);
+        }
+      })
+      .catch(() => {
+        if (isActive) {
+          logout();
+        }
+      })
+      .finally(() => {
+        if (isActive) {
+          setIsCheckingSession(false);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [logout, setUser, token]);
+
   return (
     <>
       <Routes>
-        <Route path="/" element={<DefaultRoute />} />
+        <Route path="/" element={<DefaultRoute isCheckingSession={isCheckingSession} />} />
         <Route
           path="/login"
           element={(
-            <PublicRoute>
+            <PublicRoute isCheckingSession={isCheckingSession}>
               <Login />
             </PublicRoute>
           )}
@@ -56,7 +116,7 @@ function App() {
         <Route
           path="/signup"
           element={(
-            <PublicRoute>
+            <PublicRoute isCheckingSession={isCheckingSession}>
               <Signup />
             </PublicRoute>
           )}
@@ -64,7 +124,7 @@ function App() {
         <Route
           path="/chat"
           element={(
-            <ProtectedRoute>
+            <ProtectedRoute isCheckingSession={isCheckingSession}>
               <Chat />
             </ProtectedRoute>
           )}
@@ -72,7 +132,7 @@ function App() {
         <Route
           path="/code"
           element={(
-            <ProtectedRoute>
+            <ProtectedRoute isCheckingSession={isCheckingSession}>
               <CodeAssistant />
             </ProtectedRoute>
           )}
@@ -80,7 +140,7 @@ function App() {
         <Route
           path="/explain"
           element={(
-            <ProtectedRoute>
+            <ProtectedRoute isCheckingSession={isCheckingSession}>
               <ExplainAssistant />
             </ProtectedRoute>
           )}
@@ -88,7 +148,7 @@ function App() {
         <Route
           path="/reasoning"
           element={(
-            <ProtectedRoute>
+            <ProtectedRoute isCheckingSession={isCheckingSession}>
               <ReasoningAssistant />
             </ProtectedRoute>
           )}
@@ -96,7 +156,7 @@ function App() {
         <Route
           path="/knowledge"
           element={(
-            <ProtectedRoute>
+            <ProtectedRoute isCheckingSession={isCheckingSession}>
               <KnowledgeAssistant />
             </ProtectedRoute>
           )}
@@ -104,7 +164,7 @@ function App() {
         <Route
           path="/learning"
           element={(
-            <ProtectedRoute>
+            <ProtectedRoute isCheckingSession={isCheckingSession}>
               <LearningAssistant />
             </ProtectedRoute>
           )}
@@ -112,7 +172,7 @@ function App() {
         <Route
           path="/images"
           element={(
-            <ProtectedRoute>
+            <ProtectedRoute isCheckingSession={isCheckingSession}>
               <ImageGenerator />
             </ProtectedRoute>
           )}
@@ -120,7 +180,7 @@ function App() {
         <Route
           path="/documents"
           element={(
-            <ProtectedRoute>
+            <ProtectedRoute isCheckingSession={isCheckingSession}>
               <DocumentAnalyzer />
             </ProtectedRoute>
           )}
@@ -128,7 +188,7 @@ function App() {
         <Route
           path="/search"
           element={(
-            <ProtectedRoute>
+            <ProtectedRoute isCheckingSession={isCheckingSession}>
               <SearchChat />
             </ProtectedRoute>
           )}
@@ -136,7 +196,7 @@ function App() {
         <Route
           path="/my-shares"
           element={(
-            <ProtectedRoute>
+            <ProtectedRoute isCheckingSession={isCheckingSession}>
               <MyShares />
             </ProtectedRoute>
           )}
@@ -144,13 +204,13 @@ function App() {
         <Route
           path="/orchestrator"
           element={(
-            <ProtectedRoute>
+            <ProtectedRoute isCheckingSession={isCheckingSession}>
               <OrchestratorStudio />
             </ProtectedRoute>
           )}
         />
         <Route path="/share/:shareId" element={<SharedView />} />
-        <Route path="*" element={<DefaultRoute />} />
+        <Route path="*" element={<DefaultRoute isCheckingSession={isCheckingSession} />} />
       </Routes>
 
       <Toaster
