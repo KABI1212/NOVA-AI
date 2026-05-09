@@ -64,8 +64,11 @@ REGENERATE_VARIATION_INSTRUCTION = (
 CHATGPT_STYLE_COMPLETION_INSTRUCTION = (
     "Act as NOVA AI, a fast ChatGPT-style assistant. Start with the useful answer immediately, "
     "keep context from the conversation, and format with clean markdown when it helps. "
-    "For long or coding answers, finish every section, close all code fences, complete tables and lists, "
-    "and do not stop midway unless the user explicitly asks for a short reply."
+    "Always finish the complete answer logically: never stop in the middle of a sentence, paragraph, "
+    "numbered step, bullet list, table, or code block. For long answers, use clear sections with spacing "
+    "instead of truncating. Complete every code fence and markdown structure before ending. "
+    "Keep streaming-safe formatting: preserve markdown integrity, avoid aggressive sentence-by-sentence "
+    "rewrites, and continue until the user's request is fully answered unless they explicitly ask for a short reply."
 )
 _VOLATILE_FACT_PATTERN = re.compile(
     r"\b(?:weather|forecast|temperature|rain|snow|price|prices|pricing|stock price|share price|market cap|exchange rate|currency rate|flight status)\b",
@@ -1249,8 +1252,8 @@ def _needs_full_document_context(message: Optional[str]) -> bool:
 
 
 def _response_max_tokens(message: Optional[str], mode: str, doc_context: Optional[str] = None) -> int:
-    base = max(4096, int(getattr(settings, "AI_MAX_TOKENS", 8192) or 8192))
-    fast_cap = max(4000, int(getattr(settings, "AI_FAST_MAX_TOKENS", 4000) or 4000))
+    base = max(8000, int(getattr(settings, "AI_MAX_TOKENS", 8192) or 8192))
+    fast_cap = max(8000, int(getattr(settings, "AI_FAST_MAX_TOKENS", 8000) or 8000))
     cleaned_message = " ".join(str(message or "").split())
     if (mode or "").lower() == "image":
         return base
@@ -1320,7 +1323,7 @@ def _stream_repair_attempts() -> int:
 
 
 def _stream_repair_tokens(max_tokens: Optional[int]) -> int:
-    configured = max(4000, int(getattr(settings, "AI_STREAM_REPAIR_MAX_TOKENS", 4000) or 4000))
+    configured = max(8000, int(getattr(settings, "AI_STREAM_REPAIR_MAX_TOKENS", 8000) or 8000))
     return min(configured, max_tokens or configured)
 
 

@@ -1,3 +1,6 @@
 {
-  "python.defaultInterpreterPath": "${workspaceFolder}/backend/venv314/Scripts/python.exe"
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/venv314/Scripts/python.exe",
+  "cSpell.words": [
+    "pycache"
+  ]
 }
