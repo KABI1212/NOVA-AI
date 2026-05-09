@@ -82,72 +82,72 @@ export default function FileCard({ file, onPreview, onRetry, onRemove, disabled 
   const canRetry = file?.status === "failed" || file?.status === "failed-upload";
 
   return (
-    <div className="group rounded-3xl border border-white/10 bg-[linear-gradient(180deg,rgba(22,27,34,0.98)_0%,rgba(13,18,24,0.98)_100%)] p-4 shadow-[0_20px_48px_rgba(0,0,0,0.24)] transition-transform duration-200 hover:-translate-y-0.5">
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl bg-white/6 text-sky-200">
-          <Icon className="h-5 w-5" />
+    <div className="group rounded-2xl border border-white/10 bg-white/[0.025] p-3 shadow-none transition-colors duration-150 hover:bg-white/[0.04]">
+      <div className="flex items-start gap-2.5">
+        <div className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-white/5 text-slate-300">
+          <Icon className="h-4 w-4" />
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold tracking-tight text-slate-50">
+              <div className="truncate text-[13px] font-semibold tracking-tight text-slate-50">
                 {file?.original_name || file?.name || "Untitled file"}
               </div>
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
                 <span>{formatFileSize(file?.size)}</span>
-                <span className="rounded-full border border-white/10 px-2 py-0.5 uppercase tracking-[0.18em] text-[10px] text-slate-300">
+                <span className="rounded-full border border-white/10 px-1.5 py-0.5 uppercase tracking-[0.14em] text-[9px] text-slate-300">
                   {String(file?.status || "queued").replace(/-/g, " ")}
                 </span>
               </div>
             </div>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1">
               <button
                 type="button"
-                className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-slate-300 transition hover:border-sky-300/40 hover:bg-sky-500/10 hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-transparent text-slate-300 transition hover:border-sky-300/30 hover:bg-sky-500/10 hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={() => onPreview?.(file)}
                 disabled={disabled}
                 aria-label="Preview file"
                 title="Preview"
               >
-                <Eye className="h-4 w-4" />
+                <Eye className="h-3.5 w-3.5" />
               </button>
               {canRetry ? (
                 <button
                   type="button"
-                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-amber-300 transition hover:border-amber-300/40 hover:bg-amber-500/10 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-transparent text-amber-300 transition hover:border-amber-300/30 hover:bg-amber-500/10 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => onRetry?.(file)}
                   disabled={disabled}
                   aria-label="Retry upload"
                   title="Retry"
                 >
-                  <RefreshCw className="h-4 w-4" />
+                  <RefreshCw className="h-3.5 w-3.5" />
                 </button>
               ) : null}
               <button
                 type="button"
-                className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-slate-300 transition hover:border-rose-300/40 hover:bg-rose-500/10 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-transparent text-slate-300 transition hover:border-rose-300/30 hover:bg-rose-500/10 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={() => onRemove?.(file)}
                 disabled={disabled}
                 aria-label="Remove file"
                 title="Remove"
               >
-                <Trash2 className="h-4 w-4" />
+                <Trash2 className="h-3.5 w-3.5" />
               </button>
             </div>
           </div>
 
-          <div className="mt-3 space-y-2">
+          <div className="mt-2 space-y-1.5">
             <UploadProgressBar progress={progress} tone={tone} />
-            <div className="flex items-center gap-2 text-xs text-slate-300">
+            <div className="flex items-center gap-1.5 text-[11px] text-slate-300">
               {tone === "error" ? <AlertCircle className="h-3.5 w-3.5 text-rose-300" /> : null}
               <span>{statusLabel(file)}</span>
             </div>
           </div>
 
           {file?.preview_text ? (
-            <div className="mt-3 line-clamp-3 rounded-2xl border border-white/8 bg-black/20 px-3 py-2.5 text-xs leading-5 text-slate-300">
+            <div className="mt-2 line-clamp-2 rounded-xl border border-white/8 bg-black/20 px-2.5 py-2 text-[11px] leading-4 text-slate-300">
               {file.preview_text}
             </div>
           ) : null}
