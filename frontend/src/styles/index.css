@@ -350,3 +350,120 @@
   word-break: break-word;
   overflow-wrap: anywhere;
 }
+
+/* Premium AI answer formatting shared across assistant pages */
+.nova-markdown,
+.nova-markdown * {
+  font-family: "Times New Roman", Times, serif !important;
+}
+
+.nova-markdown {
+  counter-reset: nova-main-heading;
+  color: #f7f7f7;
+  animation: novaAnswerFade 0.32s ease both;
+}
+
+@keyframes novaAnswerFade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.nova-heading-main {
+  counter-increment: nova-main-heading;
+  color: #d4af37 !important;
+  font-size: clamp(20px, 2vw, 25px) !important;
+  font-weight: 800 !important;
+  transition: color 0.18s ease, text-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.nova-heading-main::before {
+  content: counter(nova-main-heading) ". ";
+  color: #d4af37;
+}
+
+.nova-heading-main:hover {
+  color: #f1d775 !important;
+  text-shadow: 0 0 18px rgba(212, 175, 55, 0.28);
+  transform: translateX(2px);
+}
+
+.nova-heading-sub {
+  color: #4da6ff !important;
+  font-weight: 650 !important;
+  transition: color 0.18s ease, text-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.nova-heading-sub:hover {
+  color: #7ec2ff !important;
+  text-shadow: 0 0 16px rgba(77, 166, 255, 0.28);
+  transform: translateX(2px);
+}
+
+.nova-hr.heading-separator,
+.nova-line {
+  height: 1px;
+  margin: 11px 0 22px;
+  background: linear-gradient(
+    to right,
+    rgba(77, 166, 255, 0.62),
+    rgba(212, 175, 55, 0.22),
+    transparent
+  );
+  box-shadow: 0 0 14px rgba(77, 166, 255, 0.16);
+}
+
+.nova-bullet-p,
+.nova-list-item {
+  position: relative;
+  padding-left: 30px;
+}
+
+.nova-bullet-p::before,
+.nova-list-unordered .nova-list-item::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 0.72em;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: radial-gradient(circle, #4da6ff 0 38%, rgba(77, 166, 255, 0.36) 42% 100%);
+  box-shadow: 0 0 12px rgba(77, 166, 255, 0.7);
+  transform: translateY(-50%);
+}
+
+.nova-list {
+  list-style: none;
+}
+
+.nova-list-ordered {
+  counter-reset: nova-ordered-list;
+}
+
+.nova-list-ordered .nova-list-item {
+  counter-increment: nova-ordered-list;
+}
+
+.nova-list-ordered .nova-list-item::before {
+  content: counter(nova-ordered-list) ".";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: #d4af37;
+  font-weight: 800;
+}
+
+.nova-list-item .nova-p {
+  padding-left: 0;
+}
+
+.nova-list-item .nova-p::before {
+  display: none;
+}

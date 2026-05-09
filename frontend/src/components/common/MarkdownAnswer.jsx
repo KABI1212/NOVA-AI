@@ -159,6 +159,22 @@ function normalizeHeadingSeparators(value) {
   return output.join("\n");
 }
 
+function paragraphClassName(children) {
+  const text = extractPlainText(children).trim();
+  const lowerText = text.toLowerCase();
+  const classes = ["nova-p", "nova-bullet-p"];
+
+  if (/^(?:💡\s*)?example\s*:/i.test(text) || lowerText.startsWith("💡 example")) {
+    classes.push("example");
+  } else if (/^(?:✨\s*)?(?:important|note)\s*:/i.test(text) || lowerText.startsWith("✨")) {
+    classes.push("note");
+  } else if (/^(?:📌\s*)?(?:key|important)\s*/i.test(text) || lowerText.startsWith("📌")) {
+    classes.push("key");
+  }
+
+  return classes.join(" ");
+}
+
 function MarkdownCodeBlock({ children, fullContent = "", ...props }) {
   const [copied, setCopied] = useState(false);
   const code = extractPlainText(children).replace(/\n$/, "");
@@ -216,17 +232,22 @@ function MarkdownAnswer({ content = "", className = "", streaming = false }) {
   const normalizedContent = streaming ? normalizeStreamingMarkdown(deferredContent) : content;
   const renderContent = normalizeHeadingSeparators(normalizedContent);
   const rootClassName = `nova-markdown${className ? ` ${className}` : ""}`;
+  const Heading = ({ level, className: headingClassName, children }) => {
+    const Tag = `h${level}`;
+    const toneClassName = level <= 2 ? "nova-heading-main" : "nova-heading-sub";
+    return <Tag className={`${headingClassName} ${toneClassName}`}>{children}</Tag>;
+  };
 
   return (
     <div className={rootClassName}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
         components={{
-          h1: ({ children }) => <h1 className="nova-h1">{children}</h1>,
-          h2: ({ children }) => <h2 className="nova-h2">{children}</h2>,
-          h3: ({ children }) => <h3 className="nova-h3">{children}</h3>,
-          h4: ({ children }) => <h4 className="nova-h4">{children}</h4>,
-          p: ({ children }) => <p className="nova-p">{children}</p>,
+          h1: ({ children }) => <Heading level={1} className="nova-h1">{children}</Heading>,
+          h2: ({ children }) => <Heading level={2} className="nova-h2">{children}</Heading>,
+          h3: ({ children }) => <Heading level={3} className="nova-h3">{children}</Heading>,
+          h4: ({ children }) => <Heading level={4} className="nova-h4">{children}</Heading>,
+          p: ({ children }) => <p className={paragraphClassName(children)}>{children}</p>,
           ul: ({ children }) => <ul className="nova-list nova-list-unordered">{children}</ul>,
           ol: ({ children }) => <ol className="nova-list nova-list-ordered">{children}</ol>,
           li: ({ children }) => <li className="nova-list-item">{children}</li>,
