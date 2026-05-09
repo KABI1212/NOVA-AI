@@ -204,7 +204,7 @@ async def _stream_file_completion(
                 _continuation_messages(messages, full_response),
                 provider=None,
                 model=None,
-                max_tokens=min(1600, max_tokens or 1600),
+                max_tokens=min(4000, max_tokens or 4000),
                 use_case=use_case,
             ):
                 if not chunk:
@@ -218,7 +218,7 @@ async def _stream_file_completion(
 def _file_response_max_tokens(message: str, has_context: bool) -> int:
     if has_context and LONG_FILE_REQUEST_PATTERN.search(message or ""):
         return LONG_FILE_RESPONSE_MAX_TOKENS
-    return 8192 if has_context else 4096
+    return 8192 if has_context else 4000
 
 
 async def _serialize_records(db: Session, records: list[FileRecord]) -> list[dict[str, Any]]:

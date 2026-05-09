@@ -467,3 +467,13 @@
 .nova-list-item .nova-p::before {
   display: none;
 }
+
+.nova-markdown-fallback {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #f4f4f4;
+  font-family: "Times New Roman", Times, serif !important;
+  font-size: 16px;
+  line-height: 1.68;
+}

@@ -1,4 +1,4 @@
-import { memo, useDeferredValue, useEffect, useState } from "react";
+import { Component, memo, useDeferredValue, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -175,6 +175,31 @@ function paragraphClassName(children) {
   return classes.join(" ");
 }
 
+class MarkdownRenderBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidUpdate(previousProps) {
+    if (previousProps.content !== this.props.content && this.state.failed) {
+      this.setState({ failed: false });
+    }
+  }
+
+  render() {
+    if (this.state.failed) {
+      return <pre className="nova-markdown-fallback">{this.props.content || ""}</pre>;
+    }
+
+    return this.props.children;
+  }
+}
+
 function MarkdownCodeBlock({ children, fullContent = "", ...props }) {
   const [copied, setCopied] = useState(false);
   const code = extractPlainText(children).replace(/\n$/, "");
@@ -240,72 +265,74 @@ function MarkdownAnswer({ content = "", className = "", streaming = false }) {
 
   return (
     <div className={rootClassName}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkBreaks]}
-        components={{
-          h1: ({ children }) => <Heading level={1} className="nova-h1">{children}</Heading>,
-          h2: ({ children }) => <Heading level={2} className="nova-h2">{children}</Heading>,
-          h3: ({ children }) => <Heading level={3} className="nova-h3">{children}</Heading>,
-          h4: ({ children }) => <Heading level={4} className="nova-h4">{children}</Heading>,
-          p: ({ children }) => <p className={paragraphClassName(children)}>{children}</p>,
-          ul: ({ children }) => <ul className="nova-list nova-list-unordered">{children}</ul>,
-          ol: ({ children }) => <ol className="nova-list nova-list-ordered">{children}</ol>,
-          li: ({ children }) => <li className="nova-list-item">{children}</li>,
-          strong: ({ children }) => <strong className="nova-strong">{children}</strong>,
-          em: ({ children }) => <em className="nova-em">{children}</em>,
-          blockquote: ({ children }) => <blockquote className="nova-blockquote">{children}</blockquote>,
-          hr: () => <hr className="nova-hr heading-separator" />,
-          a: ({ href, children }) =>
-            href ? (
-              <a className="nova-link" href={href} target="_blank" rel="noreferrer">
-                {children}
-              </a>
-            ) : (
-              <span className="nova-link">{children}</span>
-            ),
-          img: ({ src, alt }) =>
-            src ? <img className="nova-image" src={src} alt={alt || "Illustration"} loading="lazy" /> : null,
-          table: ({ children }) => (
-            <div className="nova-table-wrap">
-              <table className="nova-table">{children}</table>
-            </div>
-          ),
-          thead: ({ children }) => <thead className="nova-thead">{children}</thead>,
-          tbody: ({ children }) => <tbody className="nova-tbody">{children}</tbody>,
-          tr: ({ children }) => <tr className="nova-tr">{children}</tr>,
-          th: ({ children }) => <th className="nova-th">{children}</th>,
-          td: ({ children }) => <td className="nova-td">{children}</td>,
-          input: ({ type, checked, ...props }) =>
-            type === "checkbox" ? (
-              <input
-                type="checkbox"
-                checked={Boolean(checked)}
-                readOnly
-                disabled
-                className="nova-checkbox"
-              />
-            ) : (
-              <input type={type} {...props} />
-            ),
-          code({ inline, children, ...props }) {
-            if (inline) {
-              return (
-                <code className="nova-inline-code" {...props}>
+      <MarkdownRenderBoundary content={renderContent}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm, remarkBreaks]}
+          components={{
+            h1: ({ children }) => <Heading level={1} className="nova-h1">{children}</Heading>,
+            h2: ({ children }) => <Heading level={2} className="nova-h2">{children}</Heading>,
+            h3: ({ children }) => <Heading level={3} className="nova-h3">{children}</Heading>,
+            h4: ({ children }) => <Heading level={4} className="nova-h4">{children}</Heading>,
+            p: ({ children }) => <p className={paragraphClassName(children)}>{children}</p>,
+            ul: ({ children }) => <ul className="nova-list nova-list-unordered">{children}</ul>,
+            ol: ({ children }) => <ol className="nova-list nova-list-ordered">{children}</ol>,
+            li: ({ children }) => <li className="nova-list-item">{children}</li>,
+            strong: ({ children }) => <strong className="nova-strong">{children}</strong>,
+            em: ({ children }) => <em className="nova-em">{children}</em>,
+            blockquote: ({ children }) => <blockquote className="nova-blockquote">{children}</blockquote>,
+            hr: () => <hr className="nova-hr heading-separator" />,
+            a: ({ href, children }) =>
+              href ? (
+                <a className="nova-link" href={href} target="_blank" rel="noreferrer">
                   {children}
-                </code>
-              );
-            }
+                </a>
+              ) : (
+                <span className="nova-link">{children}</span>
+              ),
+            img: ({ src, alt }) =>
+              src ? <img className="nova-image" src={src} alt={alt || "Illustration"} loading="lazy" /> : null,
+            table: ({ children }) => (
+              <div className="nova-table-wrap">
+                <table className="nova-table">{children}</table>
+              </div>
+            ),
+            thead: ({ children }) => <thead className="nova-thead">{children}</thead>,
+            tbody: ({ children }) => <tbody className="nova-tbody">{children}</tbody>,
+            tr: ({ children }) => <tr className="nova-tr">{children}</tr>,
+            th: ({ children }) => <th className="nova-th">{children}</th>,
+            td: ({ children }) => <td className="nova-td">{children}</td>,
+            input: ({ type, checked, ...props }) =>
+              type === "checkbox" ? (
+                <input
+                  type="checkbox"
+                  checked={Boolean(checked)}
+                  readOnly
+                  disabled
+                  className="nova-checkbox"
+                />
+              ) : (
+                <input type={type} {...props} />
+              ),
+            code({ inline, children, ...props }) {
+              if (inline) {
+                return (
+                  <code className="nova-inline-code" {...props}>
+                    {children}
+                  </code>
+                );
+              }
 
-            return (
-              <MarkdownCodeBlock {...props} fullContent={renderContent}>
-                {children}
-              </MarkdownCodeBlock>
-            );
-          },
-        }}
-      >
-        {renderContent}
-      </ReactMarkdown>
+              return (
+                <MarkdownCodeBlock {...props} fullContent={renderContent}>
+                  {children}
+                </MarkdownCodeBlock>
+              );
+            },
+          }}
+        >
+          {renderContent || ""}
+        </ReactMarkdown>
+      </MarkdownRenderBoundary>
     </div>
   );
 }

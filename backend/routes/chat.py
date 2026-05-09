@@ -1250,13 +1250,13 @@ def _needs_full_document_context(message: Optional[str]) -> bool:
 
 def _response_max_tokens(message: Optional[str], mode: str, doc_context: Optional[str] = None) -> int:
     base = max(4096, int(getattr(settings, "AI_MAX_TOKENS", 8192) or 8192))
-    fast_cap = int(getattr(settings, "AI_FAST_MAX_TOKENS", 640) or 640)
+    fast_cap = max(4000, int(getattr(settings, "AI_FAST_MAX_TOKENS", 4000) or 4000))
     cleaned_message = " ".join(str(message or "").split())
     if (mode or "").lower() == "image":
         return base
 
     if infer_use_case(mode, cleaned_message) == "quick":
-        return max(160, min(base, fast_cap))
+        return min(base, fast_cap)
 
     marks = [int(match.group("marks")) for match in _MARKS_PATTERN.finditer(cleaned_message)]
 
@@ -1320,7 +1320,7 @@ def _stream_repair_attempts() -> int:
 
 
 def _stream_repair_tokens(max_tokens: Optional[int]) -> int:
-    configured = max(256, int(getattr(settings, "AI_STREAM_REPAIR_MAX_TOKENS", 1600) or 1600))
+    configured = max(4000, int(getattr(settings, "AI_STREAM_REPAIR_MAX_TOKENS", 4000) or 4000))
     return min(configured, max_tokens or configured)
 
 

@@ -61,11 +61,11 @@ def _read_timeout_seconds() -> float:
     Separate read timeout used for streaming to avoid killing long responses.
     For non-streaming this is the full request timeout.
     """
-    return max(10.0, float(getattr(settings, "AI_REQUEST_TIMEOUT_SECONDS", 60) or 60))
+    return max(300.0, float(getattr(settings, "AI_REQUEST_TIMEOUT_SECONDS", 300) or 300))
 
 
 def _stream_read_timeout_seconds() -> float:
-    return max(30.0, float(getattr(settings, "AI_STREAM_TIMEOUT_SECONDS", 120) or 120))
+    return max(600.0, float(getattr(settings, "AI_STREAM_TIMEOUT_SECONDS", 600) or 600))
 
 
 def _preview_text(text: str) -> str:

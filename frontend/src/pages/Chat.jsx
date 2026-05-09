@@ -16,7 +16,7 @@ import UploadedFilesPanel from "../components/uploads/UploadedFilesPanel";
 import { chatAPI, fetchApi, filesAPI, imageAPI } from "../services/api";
 import { speakText, speechSupported as browserSpeechSupported, stopSpeechPlayback } from "../utils/speech";
 import { useAuthStore } from "../utils/store";
-const REQUEST_TIMEOUT_MS = 600000;
+const REQUEST_TIMEOUT_MS = 1800000;
 const REQUEST_TIMEOUT_MINUTES = Math.round(REQUEST_TIMEOUT_MS / 60000);
 const STREAM_RENDER_INTERVAL_MS = 32;
 const SESSION_STORAGE_KEY = "nova_session_id";
