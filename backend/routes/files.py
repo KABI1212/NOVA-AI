@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import re
 from typing import Any, Optional
 
@@ -108,12 +109,103 @@ def _stream_headers() -> dict[str, str]:
     }
 
 
+def _sse_comment(value: str = "keepalive") -> str:
+    return f": {value}\n\n"
+
+
 def _finalize_answer(text: str) -> str:
     answer = str(text or "").strip()
     if answer.count("```") % 2 == 1:
         answer = f"{answer.rstrip()}\n```"
     answer = re.sub(r"(?m)\n?\s*(?:[-*+]|\d+[.)])\s*$", "", answer.rstrip()).strip()
     return answer
+
+
+def _looks_unfinished_answer(text: str) -> bool:
+    answer = str(text or "").strip()
+    if not answer:
+        return True
+    if answer.count("```") % 2 == 1:
+        return True
+    if re.search(r"(?m)(?:^|\n)\s*(?:[-*+]|\d+[.)])\s*$", answer):
+        return True
+    if re.search(r"(?:\b(?:and|or|the|a|an|to|with|for|because|while|if|when|where|which|that|this|from)|[,;:])$", answer, re.I):
+        return True
+    return False
+
+
+def _continuation_messages(messages: list[dict[str, str]], partial_answer: str) -> list[dict[str, str]]:
+    return [
+        *messages,
+        {"role": "assistant", "content": partial_answer[-6000:]},
+        {
+            "role": "user",
+            "content": (
+                "Continue the previous answer exactly from where it stopped. "
+                "Do not restart, do not repeat earlier text, and close any open markdown or code blocks."
+            ),
+        },
+    ]
+
+
+async def _stream_file_completion(
+    messages: list[dict[str, str]],
+    *,
+    provider: str | None,
+    model: str | None,
+    max_tokens: int | None,
+    use_case: str,
+):
+    heartbeat_seconds = 15
+    full_response = ""
+    yield _sse_event({"type": "start"}), full_response
+
+    provider_stream = ai_service.chat_stream(
+        messages,
+        provider=provider,
+        model=model,
+        max_tokens=max_tokens,
+        use_case=use_case,
+    ).__aiter__()
+    pending_chunk = None
+    try:
+        while True:
+            if pending_chunk is None:
+                pending_chunk = asyncio.create_task(provider_stream.__anext__())
+            try:
+                chunk = await asyncio.wait_for(asyncio.shield(pending_chunk), timeout=heartbeat_seconds)
+            except asyncio.TimeoutError:
+                yield _sse_comment(), full_response
+                continue
+            except StopAsyncIteration:
+                break
+
+            pending_chunk = None
+            if not chunk:
+                continue
+            full_response += chunk
+            yield _sse_event({"type": "delta", "content": chunk}), full_response
+    except Exception:
+        if not full_response:
+            raise
+
+    for _ in range(2):
+        if not _looks_unfinished_answer(full_response):
+            break
+        try:
+            async for chunk in ai_service.chat_stream(
+                _continuation_messages(messages, full_response),
+                provider=None,
+                model=None,
+                max_tokens=min(1600, max_tokens or 1600),
+                use_case=use_case,
+            ):
+                if not chunk:
+                    continue
+                full_response += chunk
+                yield _sse_event({"type": "delta", "content": chunk}), full_response
+        except Exception:
+            break
 
 
 def _file_response_max_tokens(message: str, has_context: bool) -> int:
@@ -389,18 +481,14 @@ async def chat_with_files(
         async def generate() -> Any:
             full_response = ""
             try:
-                yield _sse_event({"type": "start"})
-                async for chunk in ai_service.chat_stream(
+                async for event, full_response in _stream_file_completion(
                     messages,
                     provider=request_body.provider,
                     model=request_body.model,
                     max_tokens=response_max_tokens,
                     use_case=use_case,
                 ):
-                    if not chunk:
-                        continue
-                    full_response += chunk
-                    yield _sse_event({"type": "delta", "content": chunk})
+                    yield event
 
                 final_answer = _finalize_answer(full_response)
                 if not final_answer:

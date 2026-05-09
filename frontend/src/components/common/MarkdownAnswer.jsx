@@ -117,6 +117,19 @@ function resolvePreferredCopyValue(blockCode, fullContent) {
   return [...outsideContent, normalizedBlockCode].join("\n").trim();
 }
 
+function normalizeStreamingMarkdown(value) {
+  const text = String(value || "");
+  if (!text.trim()) {
+    return text;
+  }
+
+  let normalized = text;
+  if ((normalized.match(/```/g) || []).length % 2 === 1) {
+    normalized = `${normalized.trimEnd()}\n\`\`\``;
+  }
+  return normalized;
+}
+
 function MarkdownCodeBlock({ children, fullContent = "", ...props }) {
   const [copied, setCopied] = useState(false);
   const code = extractPlainText(children).replace(/\n$/, "");
@@ -171,7 +184,7 @@ function MarkdownCodeBlock({ children, fullContent = "", ...props }) {
 
 function MarkdownAnswer({ content = "", className = "", streaming = false }) {
   const deferredContent = useDeferredValue(content);
-  const renderContent = streaming ? deferredContent : content;
+  const renderContent = streaming ? normalizeStreamingMarkdown(deferredContent) : content;
   const rootClassName = `nova-markdown${className ? ` ${className}` : ""}`;
 
   return (

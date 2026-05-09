@@ -1311,6 +1311,15 @@ def _looks_unfinished_answer(text: str) -> bool:
     return False
 
 
+def _stream_repair_attempts() -> int:
+    return max(0, min(int(getattr(settings, "AI_STREAM_REPAIR_ATTEMPTS", 2) or 2), 4))
+
+
+def _stream_repair_tokens(max_tokens: Optional[int]) -> int:
+    configured = max(256, int(getattr(settings, "AI_STREAM_REPAIR_MAX_TOKENS", 1600) or 1600))
+    return min(configured, max_tokens or configured)
+
+
 def _continuation_messages(ai_messages: List[dict], partial_answer: str) -> List[dict]:
     return [
         *ai_messages,
@@ -1323,6 +1332,24 @@ def _continuation_messages(ai_messages: List[dict], partial_answer: str) -> List
             ),
         },
     ]
+
+
+async def _stream_continuation_repair(
+    ai_messages: List[dict],
+    partial_answer: str,
+    *,
+    max_tokens: Optional[int],
+    use_case: Optional[str],
+):
+    async for chunk in ai_service.chat_stream(
+        _continuation_messages(ai_messages, partial_answer),
+        provider=None,
+        model=None,
+        max_tokens=_stream_repair_tokens(max_tokens),
+        use_case=use_case,
+    ):
+        if chunk:
+            yield chunk
 
 
 async def _stream_ai_answer(
@@ -1374,17 +1401,13 @@ async def _stream_ai_answer(
         if not full_response:
             raise
 
-        repair_tokens = max(256, int(getattr(settings, "AI_STREAM_REPAIR_MAX_TOKENS", 1600) or 1600))
         try:
-            async for chunk in ai_service.chat_stream(
-                _continuation_messages(ai_messages, full_response),
-                provider=None,
-                model=None,
-                max_tokens=min(repair_tokens, max_tokens or repair_tokens),
+            async for chunk in _stream_continuation_repair(
+                ai_messages,
+                full_response,
+                max_tokens=max_tokens,
                 use_case=use_case,
             ):
-                if not chunk:
-                    continue
                 full_response += chunk
                 yield _sse_event({"type": "delta", "content": chunk})
         except Exception as repair_exc:
@@ -1394,26 +1417,26 @@ async def _stream_ai_answer(
                 repair_exc,
             )
 
-    if _looks_unfinished_answer(full_response):
+    for attempt in range(_stream_repair_attempts()):
+        if not _looks_unfinished_answer(full_response):
+            break
         try:
-            repair_tokens = max(256, int(getattr(settings, "AI_STREAM_REPAIR_MAX_TOKENS", 1600) or 1600))
-            async for chunk in ai_service.chat_stream(
-                _continuation_messages(ai_messages, full_response),
-                provider=None,
-                model=None,
-                max_tokens=min(repair_tokens, max_tokens or repair_tokens),
+            async for chunk in _stream_continuation_repair(
+                ai_messages,
+                full_response,
+                max_tokens=max_tokens,
                 use_case=use_case,
             ):
-                if not chunk:
-                    continue
                 full_response += chunk
                 yield _sse_event({"type": "delta", "content": chunk})
         except Exception as repair_exc:
             logger.warning(
-                "Unfinished-answer continuation failed chars=%s error=%s",
+                "Unfinished-answer continuation failed attempt=%s chars=%s error=%s",
+                attempt + 1,
                 len(full_response),
                 repair_exc,
             )
+            break
 
     if asyncio.get_running_loop().time() - last_flush_at >= heartbeat_seconds:
         yield _sse_comment()

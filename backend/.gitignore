@@ -1,9 +1,19 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.sqlite3
 
-# Env files
+# Environment
 .env
+venv/
+env/
+
+# Temp
+.tmp/
+_py_tmp/
+.tmp_test_artifacts/
 
 # Logs
 *.log
@@ -12,9 +22,12 @@ logs/
 # Uploads
 uploads/
 
-# Node/Vite
+# Node / Build
 node_modules/
 dist/
+build/
 
-# OS
+# OS files
+desktop.ini
+Thumbs.db
 .DS_Store

@@ -17,6 +17,7 @@ import { chatAPI, fetchApi, filesAPI, imageAPI } from "../services/api";
 import { speakText, speechSupported as browserSpeechSupported, stopSpeechPlayback } from "../utils/speech";
 import { useAuthStore } from "../utils/store";
 const REQUEST_TIMEOUT_MS = 600000;
+const REQUEST_TIMEOUT_MINUTES = Math.round(REQUEST_TIMEOUT_MS / 60000);
 const STREAM_RENDER_INTERVAL_MS = 32;
 const SESSION_STORAGE_KEY = "nova_session_id";
 const MODEL_STORAGE_KEY = "nova_selected_model";
@@ -1711,6 +1712,14 @@ function Chat() {
           "NOVA AI: ...";
         const { promptImages, answerImages } = getResponseImages(finalPayload);
         const answerSources = getResponseSources(finalPayload);
+        if (!finalPayload && streamedReply.trim()) {
+          finalPayload = {
+            type: "final",
+            answer: streamedReply,
+            conversation_id: currentConversationId,
+            error: "partial",
+          };
+        }
         if (finalPayload?.error === "retry" || finalPayload?.error === "partial") {
           toast.error("NOVA AI had to recover the stream. The answer shown is the safest completed text available.");
         }
@@ -1788,7 +1797,7 @@ function Chat() {
 
         const timeoutMessage =
           error?.name === "AbortError"
-            ? "NOVA AI did not finish within 2 minutes. Please try again in a moment."
+            ? `NOVA AI did not finish within ${REQUEST_TIMEOUT_MINUTES} minutes. Please try again in a moment.`
             : uploadError || "NOVA AI encountered an issue but is still running.";
 
         setMessages((previous) => [
