@@ -59,6 +59,12 @@ REGENERATE_VARIATION_INSTRUCTION = (
     "This is a regenerate request. Give a fresh version of the answer. "
     "Do not repeat the previous wording. Improve clarity, add a useful example, or simplify the explanation."
 )
+CHATGPT_STYLE_COMPLETION_INSTRUCTION = (
+    "Act as NOVA AI, a fast ChatGPT-style assistant. Start with the useful answer immediately, "
+    "keep context from the conversation, and format with clean markdown when it helps. "
+    "For long or coding answers, finish every section, close all code fences, complete tables and lists, "
+    "and do not stop midway unless the user explicitly asks for a short reply."
+)
 _VOLATILE_FACT_PATTERN = re.compile(
     r"\b(?:weather|forecast|temperature|rain|snow|price|prices|pricing|stock price|share price|market cap|exchange rate|currency rate|flight status)\b",
     re.IGNORECASE,
@@ -1687,6 +1693,8 @@ def _build_ai_messages(
         instruction_message=instruction_message,
     )
     insert_index = 1
+    ai_messages.insert(insert_index, {"role": "system", "content": CHATGPT_STYLE_COMPLETION_INSTRUCTION})
+    insert_index += 1
     if extra_instruction:
         ai_messages.insert(insert_index, {"role": "system", "content": extra_instruction})
         insert_index += 1

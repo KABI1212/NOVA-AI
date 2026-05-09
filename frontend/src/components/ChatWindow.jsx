@@ -322,7 +322,7 @@ function ChatWindow({
                     </>
                   ) : (
                     <>
-                      <MarkdownAnswer content={message.content} />
+                      <MarkdownAnswer content={message.content} streaming={Boolean(message.streaming)} />
                       <MessageImages message={message} />
                     </>
                   )}

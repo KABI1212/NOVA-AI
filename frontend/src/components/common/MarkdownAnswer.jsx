@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useDeferredValue, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -169,7 +169,9 @@ function MarkdownCodeBlock({ children, fullContent = "", ...props }) {
   );
 }
 
-export default function MarkdownAnswer({ content = "", className = "" }) {
+function MarkdownAnswer({ content = "", className = "", streaming = false }) {
+  const deferredContent = useDeferredValue(content);
+  const renderContent = streaming ? deferredContent : content;
   const rootClassName = `nova-markdown${className ? ` ${className}` : ""}`;
 
   return (
@@ -231,15 +233,17 @@ export default function MarkdownAnswer({ content = "", className = "" }) {
             }
 
             return (
-              <MarkdownCodeBlock {...props} fullContent={content}>
+              <MarkdownCodeBlock {...props} fullContent={renderContent}>
                 {children}
               </MarkdownCodeBlock>
             );
           },
         }}
       >
-        {content}
+        {renderContent}
       </ReactMarkdown>
     </div>
   );
 }
+
+export default memo(MarkdownAnswer);

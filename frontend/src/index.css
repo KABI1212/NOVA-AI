@@ -778,13 +778,13 @@ body {
 .chat-inner {
   width: min(980px, 100%);
   margin: 0 auto;
-  padding: 18px 20px 12px;
-  border-radius: 16px;
-  background: #1f1f1f;
-  border: 0.5px solid #2a2a2a;
+  padding: 18px clamp(8px, 2vw, 20px) 12px;
+  border-radius: 0;
+  background: transparent;
+  border: none;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 18px;
 }
 
 .hero-wrap {
@@ -891,7 +891,8 @@ body {
   border-radius: 10px;
   font-size: 10px;
   line-height: 1.6;
-  word-break: break-word;
+  word-break: normal;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   overflow-x: auto;
 }
@@ -902,20 +903,21 @@ body {
   border: 0.5px solid #2b2b2b;
   border-radius: 12px;
   min-width: 56px;
-  max-width: 360px;
+  max-width: min(720px, calc(100vw - 52px));
   align-self: flex-end;
   font-size: 13.5px;
 }
 
 .msg.a .bb {
-  background: #232323;
+  background: transparent;
   color: var(--text);
   border-radius: 12px;
-  border: 0.5px solid #2b2b2b;
-  max-width: 74%;
-  font-size: 14.5px;
-  line-height: 1.88;
+  border: none;
+  max-width: min(880px, 100%);
+  font-size: 15.5px;
+  line-height: 1.78;
   white-space: normal;
+  padding: 4px 0;
 }
 
 .bb p {
@@ -1064,6 +1066,7 @@ body {
 .nova-code-block {
   margin: 12px 0;
   position: relative;
+  max-width: 100%;
   overflow-x: auto;
   border: 0.5px solid #2b2b2b;
   border-radius: 14px;
@@ -1112,6 +1115,7 @@ body {
   font-size: 13px;
   line-height: 1.75;
   overflow-x: auto;
+  max-width: 100%;
 }
 
 .nova-code-pre code {
@@ -1158,7 +1162,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  max-width: 74%;
+  max-width: min(880px, 100%);
 }
 
 .msg.u .message-sources {
@@ -1373,7 +1377,7 @@ pre {
   background: #11161b;
   border: none;
   color: #ffffff;
-  white-space: pre-wrap;
+  white-space: pre;
 }
 
 .bb table {
@@ -1823,10 +1827,10 @@ pre {
 .input-pill {
   width: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 8px;
   padding: 10px 12px;
-  border-radius: 999px;
+  border-radius: 28px;
   background: linear-gradient(180deg, #302f2b 0%, #2a2925 100%);
   border: 1px solid rgba(255, 255, 255, 0.07);
   box-shadow:
@@ -1846,7 +1850,8 @@ pre {
   font-family: "Times New Roman", Times, serif;
   padding: 10px 6px;
   min-height: 24px;
-  max-height: 140px;
+  max-height: min(40vh, 320px);
+  overflow-y: auto;
   caret-color: #7ec8f8;
 }
 
@@ -2887,6 +2892,8 @@ pre {
 
   .input-pill {
     padding: 8px 10px;
+    border-radius: 24px;
+    align-items: flex-end;
   }
 
   .input-meta {
@@ -2899,6 +2906,18 @@ pre {
 
   .msg.a .bb {
     max-width: 100%;
+  }
+
+  .msg.u .bb {
+    max-width: min(100%, calc(100vw - 36px));
+  }
+
+  .chat {
+    padding-inline: 8px;
+  }
+
+  .chat-inner {
+    padding-inline: 4px;
   }
 
   .settings-modal {
