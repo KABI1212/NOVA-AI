@@ -1,16 +1,24 @@
 from utils.format_ai_response import format_ai_response
 
 
-def test_format_ai_response_converts_plain_sentences_to_bullets() -> None:
-    result = format_ai_response(
-        "AI can help users answer questions. It can summarize files. It also writes code."
+def test_format_ai_response_keeps_short_natural_text() -> None:
+    text = "AI can help users answer questions. It can summarize files. It also writes code."
+
+    assert format_ai_response(text) == text
+
+
+def test_format_ai_response_softly_marks_long_plain_lines() -> None:
+    text = (
+        "Artificial intelligence helps teams process large amounts of information, "
+        "reduce repetitive work, improve decision-making, and respond faster to "
+        "customer needs without forcing every task to be handled manually."
     )
 
-    assert result == (
-        "🔹 AI can help users answer questions.\n\n"
-        "🔹 It can summarize files.\n\n"
-        "🔹 It also writes code."
-    )
+    assert format_ai_response(text) == f"🔹 {text}"
+
+
+def test_format_ai_response_detects_short_heading_lines() -> None:
+    assert format_ai_response("Automation and Efficiency") == "## Automation and Efficiency"
 
 
 def test_format_ai_response_skips_code_blocks() -> None:

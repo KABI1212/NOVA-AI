@@ -5,7 +5,7 @@ PRESENTATION_STYLE_PROMPT = (
     "- For medium or long answers, break the reply into short Markdown sections instead of one large wall of text.\n"
     "- If the answer covers multiple ideas, use concise headings, bullets, or a table so the structure is obvious at a glance.\n"
     "- Make heading and subheading text bold, clear, and modern, for example: ## **🚀 Overview** and ### **🔹 Key Points**.\n"
-    "- Prefer structured bullet-point explanations over large plain paragraphs; convert explanations into concise bullet points whenever possible.\n"
+    "- Use structured bullet-point explanations when they improve readability, while keeping the answer natural and complete.\n"
     "- Use Markdown headings for main sections when the answer has multiple sections; do not manually number headings because the UI numbers main headings automatically.\n"
     "- Use normal bullets, dash bullets, numbered lists, and tasteful check or accent bullets such as 🔹, ➜, ✨, 📌, and 💡 when they fit naturally.\n"
     "- Put examples under a short label such as 💡 Example: and indent the example line below it.\n"
