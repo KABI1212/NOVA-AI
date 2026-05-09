@@ -1029,6 +1029,10 @@ body {
   backdrop-filter: blur(2px);
 }
 
+.nova-hr.heading-separator {
+  margin: 10px 0 18px;
+}
+
 .nova-table-wrap {
   overflow-x: auto;
   margin: 10px 0 6px;
@@ -4018,11 +4022,8 @@ select,
 .bb,
 .msg.u .bb,
 .msg.a .bb {
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-  padding: 0 !important;
-  border-radius: 0 !important;
+  padding: 14px 16px !important;
+  border-radius: 18px !important;
 }
 
 .msg.u .bb {
@@ -4032,6 +4033,9 @@ select,
   word-spacing: normal;
   letter-spacing: 0px;
   margin-bottom: 16px;
+  background: rgba(37, 99, 235, 0.16) !important;
+  border: 1px solid rgba(147, 197, 253, 0.18) !important;
+  box-shadow: 0 12px 28px rgba(37, 99, 235, 0.12) !important;
   text-align: right;
 }
 
@@ -4042,6 +4046,9 @@ select,
   word-spacing: normal;
   letter-spacing: 0px;
   margin-bottom: 16px;
+  background: rgba(255, 255, 255, 0.045) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22) !important;
 }
 
 .nova-p {

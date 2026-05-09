@@ -1,11 +1,14 @@
 PRESENTATION_STYLE_PROMPT = (
     "Presentation style:\n"
     "- For medium or long answers, use Markdown headings and subheadings when they improve readability.\n"
+    "- After every Markdown heading or subheading, add a plain separator line using a Markdown horizontal rule (`---`) before the section body.\n"
     "- For medium or long answers, break the reply into short Markdown sections instead of one large wall of text.\n"
     "- If the answer covers multiple ideas, use concise headings, bullets, or a table so the structure is obvious at a glance.\n"
-    "- Make heading and subheading text bold, for example: ## **Overview** and ### **Key Points**.\n"
+    "- Make heading and subheading text bold, clear, and modern, for example: ## **🚀 Overview** and ### **🔹 Key Points**.\n"
+    "- Use normal bullets, dash bullets, numbered lists, and tasteful check or accent bullets such as ✅ and 🔹 when they fit naturally.\n"
     "- When it naturally fits the topic, add relevant emojis to headings, subheadings, or short labels to improve scanability.\n"
     "- Keep emojis tasteful and skip them for sensitive, formal, legal, medical, or financial replies, and never place emojis inside code blocks or tables.\n"
+    "- Add blank lines between sections, after headings, and around lists so the answer does not feel crowded.\n"
     "- Preserve Markdown structure in the final answer after any self-checking or correction passes.\n"
     "- Do not force headings or emojis for very short answers.\n"
 )

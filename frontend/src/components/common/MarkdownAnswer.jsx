@@ -130,6 +130,35 @@ function normalizeStreamingMarkdown(value) {
   return normalized;
 }
 
+function normalizeHeadingSeparators(value) {
+  const lines = String(value || "").split("\n");
+  const output = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    output.push(line);
+
+    if (!/^\s{0,3}#{1,4}\s+\S/.test(line)) {
+      continue;
+    }
+
+    let nextIndex = index + 1;
+    while (nextIndex < lines.length && !lines[nextIndex].trim()) {
+      nextIndex += 1;
+    }
+
+    const nextLine = lines[nextIndex] || "";
+    const hasSeparator =
+      /^\s{0,3}(?:-{3,}|\*{3,}|_{3,}|[─━═-]{6,})\s*$/.test(nextLine);
+
+    if (!hasSeparator) {
+      output.push("", "---", "");
+    }
+  }
+
+  return output.join("\n");
+}
+
 function MarkdownCodeBlock({ children, fullContent = "", ...props }) {
   const [copied, setCopied] = useState(false);
   const code = extractPlainText(children).replace(/\n$/, "");
@@ -184,7 +213,8 @@ function MarkdownCodeBlock({ children, fullContent = "", ...props }) {
 
 function MarkdownAnswer({ content = "", className = "", streaming = false }) {
   const deferredContent = useDeferredValue(content);
-  const renderContent = streaming ? normalizeStreamingMarkdown(deferredContent) : content;
+  const normalizedContent = streaming ? normalizeStreamingMarkdown(deferredContent) : content;
+  const renderContent = normalizeHeadingSeparators(normalizedContent);
   const rootClassName = `nova-markdown${className ? ` ${className}` : ""}`;
 
   return (
@@ -203,7 +233,7 @@ function MarkdownAnswer({ content = "", className = "", streaming = false }) {
           strong: ({ children }) => <strong className="nova-strong">{children}</strong>,
           em: ({ children }) => <em className="nova-em">{children}</em>,
           blockquote: ({ children }) => <blockquote className="nova-blockquote">{children}</blockquote>,
-          hr: () => <hr className="nova-hr" />,
+          hr: () => <hr className="nova-hr heading-separator" />,
           a: ({ href, children }) =>
             href ? (
               <a className="nova-link" href={href} target="_blank" rel="noreferrer">

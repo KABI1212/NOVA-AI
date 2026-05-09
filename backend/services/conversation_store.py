@@ -79,6 +79,31 @@ def append_conversation_message(
     return message
 
 
+def prune_conversation_from_message(
+    db: MongoSession,
+    conversation: Conversation,
+    message_id: str | int | None,
+) -> bool:
+    if message_id is None:
+        return False
+
+    messages = ensure_conversation_messages(db, conversation)
+    target_index = next(
+        (
+            index
+            for index, message in enumerate(messages)
+            if str(message.id) == str(message_id)
+        ),
+        None,
+    )
+    if target_index is None:
+        return False
+
+    for message in messages[target_index:]:
+        db.delete(message)
+    return True
+
+
 def save_conversation(db: MongoSession, conversation: Conversation) -> Conversation:
     conversation.updated_at = datetime.utcnow()
     db.add(conversation)

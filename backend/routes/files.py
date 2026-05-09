@@ -17,7 +17,12 @@ from models.conversation import Conversation
 from models.file_record import FileRecord
 from models.user import User
 from services.ai_service import ai_service, infer_use_case
-from services.conversation_store import append_conversation_message, history_from_conversation, save_conversation
+from services.conversation_store import (
+    append_conversation_message,
+    history_from_conversation,
+    prune_conversation_from_message,
+    save_conversation,
+)
 from services.file_intelligence import file_intelligence_service
 from services.file_parser import file_parser_service
 from services.retriever import retriever_service
@@ -46,6 +51,7 @@ LONG_FILE_REQUEST_PATTERN = re.compile(
 class FileChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
+    edit_from_message_id: str | None = None
     session_id: str | None = None
     provider: str | None = None
     model: str | None = None
@@ -401,6 +407,9 @@ async def chat_with_files(
             user_id=current_user.id,
             title=_conversation_title(message_text),
         )
+
+    if request_body.edit_from_message_id:
+        prune_conversation_from_message(db, conversation, request_body.edit_from_message_id)
 
     requested_file_ids = [str(file_id or "").strip() for file_id in request_body.file_ids or [] if str(file_id or "").strip()]
     active_file_ids = requested_file_ids or await file_intelligence_service.session_file_ids(

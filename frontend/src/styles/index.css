@@ -249,6 +249,10 @@
   backdrop-filter: blur(2px);
 }
 
+.nova-hr.heading-separator {
+  margin: 10px 0 18px;
+}
+
 .nova-table-wrap {
   overflow-x: auto;
   margin: 0 0 1rem;

@@ -32,6 +32,7 @@ from services.conversation_store import (
     append_conversation_message,
     ensure_conversation_messages,
     history_from_conversation,
+    prune_conversation_from_message,
     save_conversation,
     serialize_conversation_messages,
 )
@@ -208,6 +209,7 @@ _DOCUMENT_GROUNDING_INSTRUCTION = (
 class ChatRequest(BaseModel):
     conversation_id: Optional[str] = None
     message: str = ""
+    edit_from_message_id: Optional[str] = None
     mode: str = "chat"
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -3159,6 +3161,9 @@ async def chat(
         request.conversation_id,
         message_text,
     )
+    if request.edit_from_message_id:
+        prune_conversation_from_message(db, conversation, request.edit_from_message_id)
+
     user_message = _append_message(
         db,
         conversation,

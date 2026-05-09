@@ -546,6 +546,7 @@ function Chat() {
   const [imageGenerationAvailable, setImageGenerationAvailable] = useState(true);
   const [availableProviders, setAvailableProviders] = useState([]);
   const [selectedModelKey, setSelectedModelKey] = useState(getStoredModelKey);
+  const [editingMessageId, setEditingMessageId] = useState(null);
 
   const toolPrefix = useMemo(
     () => (NAV_TO_INSTRUCTION[activeNav] || []).join("\n"),
@@ -994,6 +995,7 @@ function Chat() {
           startTransition(() => {
             setCurrentConversationId(null);
             setMessages([]);
+            setEditingMessageId(null);
           });
         }
       } catch (error) {
@@ -1025,6 +1027,7 @@ function Chat() {
         startTransition(() => {
           setCurrentConversationId(conversation?.id || conversationId);
           setMessages(loadedMessages);
+          setEditingMessageId(null);
         });
       } catch (error) {
         if (error?.response?.status === 401 || error?.response?.status === 403) {
@@ -1087,6 +1090,7 @@ function Chat() {
     setMessages([]);
     setInput("");
     setStatus("");
+    setEditingMessageId(null);
     setCurrentConversationId(null);
     setUploadedFiles([]);
     setPreviewFile(null);
@@ -1247,6 +1251,11 @@ function Chat() {
       const effectiveGeneratePromptImage = imageGenerationAvailable && generatePromptImage;
       const effectiveGenerateAnswerImage = imageGenerationAvailable && generateAnswerImage;
       let attachedImageDataUrl = null;
+      const editFromMessageId = editingMessageId;
+      const editMessageIndex = editFromMessageId
+        ? messages.findIndex((message) => String(message.id) === String(editFromMessageId))
+        : -1;
+      const isEditingMessage = editMessageIndex >= 0;
 
       if (!trimmed || isTyping || isConversationLoading) {
         return;
@@ -1261,21 +1270,42 @@ function Chat() {
         : null;
 
       stopSpeaking();
-      const optimisticUserMessage = createMessage("user", displayValue || trimmed, currentConversationId, {
-        images: attachedImageDataUrl ? [attachedImageDataUrl] : [],
-        meta: {
-          generate_prompt_image: effectiveGeneratePromptImage,
-          generate_answer_image: effectiveGenerateAnswerImage,
-          ...(presetLabel ? { quick_mode: presetLabel } : {}),
-          ...(hasImageAttachment ? { attachment_kind: "image" } : {}),
-          ...(hasDocumentAttachment ? { attachment_kind: "document" } : {}),
-          ...(attachedImageDataUrl ? { image_origin: "upload" } : {}),
-          ...(initialDocumentReference?.id != null ? { document_id: initialDocumentReference.id } : {}),
-          ...(initialDocumentReference?.name ? { document_name: initialDocumentReference.name } : {}),
-          ...(readyFileIds.length ? { file_ids: readyFileIds } : {}),
+      const optimisticUserMessage = createMessage(
+        "user",
+        displayValue || trimmed,
+        currentConversationId,
+        {
+          ...(isEditingMessage ? { id: editFromMessageId } : {}),
+          images: attachedImageDataUrl ? [attachedImageDataUrl] : [],
+          meta: {
+            generate_prompt_image: effectiveGeneratePromptImage,
+            generate_answer_image: effectiveGenerateAnswerImage,
+            ...(isEditingMessage ? { edited: true } : {}),
+            ...(presetLabel ? { quick_mode: presetLabel } : {}),
+            ...(hasImageAttachment ? { attachment_kind: "image" } : {}),
+            ...(hasDocumentAttachment ? { attachment_kind: "document" } : {}),
+            ...(attachedImageDataUrl ? { image_origin: "upload" } : {}),
+            ...(initialDocumentReference?.id != null ? { document_id: initialDocumentReference.id } : {}),
+            ...(initialDocumentReference?.name ? { document_name: initialDocumentReference.name } : {}),
+            ...(readyFileIds.length ? { file_ids: readyFileIds } : {}),
+          },
         },
+      );
+      setEditingMessageId(null);
+      setMessages((previous) => {
+        if (!isEditingMessage) {
+          return [...previous, optimisticUserMessage];
+        }
+
+        const previousEditIndex = previous.findIndex(
+          (message) => String(message.id) === String(editFromMessageId)
+        );
+        if (previousEditIndex === -1) {
+          return [...previous, optimisticUserMessage];
+        }
+
+        return [...previous.slice(0, previousEditIndex), optimisticUserMessage];
       });
-      setMessages((previous) => [...previous, optimisticUserMessage]);
       setIsTyping(true);
       if (attachedFile?.name) {
         setStatus(
@@ -1522,6 +1552,7 @@ function Chat() {
                   message: prompt,
                   stream: true,
                   conversation_id: currentConversationId,
+                  edit_from_message_id: editFromMessageId,
                   session_id: getOrCreateSessionId(),
                   file_ids: activeFileIds,
                   ...selectedProvider,
@@ -1531,6 +1562,7 @@ function Chat() {
                   stream: true,
                   mode: requestMode,
                   conversation_id: currentConversationId,
+                  edit_from_message_id: editFromMessageId,
                   ...selectedProvider,
                   generate_prompt_image: effectiveGeneratePromptImage,
                   generate_answer_image: effectiveGenerateAnswerImage,
@@ -1814,6 +1846,7 @@ function Chat() {
     },
     [
       currentConversationId,
+      editingMessageId,
       handleUnauthorized,
       activeNav,
       activeDocumentReference,
@@ -1822,6 +1855,7 @@ function Chat() {
       isTyping,
       loadConversations,
       loadUploadedFiles,
+      messages,
       selectedModelOption,
       resolvedMode,
       stopSpeaking,
@@ -2006,6 +2040,7 @@ function Chat() {
       }
 
       stopSpeaking();
+      setEditingMessageId(message.id);
       setInput(rewrittenInput);
 
       setStatus("");
@@ -2024,7 +2059,7 @@ function Chat() {
         }
       }, 0);
 
-      toast.success("Question added back to the input. Edit it and send.");
+      toast.success("Editing this message. Send to replace the old response.");
     },
     [stopSpeaking]
   );
