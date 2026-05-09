@@ -1,9 +1,10 @@
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 try:
     from sqlalchemy.exc import IntegrityError
 except ImportError:
@@ -69,6 +70,30 @@ class SignupRequest(BaseModel):
     username: str
     password: str
     full_name: str = ""
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str) -> str:
+        username = (value or "").strip()
+        if len(username) < 3:
+            raise ValueError("Username must be at least 3 characters.")
+        if len(username) > 32:
+            raise ValueError("Username must be 32 characters or fewer.")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", username):
+            raise ValueError("Username can only contain letters, numbers, dots, underscores, and hyphens.")
+        return username
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        if len(value or "") < 8:
+            raise ValueError("Password must be at least 8 characters.")
+        return value
+
+    @field_validator("full_name")
+    @classmethod
+    def normalize_full_name(cls, value: str) -> str:
+        return (value or "").strip()
 
 
 class LoginRequest(BaseModel):

@@ -232,6 +232,9 @@ function Signup() {
                     <input
                       type="text"
                       required
+                      minLength={3}
+                      maxLength={32}
+                      pattern="[A-Za-z0-9._-]+"
                       className="input-field pl-10"
                       placeholder="johndoe"
                       value={formData.username}
@@ -266,6 +269,7 @@ function Signup() {
                     <input
                       type="password"
                       required
+                      minLength={8}
                       className="input-field pl-10"
                       placeholder="********"
                       value={formData.password}

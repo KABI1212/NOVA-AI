@@ -151,6 +151,25 @@ def test_signup_creates_user_and_requires_verification(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("username", "password"),
+    [
+        ("  ", "Sup3rSecret!"),
+        ("ab", "Sup3rSecret!"),
+        ("bad username", "Sup3rSecret!"),
+        ("new-user", "short"),
+    ],
+)
+def test_signup_request_rejects_invalid_credentials(username: str, password: str) -> None:
+    with pytest.raises(ValueError):
+        auth_module.SignupRequest(
+            email="new.user@example.com",
+            username=username,
+            password=password,
+            full_name="New User",
+        )
+
+
 def test_signup_can_include_debug_otp_when_explicitly_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1,25 +1,26 @@
 // @ts-nocheck
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 
-import Chat from "./pages/Chat";
-import CodeAssistant from "./pages/CodeAssistant";
-import DocumentAnalyzer from "./pages/DocumentAnalyzer";
-import ExplainAssistant from "./pages/ExplainAssistant";
-import ImageGenerator from "./pages/ImageGenerator";
-import KnowledgeAssistant from "./pages/KnowledgeAssistant";
-import LearningAssistant from "./pages/LearningAssistant";
-import Login from "./pages/Login";
-import MyShares from "./pages/MyShares";
-import OrchestratorStudio from "./pages/OrchestratorStudio";
-import ReasoningAssistant from "./pages/ReasoningAssistant";
-import SearchChat from "./pages/SearchChat";
-import SharedView from "./pages/SharedView";
-import Signup from "./pages/Signup";
 import NovaLogo from "./components/common/NovaLogo";
 import { authAPI } from "./services/api";
 import { useAuthStore, useThemeStore } from "./utils/store";
+
+const Chat = lazy(() => import("./pages/Chat"));
+const CodeAssistant = lazy(() => import("./pages/CodeAssistant"));
+const DocumentAnalyzer = lazy(() => import("./pages/DocumentAnalyzer"));
+const ExplainAssistant = lazy(() => import("./pages/ExplainAssistant"));
+const ImageGenerator = lazy(() => import("./pages/ImageGenerator"));
+const KnowledgeAssistant = lazy(() => import("./pages/KnowledgeAssistant"));
+const LearningAssistant = lazy(() => import("./pages/LearningAssistant"));
+const Login = lazy(() => import("./pages/Login"));
+const MyShares = lazy(() => import("./pages/MyShares"));
+const OrchestratorStudio = lazy(() => import("./pages/OrchestratorStudio"));
+const ReasoningAssistant = lazy(() => import("./pages/ReasoningAssistant"));
+const SearchChat = lazy(() => import("./pages/SearchChat"));
+const SharedView = lazy(() => import("./pages/SharedView"));
+const Signup = lazy(() => import("./pages/Signup"));
 
 function SessionLoader() {
   return (
@@ -105,115 +106,117 @@ function App() {
 
   return (
     <>
-      <Routes>
-        <Route path="/" element={<DefaultRoute isCheckingSession={isCheckingSession} />} />
-        <Route
-          path="/login"
-          element={(
-            <PublicRoute isCheckingSession={isCheckingSession}>
-              <Login />
-            </PublicRoute>
-          )}
-        />
-        <Route
-          path="/signup"
-          element={(
-            <PublicRoute isCheckingSession={isCheckingSession}>
-              <Signup />
-            </PublicRoute>
-          )}
-        />
-        <Route
-          path="/chat"
-          element={(
-            <ProtectedRoute isCheckingSession={isCheckingSession}>
-              <Chat />
-            </ProtectedRoute>
-          )}
-        />
-        <Route
-          path="/code"
-          element={(
-            <ProtectedRoute isCheckingSession={isCheckingSession}>
-              <CodeAssistant />
-            </ProtectedRoute>
-          )}
-        />
-        <Route
-          path="/explain"
-          element={(
-            <ProtectedRoute isCheckingSession={isCheckingSession}>
-              <ExplainAssistant />
-            </ProtectedRoute>
-          )}
-        />
-        <Route
-          path="/reasoning"
-          element={(
-            <ProtectedRoute isCheckingSession={isCheckingSession}>
-              <ReasoningAssistant />
-            </ProtectedRoute>
-          )}
-        />
-        <Route
-          path="/knowledge"
-          element={(
-            <ProtectedRoute isCheckingSession={isCheckingSession}>
-              <KnowledgeAssistant />
-            </ProtectedRoute>
-          )}
-        />
-        <Route
-          path="/learning"
-          element={(
-            <ProtectedRoute isCheckingSession={isCheckingSession}>
-              <LearningAssistant />
-            </ProtectedRoute>
-          )}
-        />
-        <Route
-          path="/images"
-          element={(
-            <ProtectedRoute isCheckingSession={isCheckingSession}>
-              <ImageGenerator />
-            </ProtectedRoute>
-          )}
-        />
-        <Route
-          path="/documents"
-          element={(
-            <ProtectedRoute isCheckingSession={isCheckingSession}>
-              <DocumentAnalyzer />
-            </ProtectedRoute>
-          )}
-        />
-        <Route
-          path="/search"
-          element={(
-            <ProtectedRoute isCheckingSession={isCheckingSession}>
-              <SearchChat />
-            </ProtectedRoute>
-          )}
-        />
-        <Route
-          path="/my-shares"
-          element={(
-            <ProtectedRoute isCheckingSession={isCheckingSession}>
-              <MyShares />
-            </ProtectedRoute>
-          )}
-        />
-        <Route
-          path="/orchestrator"
-          element={(
-            <ProtectedRoute isCheckingSession={isCheckingSession}>
-              <OrchestratorStudio />
-            </ProtectedRoute>
-          )}
-        />
-        <Route path="/share/:shareId" element={<SharedView />} />
-        <Route path="*" element={<DefaultRoute isCheckingSession={isCheckingSession} />} />
-      </Routes>
+      <Suspense fallback={<SessionLoader />}>
+        <Routes>
+          <Route path="/" element={<DefaultRoute isCheckingSession={isCheckingSession} />} />
+          <Route
+            path="/login"
+            element={(
+              <PublicRoute isCheckingSession={isCheckingSession}>
+                <Login />
+              </PublicRoute>
+            )}
+          />
+          <Route
+            path="/signup"
+            element={(
+              <PublicRoute isCheckingSession={isCheckingSession}>
+                <Signup />
+              </PublicRoute>
+            )}
+          />
+          <Route
+            path="/chat"
+            element={(
+              <ProtectedRoute isCheckingSession={isCheckingSession}>
+                <Chat />
+              </ProtectedRoute>
+            )}
+          />
+          <Route
+            path="/code"
+            element={(
+              <ProtectedRoute isCheckingSession={isCheckingSession}>
+                <CodeAssistant />
+              </ProtectedRoute>
+            )}
+          />
+          <Route
+            path="/explain"
+            element={(
+              <ProtectedRoute isCheckingSession={isCheckingSession}>
+                <ExplainAssistant />
+              </ProtectedRoute>
+            )}
+          />
+          <Route
+            path="/reasoning"
+            element={(
+              <ProtectedRoute isCheckingSession={isCheckingSession}>
+                <ReasoningAssistant />
+              </ProtectedRoute>
+            )}
+          />
+          <Route
+            path="/knowledge"
+            element={(
+              <ProtectedRoute isCheckingSession={isCheckingSession}>
+                <KnowledgeAssistant />
+              </ProtectedRoute>
+            )}
+          />
+          <Route
+            path="/learning"
+            element={(
+              <ProtectedRoute isCheckingSession={isCheckingSession}>
+                <LearningAssistant />
+              </ProtectedRoute>
+            )}
+          />
+          <Route
+            path="/images"
+            element={(
+              <ProtectedRoute isCheckingSession={isCheckingSession}>
+                <ImageGenerator />
+              </ProtectedRoute>
+            )}
+          />
+          <Route
+            path="/documents"
+            element={(
+              <ProtectedRoute isCheckingSession={isCheckingSession}>
+                <DocumentAnalyzer />
+              </ProtectedRoute>
+            )}
+          />
+          <Route
+            path="/search"
+            element={(
+              <ProtectedRoute isCheckingSession={isCheckingSession}>
+                <SearchChat />
+              </ProtectedRoute>
+            )}
+          />
+          <Route
+            path="/my-shares"
+            element={(
+              <ProtectedRoute isCheckingSession={isCheckingSession}>
+                <MyShares />
+              </ProtectedRoute>
+            )}
+          />
+          <Route
+            path="/orchestrator"
+            element={(
+              <ProtectedRoute isCheckingSession={isCheckingSession}>
+                <OrchestratorStudio />
+              </ProtectedRoute>
+            )}
+          />
+          <Route path="/share/:shareId" element={<SharedView />} />
+          <Route path="*" element={<DefaultRoute isCheckingSession={isCheckingSession} />} />
+        </Routes>
+      </Suspense>
 
       <Toaster
         position="top-right"
