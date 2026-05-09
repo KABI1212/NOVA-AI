@@ -41,6 +41,7 @@ from services.instant_responses import instant_reply
 from services.search_service import fetch_page_content, format_results_for_ai, is_temporal_query, search_web, search_web_images
 from services.vector_service import vector_service
 from utils.dependencies import get_current_user, get_current_user_optional
+from utils.format_ai_response import format_ai_response
 from utils.rate_limit import enforce_chat_rate_limit, enforce_image_rate_limit
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
@@ -276,9 +277,10 @@ def _payload(
     answer_source: Optional[str] = None,
 ) -> dict:
     resolved_answer_images = answer_images if answer_images is not None else images
+    formatted_message = format_ai_response(message) or message
     payload = {
-        "message": message,
-        "answer": message,
+        "message": formatted_message,
+        "answer": formatted_message,
         "images": resolved_answer_images or [],
         "answer_images": resolved_answer_images or [],
         "prompt_images": prompt_images or [],

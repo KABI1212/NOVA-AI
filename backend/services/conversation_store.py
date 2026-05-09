@@ -6,6 +6,7 @@ from typing import List, Optional
 from config.database import MongoSession
 from models.chat import ChatMessage
 from models.conversation import Conversation
+from utils.format_ai_response import format_ai_response
 
 
 def _message_meta(payload: dict) -> Optional[dict]:
@@ -69,10 +70,11 @@ def append_conversation_message(
     meta: Optional[dict] = None,
 ) -> ChatMessage:
     ensure_conversation_messages(db, conversation)
+    saved_content = format_ai_response(content) if role == "assistant" else content
     message = ChatMessage(
         conversation_id=conversation.id,
         role=role,
-        content=content,
+        content=saved_content,
         meta=meta,
     )
     db.add(message)

@@ -28,6 +28,7 @@ from services.file_parser import file_parser_service
 from services.retriever import retriever_service
 from services.storage import storage_service
 from utils.dependencies import get_current_user
+from utils.format_ai_response import format_ai_response
 from utils.rate_limit import enforce_chat_rate_limit
 
 
@@ -502,6 +503,7 @@ async def chat_with_files(
                 final_answer = _finalize_answer(full_response)
                 if not final_answer:
                     raise RuntimeError("AI provider returned an empty response")
+                final_answer = format_ai_response(final_answer) or final_answer
                 append_conversation_message(
                     db,
                     conversation,
@@ -526,6 +528,7 @@ async def chat_with_files(
             except Exception as exc:
                 final_answer = _finalize_answer(full_response)
                 if final_answer:
+                    final_answer = format_ai_response(final_answer) or final_answer
                     append_conversation_message(
                         db,
                         conversation,
@@ -571,6 +574,7 @@ async def chat_with_files(
         max_tokens=response_max_tokens,
     )
     answer = _finalize_answer(answer)
+    answer = format_ai_response(answer) or answer
     append_conversation_message(
         db,
         conversation,
