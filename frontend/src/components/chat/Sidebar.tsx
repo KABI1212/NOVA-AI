@@ -12,6 +12,8 @@ type Conversation = {
   id: string;
   title: string;
   preview?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 type UserFormState = {
@@ -48,7 +50,7 @@ const CHAT_ROUTE = "/chat";
 const chatItems: SidebarItem[] = [
   {
     key: "new",
-    label: "New chat",
+    label: "New Chat",
     route: CHAT_ROUTE,
     navValue: "Chat",
     icon: (
@@ -58,18 +60,21 @@ const chatItems: SidebarItem[] = [
       </svg>
     ),
   },
-  {
-    key: "chat",
-    label: "Main chat",
-    route: CHAT_ROUTE,
-    navValue: "Chat",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      </svg>
-    ),
-  },
 ];
+
+function getConversationTime(conversation: Conversation) {
+  const value = conversation.updated_at || conversation.created_at || "";
+  const parsed = value ? new Date(value) : null;
+  return parsed && !Number.isNaN(parsed.getTime()) ? parsed : null;
+}
+
+function isSameCalendarDay(a: Date, b: Date) {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
 
 function getUserInfo(user: Record<string, unknown> | null | undefined, fallbackEmail?: string) {
   const name = String(user?.full_name || user?.username || "Guest");
@@ -175,6 +180,39 @@ export default function Sidebar({
       `${conversation.title || ""} ${conversation.preview || ""}`.toLowerCase().includes(query)
     );
   }, [conversationQuery, conversations]);
+
+  const groupedConversations = useMemo(() => {
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+
+    const groups = {
+      today: [] as Conversation[],
+      yesterday: [] as Conversation[],
+      previous: [] as Conversation[],
+    };
+
+    filteredConversations.forEach((conversation) => {
+      const timestamp = getConversationTime(conversation);
+      if (timestamp && isSameCalendarDay(timestamp, today)) {
+        groups.today.push(conversation);
+        return;
+      }
+
+      if (timestamp && isSameCalendarDay(timestamp, yesterday)) {
+        groups.yesterday.push(conversation);
+        return;
+      }
+
+      groups.previous.push(conversation);
+    });
+
+    return [
+      { label: "Today", items: groups.today },
+      { label: "Yesterday", items: groups.yesterday },
+      { label: "Previous 7 Days", items: groups.previous },
+    ].filter((group) => group.items.length);
+  }, [filteredConversations]);
 
   const handleClick = (item: SidebarItem) => {
     if (item.key === "new") {
@@ -308,19 +346,15 @@ export default function Sidebar({
     <>
       <aside className={`sb claude${resolvedCollapsed ? " col" : ""}`}>
         <div className="logo">
-          <NovaLogo size={30} showText={false} className="li" />
-          <span className="lt">
-            NOVA <span>AI</span>
-          </span>
+          <NovaLogo size={30} showText className="li" />
         </div>
 
         <div className="sb-scroll">
-          <div className="sl">Chat</div>
-          <div className="slist">
+          <div className="slist new-chat-list">
             {chatItems.map((item) => (
               <button
                 key={item.key}
-                className={`sitem${isItemActive(item) ? " active" : ""}`}
+                className={`sitem new-chat${isItemActive(item) ? " active" : ""}`}
                 type="button"
                 onClick={() => handleClick(item)}
               >
@@ -345,56 +379,61 @@ export default function Sidebar({
             />
           </div>
           <div className="hst">
-            {filteredConversations.length ? (
-              filteredConversations.map((conversation) => (
-                <div
-                  key={conversation.id}
-                  className={`hst-item${selectedConversationId === conversation.id ? " active" : ""}`}
-                  title={conversation.title}
-                >
-                  <button
-                    className="hst-main"
-                    type="button"
-                    onClick={() => {
-                      onNavChange?.("Chat");
-                      onSelectConversation?.(conversation.id);
-                      onClose?.();
-                    }}
-                  >
-                    <span className="hst-copy">
-                      <span className="hst-text">{conversation.title}</span>
-                      {conversation.preview ? <span className="hst-preview">{conversation.preview}</span> : null}
-                    </span>
-                  </button>
-                  <button
-                    className="hst-ren"
-                    type="button"
-                    onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
-                      event.stopPropagation();
-                      openRenameModal(conversation);
-                    }}
-                    aria-label="Rename chat"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M12 20h9" />
-                      <path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-                    </svg>
-                  </button>
-                  <button
-                    className="hst-del"
-                    type="button"
-                    onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
-                      event.stopPropagation();
-                      onDeleteConversation?.(conversation.id);
-                    }}
-                    aria-label="Delete chat"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M3 6h18" />
-                      <path d="M8 6V4h8v2" />
-                      <path d="M6 6l1 14h10l1-14" />
-                    </svg>
-                  </button>
+            {groupedConversations.length ? (
+              groupedConversations.map((group) => (
+                <div className="hst-group" key={group.label}>
+                  <div className="hst-group-label">{group.label}</div>
+                  {group.items.map((conversation) => (
+                    <div
+                      key={conversation.id}
+                      className={`hst-item${selectedConversationId === conversation.id ? " active" : ""}`}
+                      title={conversation.title}
+                    >
+                      <button
+                        className="hst-main"
+                        type="button"
+                        onClick={() => {
+                          onNavChange?.("Chat");
+                          onSelectConversation?.(conversation.id);
+                          onClose?.();
+                        }}
+                      >
+                        <span className="hst-copy">
+                          <span className="hst-text">{conversation.title}</span>
+                          {conversation.preview ? <span className="hst-preview">{conversation.preview}</span> : null}
+                        </span>
+                      </button>
+                      <button
+                        className="hst-ren"
+                        type="button"
+                        onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
+                          event.stopPropagation();
+                          openRenameModal(conversation);
+                        }}
+                        aria-label="Rename chat"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M12 20h9" />
+                          <path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                        </svg>
+                      </button>
+                      <button
+                        className="hst-del"
+                        type="button"
+                        onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
+                          event.stopPropagation();
+                          onDeleteConversation?.(conversation.id);
+                        }}
+                        aria-label="Delete chat"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M3 6h18" />
+                          <path d="M8 6V4h8v2" />
+                          <path d="M6 6l1 14h10l1-14" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
                 </div>
               ))
             ) : (

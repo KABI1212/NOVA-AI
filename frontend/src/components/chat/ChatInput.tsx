@@ -4,7 +4,6 @@ import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   CHAT_COMPOSER_MENU,
   CHAT_COMPOSER_PRESETS,
-  DEFAULT_CHAT_PLACEHOLDER,
 } from "../../constants/chatExperience";
 import VoiceInput from "./VoiceInput";
 import FileUploadButton from "../uploads/FileUploadButton";
@@ -178,7 +177,7 @@ export default function ChatInput({
     [selectedPresetId]
   );
   const attachedImage = isImageFile(attachedFile);
-  const placeholder = selectedPreset?.placeholder || DEFAULT_CHAT_PLACEHOLDER;
+  const placeholder = selectedPreset?.placeholder || "Ask anything...";
   const showVoicePanel = isListening || showVoiceDraft;
   const isSendDisabled = disabled || (!value.trim() && !attachedFile);
   const voiceButtonTitle = speechSupported
@@ -721,6 +720,27 @@ export default function ChatInput({
           />
 
           <div className="input-actions">
+            {modelOptions.length ? (
+              <div className="input-model input-model-wrap">
+                <select
+                  className="input-model-select"
+                  value={selectedModelKey}
+                  onChange={(event) => onSelectModel?.(event.target.value)}
+                  disabled={disabled || modelOptions.length <= 1}
+                  title="Choose model"
+                >
+                  {modelOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </div>
+            ) : null}
+
             {speechSupported ? (
               <button
                 className={`input-btn ghost${isListening ? " listening" : ""}`}
@@ -774,27 +794,6 @@ export default function ChatInput({
                 );
               })
             : null}
-
-          {modelOptions.length ? (
-            <div className="input-model input-model-wrap">
-              <select
-                className="input-model-select"
-                value={selectedModelKey}
-                onChange={(event) => onSelectModel?.(event.target.value)}
-                disabled={disabled || modelOptions.length <= 1}
-                title="Choose model"
-              >
-                {modelOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
-            </div>
-          ) : null}
 
           {selectedPreset ? (
             <button className="input-mode-pill" type="button" onClick={clearPreset}>

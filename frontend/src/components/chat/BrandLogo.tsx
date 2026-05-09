@@ -38,20 +38,9 @@ export default function BrandLogo({
           : { duration: 0.2 }
       }
     >
-      <NovaLogo size={size} showText={false} />
+      <NovaLogo size={size} showText={showText} />
     </motion.div>
   );
 
-  if (!showText) {
-    return <div className={className}>{icon}</div>;
-  }
-
-  return (
-    <div className={`flex items-center gap-2.5 ${className}`}>
-      {icon}
-      <div className="font-display text-[11px] font-semibold uppercase tracking-[0.3em] text-white">
-        NOVA <span className="text-[#1B9DFF]">AI</span>
-      </div>
-    </div>
-  );
+  return <div className={className}>{icon}</div>;
 }

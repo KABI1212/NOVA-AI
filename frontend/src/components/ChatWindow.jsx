@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Check, Copy, ExternalLink, Pencil, RotateCcw, Volume2, VolumeX } from "lucide-react";
 
 import MarkdownAnswer from "./common/MarkdownAnswer";
@@ -28,74 +28,6 @@ function getUserQuestionText(message) {
   const content = String(message?.content || "").trim();
   const cleaned = content.replace(USER_MESSAGE_SUFFIX_PATTERN, "").trim();
   return cleaned || content;
-}
-
-function getGreeting() {
-  const hour = new Date().getHours();
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
-  return "Evening";
-}
-
-const HERO_CONTENT = {
-  Chat: {
-    pill: "Free plan - Upgrade",
-    subtitle: "How can I help you today?",
-  },
-  Search: {
-    pill: "Search workspace",
-    subtitle: "Ask for current information, recent updates, or source-backed comparisons right here in chat.",
-  },
-  Code: {
-    pill: "Code workspace",
-    subtitle: "Ask for code generation, debugging, explanations, or refactors without leaving the main chat.",
-  },
-  Explain: {
-    pill: "Explain workspace",
-    subtitle: "Ask for step-by-step explanations and NOVA will break complex ideas down clearly.",
-  },
-  Reasoning: {
-    pill: "Reasoning workspace",
-    subtitle: "Use this space for tradeoffs, decisions, and more careful structured thinking.",
-  },
-  Knowledge: {
-    pill: "Knowledge workspace",
-    subtitle: "Ask factual questions, summaries, or concept overviews in one continuous conversation.",
-  },
-  Learning: {
-    pill: "Learning workspace",
-    subtitle: "Turn the chat into a study coach for roadmaps, practice plans, and guided learning steps.",
-  },
-  Images: {
-    pill: "Images workspace",
-    subtitle: "Describe a visual idea or attach a photo to create or remix images directly from chat.",
-  },
-  Customize: {
-    pill: "Customize workspace",
-    subtitle: "Describe your preferences and NOVA will tailor tone, style, and depth in the next reply.",
-  },
-  Chats: {
-    pill: "Chats workspace",
-    subtitle: "Continue an existing thread from the sidebar or start a fresh conversation here.",
-  },
-  Projects: {
-    pill: "Projects workspace",
-    subtitle: "Use this space for multi-step planning, milestones, drafts, and practical execution help.",
-  },
-  Artifacts: {
-    pill: "Artifacts workspace",
-    subtitle: "Ask for polished outputs like outlines, specs, tables, summaries, and reusable deliverables.",
-  },
-};
-
-function getName() {
-  try {
-    const raw = localStorage.getItem("user");
-    const user = raw ? JSON.parse(raw) : null;
-    return user?.full_name || user?.username || "there";
-  } catch {
-    return "there";
-  }
 }
 
 function resolveImageSource(value) {
@@ -231,7 +163,6 @@ function MessageSources({ message }) {
 
 function ChatWindow({
   messages,
-  activeNav = "Chat",
   isTyping,
   status,
   regeneratableMessageId = null,
@@ -243,13 +174,6 @@ function ChatWindow({
 }) {
   const chatRef = useRef(null);
   const [copiedKey, setCopiedKey] = useState(null);
-
-  const hero = useMemo(() => {
-    return {
-      greeting: `${getGreeting()}, ${getName()}`,
-    };
-  }, []);
-  const heroContent = HERO_CONTENT[activeNav] || HERO_CONTENT.Chat;
 
   useEffect(() => {
     if (!copiedKey) {
@@ -275,12 +199,13 @@ function ChatWindow({
   if (!messages.length) {
     return (
       <div className="hero-wrap">
-        <div className="plan-pill">{heroContent.pill}</div>
-        <div className="hero-title">
-          <NovaLogo size={28} showText={false} className="hero-logo" />
-          {hero.greeting}
+        <div className="hero-ai-icon">
+          <NovaLogo size={38} showText={false} className="hero-logo" />
         </div>
-        <div className="hero-sub">{heroContent.subtitle}</div>
+        <div className="hero-title">
+          Hello, Kabilesh
+        </div>
+        <div className="hero-sub">How can I help you today?</div>
         <div className="sts">{status}</div>
       </div>
     );

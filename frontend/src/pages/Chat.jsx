@@ -289,7 +289,7 @@ const buildModelOptions = (providers = []) => {
   const options = [
     {
       id: AUTO_MODEL_KEY,
-      label: "Nova Fast",
+      label: "NOVA Fast",
       provider: null,
       model: null,
     },
