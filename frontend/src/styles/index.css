@@ -89,6 +89,7 @@
 /* Markdown styles */
 .markdown-content {
   @apply text-gray-800 dark:text-gray-200;
+  word-spacing: 0.12em;
 }
 
 .markdown-content h1 {
@@ -141,6 +142,7 @@
 
 .nova-markdown {
   color: inherit;
+  word-spacing: 0.12em;
 }
 
 .nova-markdown > :last-child {

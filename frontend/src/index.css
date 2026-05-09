@@ -4020,6 +4020,7 @@ select,
   max-width: 100%;
   font-size: 15px;
   line-height: 1.65;
+  word-spacing: 0.12em;
   text-align: right;
 }
 
@@ -4027,6 +4028,7 @@ select,
   max-width: 100%;
   font-size: 15px;
   line-height: 1.7;
+  word-spacing: 0.12em;
 }
 
 .nova-p {
@@ -4050,6 +4052,7 @@ select,
 .nova-p,
 .nova-markdown {
   font-size: 15px;
+  word-spacing: 0.12em;
 }
 
 .message-actions {
