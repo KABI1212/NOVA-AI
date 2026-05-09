@@ -171,7 +171,7 @@ function MarkdownCodeBlock({ children, fullContent = "", ...props }) {
       <pre
         className="nova-code-pre"
         style={{
-          fontFamily: "Consolas, 'Courier New', monospace",
+          fontFamily: "'Times New Roman', Times, serif",
           whiteSpace: isDiagramBlock ? "pre" : "pre-wrap",
           tabSize: 2,
         }}
