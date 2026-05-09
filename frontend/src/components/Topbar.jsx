@@ -1,12 +1,7 @@
 import React from "react";
 
-import ShareButton from "./chat/ShareButton";
-
 function Topbar({
-  title,
   onToggleSidebar,
-  conversationId = null,
-  conversationTitle = "",
   onProfileClick,
   profileActive = false,
 }) {
@@ -19,9 +14,13 @@ function Topbar({
           <line x1="3" y1="18" x2="21" y2="18" />
         </svg>
       </button>
-      <div className="ttl">{title}</div>
+      <div className="ttl" aria-hidden="true" />
       <div className="tb-right">
-        <ShareButton conversationId={conversationId} conversationTitle={conversationTitle} />
+        <button className="model-inline" type="button" aria-label="Current model">
+          <span aria-hidden="true">⚡</span>
+          <span>NOVA Fast</span>
+          <span aria-hidden="true">▼</span>
+        </button>
         <button
           className={`tb-ghost${profileActive ? " active" : ""}`}
           type="button"
