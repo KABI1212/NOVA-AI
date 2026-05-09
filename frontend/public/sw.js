@@ -1,9 +1,12 @@
-const CACHE_NAME = "nova-ai-pwa-v5";
+const CACHE_NAME = "nova-ai-pwa-v6";
 const APP_SHELL = [
   "/",
   "/manifest.json",
   "/favicon.svg",
   "/favicon.ico",
+  "/icons/nova-app-icon.png",
+  "/icons/nova-web-icon.png",
+  "/icons/nova-web-icon-64.png",
   "/icons/nova-star-16x16.png",
   "/icons/nova-star-32x32.png",
   "/icons/nova-star-192x192.png",

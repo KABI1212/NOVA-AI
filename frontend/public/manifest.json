@@ -12,6 +12,12 @@
   "categories": ["productivity", "utilities"],
   "icons": [
     {
+      "src": "/icons/nova-web-icon-64.png",
+      "sizes": "64x64",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
       "src": "/icons/nova-star-16x16.png",
       "sizes": "16x16",
       "type": "image/png",
@@ -24,8 +30,8 @@
       "purpose": "any"
     },
     {
-      "src": "/icons/nova-star-192x192.png",
-      "sizes": "192x192",
+      "src": "/icons/nova-app-icon.png",
+      "sizes": "1024x1024",
       "type": "image/png",
       "purpose": "any"
     },
@@ -56,8 +62,8 @@
       "url": "/",
       "icons": [
         {
-          "src": "/icons/nova-star-192x192.png",
-          "sizes": "192x192",
+          "src": "/icons/nova-app-icon.png",
+          "sizes": "1024x1024",
           "type": "image/png"
         }
       ]
