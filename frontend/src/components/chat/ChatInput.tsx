@@ -199,7 +199,7 @@ export default function ChatInput({
     }
 
     textareaRef.current.style.height = "auto";
-    textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 320)}px`;
+    textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
   }, [value]);
 
   useEffect(() => {

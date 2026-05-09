@@ -4565,6 +4565,55 @@ body,
   line-height: 1.68;
 }
 
+.chat {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+.chat-inner,
+.msg,
+.msg.a,
+.msg.u,
+.bb,
+.msg.a .bb,
+.msg.u .bb,
+.nova-markdown {
+  min-height: 0;
+  max-height: none !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  -webkit-line-clamp: unset !important;
+  line-clamp: unset !important;
+}
+
+.msg.a .bb,
+.msg.u .bb {
+  width: auto;
+  overflow-wrap: anywhere !important;
+  word-break: break-word !important;
+  white-space: normal !important;
+}
+
+.nova-markdown,
+.nova-markdown-fallback {
+  overflow-wrap: anywhere !important;
+  word-break: break-word !important;
+}
+
+.nova-code-block,
+.nova-code-pre,
+.nova-table-wrap {
+  max-height: none !important;
+  overflow-x: auto !important;
+  overflow-y: visible !important;
+}
+
+.input-pill .input-field,
+.input-field {
+  max-height: none !important;
+  overflow-y: visible !important;
+}
+
 .msg.a .bb {
   background: #000000 !important;
   border: 1px solid rgba(77, 166, 255, 0.1) !important;

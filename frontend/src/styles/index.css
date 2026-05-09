@@ -477,3 +477,22 @@
   font-size: 16px;
   line-height: 1.68;
 }
+
+.nova-markdown,
+.nova-markdown-fallback {
+  max-height: none !important;
+  overflow: visible !important;
+  overflow-wrap: anywhere !important;
+  word-break: break-word !important;
+  text-overflow: clip !important;
+  -webkit-line-clamp: unset !important;
+  line-clamp: unset !important;
+}
+
+.nova-code-block,
+.nova-code-pre,
+.nova-table-wrap {
+  max-height: none !important;
+  overflow-x: auto !important;
+  overflow-y: visible !important;
+}
