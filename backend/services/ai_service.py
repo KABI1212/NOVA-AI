@@ -182,8 +182,8 @@ def _default_top_p() -> float:
 
 
 def _default_max_tokens() -> int:
-    value = int(getattr(settings, "AI_MAX_TOKENS", 2048) or 2048)
-    return max(128, value)
+    value = int(getattr(settings, "AI_MAX_TOKENS", 8192) or 8192)
+    return max(4096, value)
 
 
 def _stream_timeout() -> httpx.Timeout:
@@ -2053,7 +2053,7 @@ class AIService:
         stream: bool = True,
         model: Optional[str] = None,
         temperature: float = 0.3,
-        max_tokens: int = 2000,
+        max_tokens: Optional[int] = None,
         provider: Optional[str] = None,
         use_case: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:

@@ -211,7 +211,7 @@ async def _stream_file_completion(
 def _file_response_max_tokens(message: str, has_context: bool) -> int:
     if has_context and LONG_FILE_REQUEST_PATTERN.search(message or ""):
         return LONG_FILE_RESPONSE_MAX_TOKENS
-    return 4096 if has_context else 2048
+    return 8192 if has_context else 4096
 
 
 async def _serialize_records(db: Session, records: list[FileRecord]) -> list[dict[str, Any]]:

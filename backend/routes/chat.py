@@ -1245,8 +1245,8 @@ def _needs_full_document_context(message: Optional[str]) -> bool:
 
 
 def _response_max_tokens(message: Optional[str], mode: str, doc_context: Optional[str] = None) -> int:
-    base = int(getattr(settings, "AI_MAX_TOKENS", 2048) or 2048)
-    fast_cap = int(getattr(settings, "AI_FAST_MAX_TOKENS", 320) or 320)
+    base = max(4096, int(getattr(settings, "AI_MAX_TOKENS", 8192) or 8192))
+    fast_cap = int(getattr(settings, "AI_FAST_MAX_TOKENS", 640) or 640)
     cleaned_message = " ".join(str(message or "").split())
     if (mode or "").lower() == "image":
         return base
@@ -1312,7 +1312,7 @@ def _looks_unfinished_answer(text: str) -> bool:
 
 
 def _stream_repair_attempts() -> int:
-    return max(0, min(int(getattr(settings, "AI_STREAM_REPAIR_ATTEMPTS", 2) or 2), 4))
+    return max(0, min(int(getattr(settings, "AI_STREAM_REPAIR_ATTEMPTS", 3) or 3), 4))
 
 
 def _stream_repair_tokens(max_tokens: Optional[int]) -> int:
@@ -3058,6 +3058,15 @@ async def chat(
 
         if request.stream:
             async def generate_public():
+                full_response = ""
+                final_payload_holder = {}
+
+                async def complete_public_stream(completed_response: str) -> None:
+                    nonlocal full_response
+                    full_response = completed_response
+                    _log_chat_response(mode, provider, model, completed_response)
+                    final_payload_holder["payload"] = _final_payload(completed_response)
+
                 try:
                     if mode == "image":
                         yield _sse_event({"type": "delta", "content": "Generating image..."})
@@ -3065,22 +3074,19 @@ async def chat(
                         yield _sse_event(_final_payload("Here are your images.", images=images))
                         return
 
-                    full_response = ""
-                    async for chunk in ai_service.chat_stream(
+                    async for event in _stream_ai_answer(
                         ai_messages,
                         provider=provider,
                         model=model,
                         max_tokens=response_max_tokens,
                         use_case=infer_use_case(mode, message_text),
+                        on_complete=complete_public_stream,
                     ):
-                        full_response += chunk
-                        yield _sse_event({"type": "delta", "content": chunk})
-
-                    full_response = full_response.strip()
-                    if not full_response:
-                        raise RuntimeError("AI provider returned an empty response")
-                    _log_chat_response(mode, provider, model, full_response)
-                    yield _sse_event(_final_payload(full_response))
+                        yield event
+                    yield _sse_event(
+                        final_payload_holder.get("payload")
+                        or _final_payload(full_response or fallback_message, interrupted=not bool(full_response))
+                    )
                 except Exception as exc:
                     logger.warning("Public streaming chat failed mode=%s provider=%s model=%s error=%s", mode, provider, model, exc)
                     if not full_response.strip() and mode != "image":
@@ -3712,12 +3718,17 @@ async def chat(
         doc_context = await _resolve_document_context(message_text, document)
 
     response_max_tokens = _response_max_tokens(message_text, mode, doc_context)
-    ai_messages = build_messages(history, mode)
-    if doc_context:
-        ai_messages.insert(1, {"role": "system", "content": f"Document context:\n{doc_context}"})
+    stream_history = _conversation_history(db, conversation, drop_last=True)
+    ai_messages = _build_ai_messages(
+        stream_history,
+        message_text,
+        mode,
+        doc_context=doc_context,
+    )
 
     if request.stream:
         async def generate():
+            full_response = ""
             try:
                 if mode == "image":
                     yield _sse_event({"type": "delta", "content": "Generating image..."})
@@ -3796,59 +3807,65 @@ async def chat(
                     return
 
                 full_response = ""
-                async for chunk in ai_service.chat_stream(
+                final_payload_holder = {}
+
+                async def complete_authenticated_stream(completed_response: str) -> None:
+                    nonlocal full_response
+                    full_response = completed_response
+                    prompt_images = await _await_image_task(prompt_image_task)
+                    answer_images = []
+                    if generate_answer_image and mode != "image":
+                        answer_images.extend(
+                            await _generate_images_best_effort(
+                                _build_answer_image_prompt(message_text, completed_response)
+                            )
+                        )
+                    _apply_images_to_message(
+                        user_message,
+                        images=prompt_images,
+                        generate_prompt_image=generate_prompt_image,
+                        generate_answer_image=generate_answer_image,
+                        document_id=document.id if document else None,
+                        document_name=document.filename if document else None,
+                    )
+                    _append_message(
+                        db,
+                        conversation,
+                        "assistant",
+                        completed_response,
+                        meta=_merge_message_meta(
+                            {"mode": mode},
+                            images=answer_images,
+                            image_origin="answer" if answer_images else None,
+                            document_id=document.id if document else None,
+                            document_name=document.filename if document else None,
+                        ),
+                    )
+                    saved_conversation = await _save_conversation_with_summary(
+                        db,
+                        conversation,
+                        refresh_summary=True,
+                    )
+                    _log_chat_response(mode, provider, model, completed_response)
+                    final_payload_holder["payload"] = _final_payload(
+                        completed_response,
+                        saved_conversation,
+                        prompt_images=prompt_images,
+                        answer_images=answer_images,
+                    )
+
+                async for event in _stream_ai_answer(
                     ai_messages,
                     provider=provider,
                     model=model,
                     max_tokens=response_max_tokens,
                     use_case=infer_use_case(mode, message_text),
+                    on_complete=complete_authenticated_stream,
                 ):
-                    full_response += chunk
-                    yield _sse_event({"type": "delta", "content": chunk})
-
-                full_response = full_response.strip()
-                if not full_response:
-                    raise RuntimeError("AI provider returned an empty response")
-                prompt_images = await _await_image_task(prompt_image_task)
-                answer_images = []
-                if generate_answer_image and mode != "image":
-                    answer_images = await _generate_images_best_effort(
-                        _build_answer_image_prompt(message_text, full_response)
-                    )
-                _apply_images_to_message(
-                    user_message,
-                    images=prompt_images,
-                    generate_prompt_image=generate_prompt_image,
-                    generate_answer_image=generate_answer_image,
-                    document_id=document.id if document else None,
-                    document_name=document.filename if document else None,
-                )
-                _append_message(
-                    db,
-                    conversation,
-                    "assistant",
-                    full_response,
-                    meta=_merge_message_meta(
-                        {"mode": mode},
-                        images=answer_images,
-                        image_origin="answer" if answer_images else None,
-                        document_id=document.id if document else None,
-                        document_name=document.filename if document else None,
-                    ),
-                )
-                saved_conversation = await _save_conversation_with_summary(
-                    db,
-                    conversation,
-                    refresh_summary=True,
-                )
-                _log_chat_response(mode, provider, model, full_response)
+                    yield event
                 yield _sse_event(
-                    _final_payload(
-                        full_response,
-                        saved_conversation,
-                        prompt_images=prompt_images,
-                        answer_images=answer_images,
-                    )
+                    final_payload_holder.get("payload")
+                    or _final_payload(fallback_message, conversation, interrupted=True)
                 )
             except Exception as exc:
                 logger.warning("Authenticated streaming chat failed mode=%s provider=%s model=%s error=%s", mode, provider, model, exc)

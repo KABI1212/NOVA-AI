@@ -282,7 +282,7 @@ async def generate_answer(message: str, history: List[dict]) -> str:
         provider=provider,
         model=model,
         temperature=float(getattr(settings, "AI_TEMPERATURE", 0.3) or 0.3),
-        max_tokens=int(getattr(settings, "AI_MAX_TOKENS", 2048) or 2048),
+        max_tokens=int(getattr(settings, "AI_MAX_TOKENS", 8192) or 8192),
     ):
         response_text += chunk
 
