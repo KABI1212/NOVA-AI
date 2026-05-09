@@ -176,9 +176,25 @@ def _default_temperature() -> float:
     return max(0.0, min(value, 1.0))
 
 
+def _default_top_p() -> float:
+    value = float(getattr(settings, "AI_TOP_P", 0.95) or 0.95)
+    return max(0.05, min(value, 1.0))
+
+
 def _default_max_tokens() -> int:
     value = int(getattr(settings, "AI_MAX_TOKENS", 2048) or 2048)
     return max(128, value)
+
+
+def _stream_timeout() -> httpx.Timeout:
+    timeout = _request_timeout_seconds()
+    return httpx.Timeout(
+        timeout=max(timeout, 30),
+        connect=min(timeout, 20),
+        read=max(timeout, 300),
+        write=timeout,
+        pool=timeout,
+    )
 
 
 def _preview_text(text: str) -> str:
@@ -1517,6 +1533,7 @@ async def _stream_google(
     config = types.GenerateContentConfig(
         system_instruction=system_instruction or None,
         temperature=temperature if temperature is not None else _default_temperature(),
+        top_p=_default_top_p(),
         max_output_tokens=max_tokens or _default_max_tokens(),
     )
 
@@ -1548,13 +1565,14 @@ async def _stream_groq(
         "stream": True,
         "max_tokens": max_tokens or _default_max_tokens(),
         "temperature": temperature if temperature is not None else _default_temperature(),
+        "top_p": _default_top_p(),
     }
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
-    async with httpx.AsyncClient(timeout=_request_timeout_seconds()) as client:
+    async with httpx.AsyncClient(timeout=_stream_timeout()) as client:
         async with client.stream(
             "POST",
             "https://api.groq.com/openai/v1/chat/completions",
@@ -1600,6 +1618,7 @@ async def _stream_deepseek(
         messages=messages,
         stream=True,
         temperature=temperature if temperature is not None else _default_temperature(),
+        top_p=_default_top_p(),
         max_tokens=max_tokens or _default_max_tokens(),
     )
     async for chunk in stream:
@@ -1628,6 +1647,7 @@ async def _stream_anthropic(
         model=model or _provider_default_model("anthropic"),
         max_tokens=max_tokens or _default_max_tokens(),
         temperature=temperature if temperature is not None else _default_temperature(),
+        top_p=_default_top_p(),
         system=system,
         messages=user_messages,
     ) as stream:
@@ -1650,10 +1670,11 @@ async def _stream_ollama(
             "num_predict": max_tokens or getattr(settings, "OLLAMA_NUM_PREDICT", 512),
             "num_ctx": getattr(settings, "OLLAMA_NUM_CTX", 4096),
             "temperature": temperature if temperature is not None else _default_temperature(),
+            "top_p": _default_top_p(),
         },
     }
 
-    async with httpx.AsyncClient(timeout=_request_timeout_seconds()) as client:
+    async with httpx.AsyncClient(timeout=_stream_timeout()) as client:
         async with client.stream(
             "POST",
             f"{getattr(settings, 'OLLAMA_BASE_URL', 'http://localhost:11434')}/api/chat",
@@ -1691,6 +1712,7 @@ async def _stream_openai(
         messages=messages,
         stream=True,
         temperature=temperature if temperature is not None else _default_temperature(),
+        top_p=_default_top_p(),
         max_tokens=max_tokens or _default_max_tokens(),
     )
     async for chunk in stream:

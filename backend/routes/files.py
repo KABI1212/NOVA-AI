@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -32,6 +33,12 @@ FILE_FIRST_SYSTEM_PROMPT = (
     "If the file context is sufficient, answer from it directly and cite the file labels naturally.\n"
     "If the file context is incomplete, say what the files support first, then use general knowledge carefully.\n"
     "Never invent file citations that were not provided."
+)
+
+LONG_FILE_RESPONSE_MAX_TOKENS = 8192
+LONG_FILE_REQUEST_PATTERN = re.compile(
+    r"\b(?:long|detailed|complete|full|comprehensive|all|every|code|program|script|assignment|report|essay)\b",
+    re.IGNORECASE,
 )
 
 
@@ -71,6 +78,7 @@ async def _collect_completion(
     provider: str | None,
     model: str | None,
     use_case: str,
+    max_tokens: int | None = None,
 ) -> str:
     chunks: list[str] = []
     async for chunk in ai_service.chat_completion(
@@ -78,6 +86,7 @@ async def _collect_completion(
         stream=False,
         provider=provider,
         model=model,
+        max_tokens=max_tokens,
         use_case=use_case,
     ):
         if chunk:
@@ -89,6 +98,28 @@ def _sse_event(payload: dict[str, Any]) -> str:
     import json
 
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _stream_headers() -> dict[str, str]:
+    return {
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+
+
+def _finalize_answer(text: str) -> str:
+    answer = str(text or "").strip()
+    if answer.count("```") % 2 == 1:
+        answer = f"{answer.rstrip()}\n```"
+    answer = re.sub(r"(?m)\n?\s*(?:[-*+]|\d+[.)])\s*$", "", answer.rstrip()).strip()
+    return answer
+
+
+def _file_response_max_tokens(message: str, has_context: bool) -> int:
+    if has_context and LONG_FILE_REQUEST_PATTERN.search(message or ""):
+        return LONG_FILE_RESPONSE_MAX_TOKENS
+    return 4096 if has_context else 2048
 
 
 async def _serialize_records(db: Session, records: list[FileRecord]) -> list[dict[str, Any]]:
@@ -352,15 +383,18 @@ async def chat_with_files(
     messages.append({"role": "user", "content": message_text})
 
     use_case = "document" if file_context else infer_use_case("chat", message_text)
+    response_max_tokens = _file_response_max_tokens(message_text, bool(file_context))
 
     if request_body.stream:
         async def generate() -> Any:
             full_response = ""
             try:
+                yield _sse_event({"type": "start"})
                 async for chunk in ai_service.chat_stream(
                     messages,
                     provider=request_body.provider,
                     model=request_body.model,
+                    max_tokens=response_max_tokens,
                     use_case=use_case,
                 ):
                     if not chunk:
@@ -368,7 +402,9 @@ async def chat_with_files(
                     full_response += chunk
                     yield _sse_event({"type": "delta", "content": chunk})
 
-                final_answer = full_response.strip()
+                final_answer = _finalize_answer(full_response)
+                if not final_answer:
+                    raise RuntimeError("AI provider returned an empty response")
                 append_conversation_message(
                     db,
                     conversation,
@@ -391,10 +427,36 @@ async def chat_with_files(
                     }
                 )
             except Exception as exc:
+                final_answer = _finalize_answer(full_response)
+                if final_answer:
+                    append_conversation_message(
+                        db,
+                        conversation,
+                        "assistant",
+                        final_answer,
+                        meta={
+                            "sources": citations,
+                            "answer_source": "file" if file_context else "general",
+                            "mode": "files",
+                            "interrupted": True,
+                        },
+                    )
+                    save_conversation(db, conversation)
+                    yield _sse_event(
+                        {
+                            "type": "final",
+                            "answer": final_answer,
+                            "conversation_id": conversation.id,
+                            "sources": citations,
+                            "answer_source": "file" if file_context else "general",
+                            "error": "partial",
+                        }
+                    )
+                    return
                 yield _sse_event(
                     {
                         "type": "final",
-                        "answer": str(exc),
+                        "answer": "NOVA AI could not finish that file answer. Please try again.",
                         "conversation_id": conversation.id,
                         "sources": citations,
                         "answer_source": "file" if file_context else "general",
@@ -402,14 +464,16 @@ async def chat_with_files(
                     }
                 )
 
-        return StreamingResponse(generate(), media_type="text/event-stream")
+        return StreamingResponse(generate(), media_type="text/event-stream", headers=_stream_headers())
 
     answer = await _collect_completion(
         messages,
         provider=request_body.provider,
         model=request_body.model,
         use_case=use_case,
+        max_tokens=response_max_tokens,
     )
+    answer = _finalize_answer(answer)
     append_conversation_message(
         db,
         conversation,

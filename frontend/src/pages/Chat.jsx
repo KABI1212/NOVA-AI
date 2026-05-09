@@ -16,7 +16,8 @@ import UploadedFilesPanel from "../components/uploads/UploadedFilesPanel";
 import { chatAPI, fetchApi, filesAPI, imageAPI } from "../services/api";
 import { speakText, speechSupported as browserSpeechSupported, stopSpeechPlayback } from "../utils/speech";
 import { useAuthStore } from "../utils/store";
-const REQUEST_TIMEOUT_MS = 240000;
+const REQUEST_TIMEOUT_MS = 600000;
+const STREAM_RENDER_INTERVAL_MS = 32;
 const SESSION_STORAGE_KEY = "nova_session_id";
 const MODEL_STORAGE_KEY = "nova_selected_model";
 const PROMPT_IMAGE_STORAGE_KEY = "nova_generate_prompt_image";
@@ -499,6 +500,23 @@ const readSseEvents = async (response, onEvent) => {
     processEventBlock(buffer);
   }
 };
+
+const scheduleStreamRender = (() => {
+  if (typeof window === "undefined") {
+    return (callback) => setTimeout(callback, STREAM_RENDER_INTERVAL_MS);
+  }
+
+  return (callback) => {
+    const timeoutId = window.setTimeout(() => {
+      if (typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(callback);
+      } else {
+        callback();
+      }
+    }, STREAM_RENDER_INTERVAL_MS);
+    return timeoutId;
+  };
+})();
 
 function Chat() {
   const navigate = useNavigate();
@@ -1608,15 +1626,17 @@ function Chat() {
 
         let streamedReply = "";
         let finalPayload = null;
+        let pendingStreamRender = "";
+        let streamRenderTimer = null;
 
-        await readSseEvents(response, (parsed) => {
-          if (!parsed || typeof parsed !== "object") {
+        const flushStreamRender = () => {
+          streamRenderTimer = null;
+          const nextContent = pendingStreamRender;
+          if (!nextContent) {
             return;
           }
 
-          if (parsed.type === "delta" && parsed.content) {
-            streamedReply += parsed.content;
-            setIsTyping(false);
+          startTransition(() => {
             setMessages((previous) => {
               const updated = [...previous];
               const assistantIndex = updated.findIndex(
@@ -1624,9 +1644,9 @@ function Chat() {
               );
               const assistantMessage = createMessage(
                 "assistant",
-                streamedReply,
+                nextContent,
                 currentConversationId,
-                { id: assistantMessageId }
+                { id: assistantMessageId, streaming: true }
               );
 
               if (assistantIndex === -1) {
@@ -1634,12 +1654,38 @@ function Chat() {
               } else {
                 updated[assistantIndex] = {
                   ...updated[assistantIndex],
-                  content: streamedReply,
+                  content: nextContent,
+                  streaming: true,
                 };
               }
 
               return updated;
             });
+          });
+        };
+
+        const queueStreamRender = () => {
+          pendingStreamRender = streamedReply;
+          if (streamRenderTimer != null) {
+            return;
+          }
+          streamRenderTimer = scheduleStreamRender(flushStreamRender);
+        };
+
+        await readSseEvents(response, (parsed) => {
+          if (!parsed || typeof parsed !== "object") {
+            return;
+          }
+
+          if (parsed.type === "start") {
+            setIsTyping(false);
+            return;
+          }
+
+          if (parsed.type === "delta" && parsed.content) {
+            streamedReply += parsed.content;
+            setIsTyping(false);
+            queueStreamRender();
           }
 
           if (parsed.type === "final") {
@@ -1647,6 +1693,13 @@ function Chat() {
             setIsTyping(false);
           }
         });
+
+        if (streamRenderTimer != null) {
+          window.clearTimeout(streamRenderTimer);
+          streamRenderTimer = null;
+        }
+        pendingStreamRender = streamedReply;
+        flushStreamRender();
 
         const nextConversationId =
           finalPayload?.conversation_id || currentConversationId;
@@ -1658,12 +1711,18 @@ function Chat() {
           "NOVA AI: ...";
         const { promptImages, answerImages } = getResponseImages(finalPayload);
         const answerSources = getResponseSources(finalPayload);
+        if (finalPayload?.error === "retry" || finalPayload?.error === "partial") {
+          toast.error("NOVA AI had to recover the stream. The answer shown is the safest completed text available.");
+        }
         const assistantMessage =
           reply || answerImages.length
             ? createMessage("assistant", reply, nextConversationId, {
                 id: assistantMessageId,
                 images: answerImages,
-                meta: answerSources.length ? { sources: answerSources } : null,
+                meta: {
+                  ...(answerSources.length ? { sources: answerSources } : {}),
+                  ...(finalPayload?.error ? { stream_recovered: true } : {}),
+                },
               })
             : null;
 

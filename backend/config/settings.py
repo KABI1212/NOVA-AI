@@ -97,9 +97,12 @@ class Settings(BaseSettings):
     IMAGE_PROMPT_ENHANCER_PROVIDER: str = ""
     AI_MODEL: str = ""
     AI_TEMPERATURE: float = 0.3
+    AI_TOP_P: float = 0.95
     AI_MAX_TOKENS: int = 2048
     AI_FAST_MAX_TOKENS: int = 320
     AI_REQUEST_TIMEOUT_SECONDS: int = 60
+    AI_STREAM_HEARTBEAT_SECONDS: int = 15
+    AI_STREAM_REPAIR_MAX_TOKENS: int = 1600
     AI_IMAGE_REQUEST_TIMEOUT_SECONDS: int = 180
     AI_AUTO_MAX_PROVIDER_ATTEMPTS: int = 2
     AI_DEBUG_LOGGING: bool = False
