@@ -5105,6 +5105,7 @@ body {
 @media (min-width: 1200px) {
   .chat-inner {
     width: min(1080px, 100%) !important;
+    transform: translateX(36px);
   }
 }
 
