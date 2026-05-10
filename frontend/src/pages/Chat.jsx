@@ -2079,7 +2079,7 @@ function Chat() {
           onRenameConversation={handleRenameConversation}
           onDeleteConversation={handleDeleteConversation}
         />
-        <main className="chat-container">
+        <main className="chat-container chat-section">
           <Topbar
             title={activeNav}
             onToggleSidebar={handleToggleSidebar}
@@ -2103,9 +2103,9 @@ function Chat() {
           <DragDropUploader
             onFilesSelected={handleSelectFiles}
             disabled={isTyping || isConversationLoading}
-            className="mx-auto w-full max-w-[980px]"
+            className="input-wrapper"
           >
-            <div className="space-y-4 px-4 pb-4 md:px-5">
+            <div className="input-wrapper-inner space-y-4">
               <UploadedFilesPanel
                 files={uploadedFiles}
                 onPreview={setPreviewFile}

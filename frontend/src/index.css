@@ -4779,8 +4779,9 @@ body,
 /* Long answer scroll safety */
 html,
 body {
+  width: 100%;
   height: 100%;
-  overflow-y: auto !important;
+  overflow-y: hidden !important;
   overflow-x: hidden !important;
 }
 
@@ -4805,7 +4806,20 @@ body {
   overflow-x: hidden !important;
 }
 
-.chat {
+.chat-section {
+  flex: 1 1 auto;
+  position: relative;
+  display: flex !important;
+  flex-direction: column !important;
+  width: 100%;
+  height: 100vh;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden !important;
+}
+
+.chat,
+.messages-wrapper {
   flex: 1 1 auto;
   min-height: 0;
   height: auto;
@@ -4825,14 +4839,31 @@ body {
   padding-bottom: var(--composer-reserved-space) !important;
 }
 
-.input-wrap {
+.input-wrapper {
   position: absolute !important;
-  left: 50% !important;
-  right: auto !important;
+  left: 20px !important;
+  right: 20px !important;
   bottom: 18px !important;
   z-index: 1000 !important;
-  width: min(820px, calc(100% - 48px)) !important;
-  transform: translateX(-50%) !important;
+  width: auto !important;
+  max-width: none !important;
+  margin: 0 !important;
+}
+
+.input-wrapper-inner {
+  width: min(820px, 100%);
+  margin: 0 auto;
+  padding: 0;
+}
+
+.input-wrapper .input-wrap {
+  position: static !important;
+  left: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: 100% !important;
+  max-width: none !important;
+  transform: none !important;
 }
 
 .chat-inner,
@@ -4925,7 +4956,8 @@ body {
     --composer-reserved-space: 260px;
   }
 
-  .chat {
+  .chat,
+  .messages-wrapper {
     padding-bottom: var(--composer-reserved-space) !important;
   }
 
@@ -4933,11 +4965,14 @@ body {
     padding-bottom: var(--composer-reserved-space) !important;
   }
 
-  .input-wrap {
+  .input-wrapper {
     left: 11px !important;
     right: 11px !important;
     bottom: 12px !important;
     width: auto !important;
-    transform: none !important;
+  }
+
+  .input-wrapper-inner {
+    width: 100%;
   }
 }

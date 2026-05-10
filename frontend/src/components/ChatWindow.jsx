@@ -213,7 +213,7 @@ function ChatWindow({
 
   return (
     <>
-      <div className="chat" ref={chatRef}>
+      <div className="chat messages-wrapper" ref={chatRef}>
         <div className="chat-inner">
           {messages.map((message) => {
             const isUser = message.role === "user";
