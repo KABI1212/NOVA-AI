@@ -104,6 +104,7 @@ const PROMPT_IMAGE_ICON = "\u{1F3A8}";
 const NOTE_PIN_ICON = "\u{1F4CC}";
 const CLOSE_SYMBOL = "\u00D7";
 const BACK_LABEL = "\u2190 Back";
+const MAX_TEXTAREA_HEIGHT = 200;
 
 function isImageFile(file: File | null | undefined) {
   if (!file) {
@@ -198,8 +199,10 @@ export default function ChatInput({
       return;
     }
 
-    textareaRef.current.style.height = "auto";
-    textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    const textarea = textareaRef.current;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
   }, [value]);
 
   useEffect(() => {
@@ -471,6 +474,10 @@ export default function ChatInput({
   };
 
   const handleInputChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    const textarea = event.currentTarget;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
     onChange(event.target.value);
   };
 

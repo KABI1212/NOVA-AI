@@ -4940,9 +4940,10 @@ body {
 
 .ai-message {
   width: 100% !important;
-  margin-bottom: 40px !important;
+  margin-top: 30px !important;
+  margin-bottom: 60px !important;
   color: #ffffff;
-  line-height: 1.75;
+  line-height: 2;
   white-space: normal;
   overflow-wrap: break-word;
   word-break: break-word;
@@ -4963,8 +4964,8 @@ body {
   width: auto !important;
   height: auto !important;
   margin-top: 16px !important;
-  margin-bottom: 80px !important;
-  gap: 14px !important;
+  margin-bottom: 70px !important;
+  gap: 16px !important;
   transform: none !important;
   z-index: auto !important;
   opacity: 0.72;
@@ -4982,10 +4983,11 @@ body {
 
 .message-footer {
   width: 100%;
-  margin-top: 24px !important;
+  margin-top: 30px !important;
   animation: messageFooterFadeIn 0.3s ease both;
 }
 
+.message-divider,
 .message-line {
   width: 100%;
   height: 1px;
@@ -4997,6 +4999,13 @@ body {
   position: static !important;
   transform: none !important;
   flex: 0 0 auto;
+  color: #8b8b8b;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+.message-action:hover:not(:disabled) {
+  color: #ffffff;
+  transform: scale(1.1) !important;
 }
 
 .message-content,
@@ -5034,6 +5043,42 @@ body {
 .nova-code-pre,
 .nova-table-wrap {
   overflow-x: auto !important;
+}
+
+/* ChatGPT-style composer growth cap */
+.input-wrapper,
+.input-wrapper-inner,
+.input-shell {
+  height: auto !important;
+  max-height: none !important;
+}
+
+.input-pill {
+  align-items: flex-end !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+}
+
+.input-pill .input-field,
+.input-field {
+  flex: 1 1 auto;
+  width: 100% !important;
+  min-width: 0;
+  min-height: 24px !important;
+  max-height: 200px !important;
+  overflow-y: auto !important;
+  resize: none !important;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.input-btn,
+.input-btn.ghost,
+.input-launcher-btn,
+.input-actions {
+  flex-shrink: 0 !important;
 }
 
 @keyframes messageFooterFadeIn {

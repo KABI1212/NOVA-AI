@@ -279,7 +279,7 @@ function ChatWindow({
                   </div>
                 ) : isAssistantComplete ? (
                   <div className="message-footer">
-                    <div className="message-line" aria-hidden="true" />
+                    <div className="message-divider" aria-hidden="true" />
                     <div className="message-actions assistant" aria-label="Answer actions">
                       <button
                         className={`message-action${isCopied ? " active" : ""}`}
