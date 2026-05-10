@@ -2,10 +2,98 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import sys
+from types import SimpleNamespace
 
 import pytest
 
 ai_service_module = importlib.import_module("services.ai_service")
+
+
+class _FakeAnthropicStream:
+    def __init__(self, attempt: int, *, fail_after_text: bool = False) -> None:
+        self.attempt = attempt
+        self.fail_after_text = fail_after_text
+        self.text_stream = self._text_stream()
+
+    async def __aenter__(self):
+        if self.attempt == 1 and not self.fail_after_text:
+            raise RuntimeError("stream dropped before content")
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def _text_stream(self):
+        yield "Hello"
+        if self.fail_after_text:
+            raise RuntimeError("stream dropped after content")
+
+
+def test_anthropic_stream_retries_when_interrupted_before_first_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = []
+
+    class FakeMessages:
+        def stream(self, **kwargs):
+            attempts.append(kwargs)
+            return _FakeAnthropicStream(len(attempts))
+
+    class FakeAsyncAnthropic:
+        def __init__(self, **kwargs):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr(ai_service_module.settings, "ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setattr(ai_service_module.settings, "AI_STREAM_RETRY_ATTEMPTS", 2)
+    monkeypatch.setattr(ai_service_module.settings, "AI_STREAM_RETRY_BACKOFF_SECONDS", 0)
+    monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(AsyncAnthropic=FakeAsyncAnthropic))
+
+    async def scenario() -> None:
+        chunks = [
+            token
+            async for token in ai_service_module._stream_anthropic(
+                [{"role": "user", "content": "Hi"}],
+                "claude-test",
+                0.2,
+                4096,
+            )
+        ]
+        assert chunks == ["Hello"]
+        assert len(attempts) == 2
+
+    asyncio.run(scenario())
+
+
+def test_anthropic_stream_does_not_retry_after_partial_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = []
+
+    class FakeMessages:
+        def stream(self, **kwargs):
+            attempts.append(kwargs)
+            return _FakeAnthropicStream(len(attempts), fail_after_text=True)
+
+    class FakeAsyncAnthropic:
+        def __init__(self, **kwargs):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr(ai_service_module.settings, "ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setattr(ai_service_module.settings, "AI_STREAM_RETRY_ATTEMPTS", 3)
+    monkeypatch.setattr(ai_service_module.settings, "AI_STREAM_RETRY_BACKOFF_SECONDS", 0)
+    monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(AsyncAnthropic=FakeAsyncAnthropic))
+
+    async def scenario() -> None:
+        chunks = []
+        with pytest.raises(RuntimeError, match="after content"):
+            async for token in ai_service_module._stream_anthropic(
+                [{"role": "user", "content": "Hi"}],
+                "claude-test",
+                0.2,
+                4096,
+            ):
+                chunks.append(token)
+        assert chunks == ["Hello"]
+        assert len(attempts) == 1
+
+    asyncio.run(scenario())
 
 
 def test_complete_non_stream_recovers_from_partial_failure_when_provider_is_explicit(

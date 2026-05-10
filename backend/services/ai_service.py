@@ -7,6 +7,7 @@ provider fallback, and safer empty-response handling.
 from __future__ import annotations
 
 import base64
+import asyncio
 import io
 import json
 import logging
@@ -199,6 +200,16 @@ def _stream_timeout() -> httpx.Timeout:
         write=timeout,
         pool=timeout,
     )
+
+
+def _stream_retry_attempts() -> int:
+    value = int(getattr(settings, "AI_STREAM_RETRY_ATTEMPTS", 3) or 3)
+    return max(1, min(value, 5))
+
+
+def _stream_retry_backoff_seconds(attempt: int) -> float:
+    base = float(getattr(settings, "AI_STREAM_RETRY_BACKOFF_SECONDS", 1.0) or 1.0)
+    return min(max(base, 0.0) * (2**attempt), 8.0)
 
 
 def _preview_text(text: str) -> str:
@@ -1756,6 +1767,32 @@ async def _stream_anthropic(
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
 ) -> AsyncGenerator[str, None]:
+    emitted = False
+    for attempt in range(_stream_retry_attempts()):
+        try:
+            async for text in _stream_anthropic_once(messages, model, temperature, max_tokens):
+                emitted = True
+                yield text
+            return
+        except Exception:
+            if emitted or attempt >= _stream_retry_attempts() - 1:
+                raise
+            delay = _stream_retry_backoff_seconds(attempt)
+            logger.warning(
+                "Anthropic stream failed before first token; retrying attempt=%s delay=%.2fs",
+                attempt + 1,
+                delay,
+            )
+            if delay:
+                await asyncio.sleep(delay)
+
+
+async def _stream_anthropic_once(
+    messages: List[Dict[str, str]],
+    model: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+) -> AsyncGenerator[str, None]:
     import anthropic as _anthropic  # type: ignore
 
     api_key = getattr(settings, "ANTHROPIC_API_KEY", "")
@@ -1765,7 +1802,7 @@ async def _stream_anthropic(
     system = next((message["content"] for message in messages if message["role"] == "system"), "")
     user_messages = [message for message in messages if message["role"] != "system"]
 
-    client = _anthropic.AsyncAnthropic(api_key=api_key, timeout=_request_timeout_seconds())
+    client = _anthropic.AsyncAnthropic(api_key=api_key, timeout=_stream_timeout())
     async with client.messages.stream(
         model=model or _provider_default_model("anthropic"),
         max_tokens=max_tokens or _default_max_tokens(),
