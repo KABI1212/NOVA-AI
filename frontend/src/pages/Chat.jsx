@@ -1531,6 +1531,7 @@ function Chat() {
                 model: selectedModelOption.model,
               }
             : {};
+        const shouldStreamResponse = !selectedProvider.provider;
 
         controller = new AbortController();
         timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -1550,7 +1551,7 @@ function Chat() {
             hasActiveUploadedFiles
               ? {
                   message: prompt,
-                  stream: true,
+                  stream: shouldStreamResponse,
                   conversation_id: currentConversationId,
                   edit_from_message_id: editFromMessageId,
                   session_id: getOrCreateSessionId(),
@@ -1559,7 +1560,7 @@ function Chat() {
                 }
               : {
                   message: prompt,
-                  stream: true,
+                  stream: shouldStreamResponse,
                   mode: requestMode,
                   conversation_id: currentConversationId,
                   edit_from_message_id: editFromMessageId,

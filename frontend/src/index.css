@@ -5049,6 +5049,42 @@ body {
   overflow-x: auto !important;
 }
 
+.nova-markdown .nova-list-unordered,
+.nova-markdown ul.nova-list-unordered {
+  list-style-type: disc !important;
+  list-style-position: outside !important;
+  margin: 12px 0 16px !important;
+  padding-left: 1.55rem !important;
+}
+
+.nova-markdown .nova-list-ordered,
+.nova-markdown ol.nova-list-ordered {
+  list-style-type: decimal !important;
+  list-style-position: outside !important;
+  margin: 12px 0 16px !important;
+  padding-left: 1.65rem !important;
+}
+
+.nova-markdown .nova-list-item {
+  display: list-item !important;
+  list-style: inherit !important;
+  padding-left: 0.15rem !important;
+  margin: 0 0 8px !important;
+  overflow-wrap: anywhere !important;
+}
+
+.nova-markdown .nova-list-item::before,
+.nova-markdown .nova-list-unordered .nova-list-item::before,
+.nova-markdown .nova-list-ordered .nova-list-item::before {
+  content: none !important;
+  display: none !important;
+}
+
+.nova-markdown .nova-list-item .nova-p {
+  margin: 0 !important;
+  padding-left: 0 !important;
+}
+
 /* Give markdown tables enough room to breathe instead of crushing columns. */
 .nova-table-wrap {
   width: 100% !important;

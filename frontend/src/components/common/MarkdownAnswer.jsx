@@ -162,14 +162,14 @@ function normalizeHeadingSeparators(value) {
 function paragraphClassName(children) {
   const text = extractPlainText(children).trim();
   const lowerText = text.toLowerCase();
-  const classes = ["nova-p", "nova-bullet-p"];
+  const classes = ["nova-p"];
 
   if (/^(?:💡\s*)?example\s*:/i.test(text) || lowerText.startsWith("💡 example")) {
-    classes.push("example");
+    classes.push("nova-bullet-p", "example");
   } else if (/^(?:✨\s*)?(?:important|note)\s*:/i.test(text) || lowerText.startsWith("✨")) {
-    classes.push("note");
+    classes.push("nova-bullet-p", "note");
   } else if (/^(?:📌\s*)?(?:key|important)\s*/i.test(text) || lowerText.startsWith("📌")) {
-    classes.push("key");
+    classes.push("nova-bullet-p", "key");
   }
 
   return classes.join(" ");
