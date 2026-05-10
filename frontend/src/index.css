@@ -5045,6 +5045,43 @@ body {
   overflow-x: auto !important;
 }
 
+/* Give markdown tables enough room to breathe instead of crushing columns. */
+.nova-table-wrap {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 18px 0 26px !important;
+  overflow-x: auto !important;
+  overflow-y: visible !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+.nova-table,
+.bb table {
+  width: max-content !important;
+  min-width: min(760px, calc(100vw - 48px)) !important;
+  table-layout: auto !important;
+  border-collapse: collapse;
+}
+
+.nova-th,
+.nova-td,
+.bb th,
+.bb td {
+  min-width: 150px;
+  padding: 14px 18px !important;
+  line-height: 1.55;
+  white-space: normal !important;
+  overflow-wrap: break-word !important;
+  word-break: normal !important;
+}
+
+.nova-th:first-child,
+.nova-td:first-child,
+.bb th:first-child,
+.bb td:first-child {
+  min-width: 190px;
+}
+
 /* ChatGPT-style composer growth cap */
 .input-wrapper,
 .input-wrapper-inner,
