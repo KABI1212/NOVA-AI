@@ -188,6 +188,38 @@ def test_complete_non_stream_recovers_from_partial_failure_when_provider_is_auto
     asyncio.run(scenario())
 
 
+def test_complete_non_stream_tries_next_model_for_same_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempted_models = []
+
+    async def provider_with_bad_first_model(messages, model, temperature, max_tokens):
+        attempted_models.append(model)
+        if model == "bad-claude-model":
+            raise RuntimeError("model unavailable")
+        yield "Recovered with fallback model"
+
+    monkeypatch.setattr(ai_service_module, "_provider_available", lambda provider: True)
+    monkeypatch.setattr(ai_service_module, "_provider_chain", lambda provider=None, use_case=None: ["anthropic"])
+    monkeypatch.setattr(ai_service_module, "_configured_provider_override", lambda: None)
+    monkeypatch.setattr(ai_service_module, "_resolve_provider", lambda: "anthropic")
+    monkeypatch.setattr(ai_service_module.settings, "ANTHROPIC_MODEL", "bad-claude-model")
+    monkeypatch.setattr(
+        ai_service_module,
+        "_PROVIDER_STREAM_MAP",
+        {"anthropic": provider_with_bad_first_model},
+    )
+
+    async def scenario() -> None:
+        result = await ai_service_module._complete_non_stream(
+            [{"role": "user", "content": "What is a protocol?"}],
+            provider=None,
+            model=None,
+        )
+        assert result == "Recovered with fallback model"
+        assert attempted_models[:2] == ["bad-claude-model", ai_service_module._DEFAULT_ANTHROPIC_MODEL]
+
+    asyncio.run(scenario())
+
+
 def test_complete_non_stream_limits_automatic_provider_fallback_attempts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -226,7 +258,7 @@ def test_complete_non_stream_limits_automatic_provider_fallback_attempts(
     async def scenario() -> None:
         with pytest.raises(
             RuntimeError,
-            match="openai: provider down; google: provider down",
+            match="openai/.+: provider down; .*google/.+: provider down",
         ):
             await ai_service_module._complete_non_stream(
                 [{"role": "user", "content": "What is a protocol?"}],

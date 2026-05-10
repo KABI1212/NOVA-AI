@@ -611,6 +611,73 @@ def _provider_default_model(provider: str, use_case: Optional[str] = None) -> st
     return _DEFAULT_OLLAMA_MODEL
 
 
+def _provider_model_fallbacks(provider: str, use_case: Optional[str] = None) -> List[str]:
+    normalized_use_case = str(use_case or "").strip().lower()
+    if provider == "openai":
+        models = [
+            _provider_default_model("openai", use_case),
+            getattr(settings, "OPENAI_CHAT_MODEL", ""),
+            getattr(settings, "OPENAI_CODE_MODEL", "") if normalized_use_case == "coding" else "",
+            getattr(settings, "OPENAI_EXPLAIN_MODEL", "") if normalized_use_case in {"concept", "document", "research"} else "",
+            getattr(settings, "OPENAI_FAST_MODEL", ""),
+            "gpt-4o",
+            "gpt-4o-mini",
+        ]
+    elif provider == "anthropic":
+        models = [
+            _configured_provider_model("anthropic") or "",
+            _DEFAULT_ANTHROPIC_MODEL,
+            "claude-sonnet-4-5",
+            "claude-opus-4-5",
+            "claude-3-haiku-20240307",
+        ]
+    elif provider == "google":
+        models = [
+            getattr(settings, "GEMINI_CHAT_MODEL", ""),
+            _DEFAULT_GEMINI_MODEL,
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+        ]
+    elif provider == "deepseek":
+        models = [
+            _configured_provider_model("deepseek") or "",
+            _DEFAULT_DEEPSEEK_MODEL,
+            "deepseek-reasoner",
+            "deepseek-chat",
+        ]
+    elif provider == "groq":
+        models = [
+            _configured_provider_model("groq") or "",
+            _DEFAULT_GROQ_MODEL,
+            "llama-3.3-70b-versatile",
+            "llama3-8b-8192",
+            "gemma2-9b-it",
+        ]
+    elif provider == "ollama":
+        models = [
+            _configured_model_override() or "",
+            _DEFAULT_OLLAMA_MODEL,
+            "mistral",
+            "codellama",
+        ]
+    else:
+        models = [_provider_default_model(provider, use_case)]
+
+    return [item for item in dict.fromkeys(str(model or "").strip() for model in models) if item]
+
+
+def _provider_model_candidates(
+    provider: str,
+    requested_provider: str,
+    explicit_model: Optional[str],
+    use_case: Optional[str] = None,
+) -> List[str]:
+    preferred = _model_for_provider(provider, requested_provider, explicit_model)
+    models = [preferred] if preferred else []
+    models.extend(_provider_model_fallbacks(provider, use_case))
+    return [item for item in dict.fromkeys(models) if item]
+
+
 def _normalize_image_provider(provider: Optional[str]) -> str:
     normalized = str(provider or "").strip().lower()
     return _IMAGE_PROVIDER_ALIASES.get(normalized, normalized)
@@ -2045,65 +2112,66 @@ async def _stream_with_fallback(
             errors.append(f"{current_provider}: unsupported provider")
             continue
 
-        model_for_provider = (
-            _model_for_provider(current_provider, requested_provider, model)
-            or (
-                _configured_model_override()
-                if current_provider == requested_provider and _configured_provider_override() == requested_provider
-                else None
-            )
-            or _provider_default_model(current_provider, use_case)
+        model_candidates = _provider_model_candidates(
+            current_provider,
+            requested_provider,
+            model,
+            use_case,
         )
         resolved_temperature = temperature if temperature is not None else _default_temperature()
         resolved_max_tokens = max_tokens or _default_max_tokens()
 
-        _log_request(
-            current_provider,
-            model_for_provider,
-            normalized_messages,
-            resolved_temperature,
-            resolved_max_tokens,
-        )
-
-        chunks: List[str] = []
-        try:
-            async for token in fn(
-                normalized_messages,
+        for model_for_provider in model_candidates:
+            _log_request(
+                current_provider,
                 model_for_provider,
+                normalized_messages,
                 resolved_temperature,
                 resolved_max_tokens,
-            ):
-                if token:
-                    chunks.append(token)
-                    yield token
+            )
 
-            text = "".join(chunks).strip()
-            if text:
-                _log_response(current_provider, model_for_provider, text)
-                return
+            chunks: List[str] = []
+            try:
+                async for token in fn(
+                    normalized_messages,
+                    model_for_provider,
+                    resolved_temperature,
+                    resolved_max_tokens,
+                ):
+                    if token:
+                        chunks.append(token)
+                        yield token
 
-            warning = f"{current_provider}: empty response"
-            logger.warning("AI provider returned no content provider=%s model=%s", current_provider, model_for_provider)
-            errors.append(warning)
-        except Exception as exc:
-            _log_failure(current_provider, model_for_provider, exc)
-            _temporarily_disable_provider(current_provider, exc)
-            errors.append(f"{current_provider}: {exc}")
-            if chunks:
-                partial = "".join(chunks).strip()
-                if partial:
-                    logger.warning(
-                        "Discarding partial AI response after provider failure provider=%s model=%s chars=%s",
-                        current_provider,
-                        model_for_provider,
-                        len(partial),
-                    )
-                    raise RuntimeError(
-                        f"Provider '{current_provider}' failed after a partial response; refusing to return an incomplete answer"
-                    ) from exc
+                text = "".join(chunks).strip()
+                if text:
+                    _log_response(current_provider, model_for_provider, text)
+                    return
 
-        if provider:
-            break
+                warning = f"{current_provider}/{model_for_provider}: empty response"
+                logger.warning(
+                    "AI provider returned no content provider=%s model=%s",
+                    current_provider,
+                    model_for_provider,
+                )
+                errors.append(warning)
+            except Exception as exc:
+                _log_failure(current_provider, model_for_provider, exc)
+                _temporarily_disable_provider(current_provider, exc)
+                errors.append(f"{current_provider}/{model_for_provider}: {exc}")
+                if chunks:
+                    partial = "".join(chunks).strip()
+                    if partial:
+                        logger.warning(
+                            "Discarding partial AI response after provider failure provider=%s model=%s chars=%s",
+                            current_provider,
+                            model_for_provider,
+                            len(partial),
+                        )
+                        raise RuntimeError(
+                            f"Provider '{current_provider}' model '{model_for_provider}' failed after a partial response; refusing to return an incomplete answer"
+                        ) from exc
+                if _should_temporarily_disable_provider(current_provider, exc):
+                    break
 
     raise RuntimeError("All configured AI providers failed or returned empty responses: " + "; ".join(errors))
 
@@ -2138,61 +2206,61 @@ async def _complete_non_stream(
             errors.append(f"{current_provider}: unsupported provider")
             continue
 
-        model_for_provider = (
-            _model_for_provider(current_provider, requested_provider, model)
-            or (
-                _configured_model_override()
-                if current_provider == requested_provider and _configured_provider_override() == requested_provider
-                else None
-            )
-            or _provider_default_model(current_provider, use_case)
+        model_candidates = _provider_model_candidates(
+            current_provider,
+            requested_provider,
+            model,
+            use_case,
         )
         resolved_temperature = temperature if temperature is not None else _default_temperature()
         resolved_max_tokens = max_tokens or _default_max_tokens()
 
-        _log_request(
-            current_provider,
-            model_for_provider,
-            normalized_messages,
-            resolved_temperature,
-            resolved_max_tokens,
-        )
-
-        chunks: List[str] = []
-        try:
-            async for token in fn(
-                normalized_messages,
-                model_for_provider,
-                resolved_temperature,
-                resolved_max_tokens,
-            ):
-                if token:
-                    chunks.append(token)
-
-            text = "".join(chunks).strip()
-            if text:
-                _log_response(current_provider, model_for_provider, text)
-                return text
-
-            warning = f"{current_provider}: empty response"
-            logger.warning(
-                "AI provider returned no content in buffered completion provider=%s model=%s",
+        for model_for_provider in model_candidates:
+            _log_request(
                 current_provider,
                 model_for_provider,
+                normalized_messages,
+                resolved_temperature,
+                resolved_max_tokens,
             )
-            errors.append(warning)
-        except Exception as exc:
-            _log_failure(current_provider, model_for_provider, exc)
-            _temporarily_disable_provider(current_provider, exc)
-            errors.append(f"{current_provider}: {exc}")
-            partial = "".join(chunks).strip()
-            if partial:
+
+            chunks: List[str] = []
+            try:
+                async for token in fn(
+                    normalized_messages,
+                    model_for_provider,
+                    resolved_temperature,
+                    resolved_max_tokens,
+                ):
+                    if token:
+                        chunks.append(token)
+
+                text = "".join(chunks).strip()
+                if text:
+                    _log_response(current_provider, model_for_provider, text)
+                    return text
+
+                warning = f"{current_provider}/{model_for_provider}: empty response"
                 logger.warning(
-                    "Discarding partial buffered AI response after provider failure provider=%s model=%s chars=%s",
+                    "AI provider returned no content in buffered completion provider=%s model=%s",
                     current_provider,
                     model_for_provider,
-                    len(partial),
                 )
+                errors.append(warning)
+            except Exception as exc:
+                _log_failure(current_provider, model_for_provider, exc)
+                _temporarily_disable_provider(current_provider, exc)
+                errors.append(f"{current_provider}/{model_for_provider}: {exc}")
+                partial = "".join(chunks).strip()
+                if partial:
+                    logger.warning(
+                        "Discarding partial buffered AI response after provider failure provider=%s model=%s chars=%s",
+                        current_provider,
+                        model_for_provider,
+                        len(partial),
+                    )
+                if _should_temporarily_disable_provider(current_provider, exc):
+                    break
     raise RuntimeError("All configured AI providers failed or returned empty responses: " + "; ".join(errors))
 
 
