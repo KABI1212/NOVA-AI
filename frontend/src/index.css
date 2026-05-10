@@ -5076,7 +5076,7 @@ body {
 .nova-table-wrap {
   width: 100% !important;
   max-width: 100% !important;
-  margin: 18px 0 26px !important;
+  margin: 22px 0 30px !important;
   overflow-x: auto !important;
   overflow-y: visible !important;
   -webkit-overflow-scrolling: touch;
@@ -5084,29 +5084,45 @@ body {
 
 .nova-table,
 .bb table {
-  width: max-content !important;
-  min-width: min(760px, calc(100vw - 48px)) !important;
+  width: 100% !important;
+  min-width: 1040px !important;
   table-layout: auto !important;
-  border-collapse: collapse;
+  border-collapse: collapse !important;
+  font-size: 17px !important;
 }
 
 .nova-th,
 .nova-td,
 .bb th,
 .bb td {
-  min-width: 150px;
-  padding: 14px 18px !important;
-  line-height: 1.55;
+  min-width: 260px;
+  padding: 20px 28px !important;
+  line-height: 1.7;
   white-space: normal !important;
   overflow-wrap: break-word !important;
   word-break: normal !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
 }
 
 .nova-th:first-child,
 .nova-td:first-child,
 .bb th:first-child,
 .bb td:first-child {
-  min-width: 190px;
+  min-width: 220px;
+  width: 220px;
+}
+
+.nova-th,
+.bb th {
+  font-size: 17px !important;
+  font-weight: 700 !important;
+  background: rgba(15, 23, 42, 0.72) !important;
+}
+
+@media (min-width: 1200px) {
+  .chat-inner {
+    width: min(1080px, 100%) !important;
+  }
 }
 
 /* ChatGPT-style composer growth cap */
