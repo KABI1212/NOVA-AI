@@ -4991,35 +4991,18 @@ body {
 .message-line {
   position: relative;
   width: 100%;
-  height: 8px;
+  height: 2px;
   margin-bottom: 18px;
-  background: transparent;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #d4af37 0 50%, #1b9dff 50% 100%);
+  box-shadow: 0 0 14px rgba(212, 175, 55, 0.16), 0 0 14px rgba(27, 157, 255, 0.14);
 }
 
 .message-divider::before,
 .message-divider::after,
 .message-line::before,
 .message-line::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 1px;
-  border-radius: 999px;
-}
-
-.message-divider::before,
-.message-line::before {
-  top: 0;
-  background: linear-gradient(90deg, rgba(212, 175, 55, 0.95), rgba(212, 175, 55, 0.28), transparent);
-  box-shadow: 0 0 14px rgba(212, 175, 55, 0.22);
-}
-
-.message-divider::after,
-.message-line::after {
-  bottom: 0;
-  background: linear-gradient(90deg, rgba(27, 157, 255, 0.95), rgba(27, 157, 255, 0.28), transparent);
-  box-shadow: 0 0 14px rgba(27, 157, 255, 0.2);
+  content: none;
 }
 
 .message-action {
@@ -5076,7 +5059,7 @@ body {
 .nova-table-wrap {
   width: 100% !important;
   max-width: 100% !important;
-  margin: 22px 0 30px !important;
+  margin: 18px 0 24px !important;
   overflow-x: auto !important;
   overflow-y: visible !important;
   -webkit-overflow-scrolling: touch;
@@ -5085,19 +5068,19 @@ body {
 .nova-table,
 .bb table {
   width: 100% !important;
-  min-width: 1040px !important;
+  min-width: 1320px !important;
   table-layout: auto !important;
   border-collapse: collapse !important;
-  font-size: 17px !important;
+  font-size: 15px !important;
 }
 
 .nova-th,
 .nova-td,
 .bb th,
 .bb td {
-  min-width: 260px;
-  padding: 20px 28px !important;
-  line-height: 1.7;
+  min-width: 330px;
+  padding: 14px 22px !important;
+  line-height: 1.48;
   white-space: normal !important;
   overflow-wrap: break-word !important;
   word-break: normal !important;
@@ -5114,14 +5097,14 @@ body {
 
 .nova-th,
 .bb th {
-  font-size: 17px !important;
+  font-size: 15px !important;
   font-weight: 700 !important;
   background: rgba(15, 23, 42, 0.72) !important;
 }
 
 @media (min-width: 1200px) {
   .chat-inner {
-    width: min(1080px, 100%) !important;
+    width: min(1220px, 100%) !important;
   }
 }
 
