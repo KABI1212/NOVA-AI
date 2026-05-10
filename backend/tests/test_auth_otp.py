@@ -228,7 +228,7 @@ def test_signup_cleans_up_user_when_otp_delivery_fails(
     asyncio.run(scenario())
 
 
-def test_signup_falls_back_to_password_only_auth_when_enabled(
+def test_signup_does_not_bypass_otp_when_fallback_is_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db = _FakeSession()
@@ -237,21 +237,20 @@ def test_signup_falls_back_to_password_only_auth_when_enabled(
         raise auth_module.EmailDeliveryError("SMTP could not deliver the verification email.")
 
     async def scenario() -> None:
-        response = await auth_module.signup(
-            auth_module.SignupRequest(
-                email="New.User@Example.com",
-                username="new-user",
-                password="Sup3rSecret!",
-                full_name="New User",
-            ),
-            db=db,
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_module.signup(
+                auth_module.SignupRequest(
+                    email="New.User@Example.com",
+                    username="new-user",
+                    password="Sup3rSecret!",
+                    full_name="New User",
+                ),
+                db=db,
+            )
 
-        assert response["requires_otp"] is False
-        assert response["access_token"]
-        assert response["user"]["email"] == "new.user@example.com"
-        assert len(db.users) == 1
-        assert db.users[0].is_verified is True
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.detail == auth_module.EMAIL_DELIVERY_FAILURE_MESSAGE
+        assert db.users == []
 
     monkeypatch.setattr(
         auth_module.settings,
@@ -470,7 +469,7 @@ def test_login_requires_otp_for_unverified_user(monkeypatch: pytest.MonkeyPatch)
     asyncio.run(scenario())
 
 
-def test_login_falls_back_to_password_only_auth_when_enabled(
+def test_login_does_not_bypass_otp_when_fallback_is_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user = _make_user()
@@ -481,15 +480,15 @@ def test_login_falls_back_to_password_only_auth_when_enabled(
         raise auth_module.EmailDeliveryError("SMTP could not deliver the verification email.")
 
     async def scenario() -> None:
-        response = await auth_module.login(
-            auth_module.LoginRequest(email=user.email, password="Sup3rSecret!"),
-            db=db,
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_module.login(
+                auth_module.LoginRequest(email=user.email, password="Sup3rSecret!"),
+                db=db,
+            )
 
-        assert response["requires_otp"] is False
-        assert response["access_token"]
-        assert response["user"]["email"] == user.email
-        assert user.is_verified is True
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.detail == auth_module.EMAIL_DELIVERY_FAILURE_MESSAGE
+        assert user.is_verified is False
         assert user.login_otp_code_hash is None
         assert user.login_otp_challenge_hash is None
 

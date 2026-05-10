@@ -222,14 +222,6 @@ def _build_token_response(user: User) -> dict:
     }
 
 
-def _password_only_fallback_enabled() -> bool:
-    return bool(settings.AUTH_ALLOW_PASSWORD_ONLY_FALLBACK)
-
-
-def _should_require_email_verification() -> bool:
-    return not _password_only_fallback_enabled() or email_service.can_send_real_email()
-
-
 def _clear_login_otp_challenge(user: User) -> None:
     user.login_otp_code_hash = None
     user.login_otp_expires_at = None
@@ -301,28 +293,6 @@ def _snapshot_login_otp_state(user: User) -> dict[str, Any]:
 def _restore_login_otp_state(user: User, snapshot: dict[str, Any]) -> None:
     for field_name, value in snapshot.items():
         setattr(user, field_name, value)
-
-
-def _build_password_only_auth_response(
-    user: User,
-    db: Session,
-    *,
-    mark_verified: bool,
-) -> dict:
-    requires_persist = False
-
-    if mark_verified and not user.is_verified:
-        user.is_verified = True
-        requires_persist = True
-
-    if _has_login_otp_state(user):
-        _clear_login_otp_state(user)
-        requires_persist = True
-
-    if requires_persist:
-        _persist_user(db, user)
-
-    return _build_token_response(user)
 
 
 def _build_login_challenge_response(
@@ -590,7 +560,6 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
     email = request.email.strip().lower()
     username = request.username.strip()
     full_name = request.full_name.strip() if request.full_name else ""
-    requires_email_verification = _should_require_email_verification()
 
     existing_user = db.query(User).filter(
         (User.email == email) | (User.username == username)
@@ -607,7 +576,7 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
         username=username,
         hashed_password=get_password_hash(request.password),
         full_name=full_name,
-        is_verified=not requires_email_verification,
+        is_verified=False,
     )
 
     db.add(new_user)
@@ -621,29 +590,10 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
         )
     db.refresh(new_user)
 
-    if not requires_email_verification:
-        logger.info(
-            "signup_password_only_fallback_enabled user_id=%s email=%s",
-            new_user.id,
-            new_user.email,
-        )
-        return _build_token_response(new_user)
-
     try:
         return _issue_login_otp(new_user, db)
     except HTTPException as exc:
         if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
-            if _password_only_fallback_enabled():
-                logger.warning(
-                    "signup_otp_delivery_failed_password_only_fallback user_id=%s email=%s",
-                    new_user.id,
-                    new_user.email,
-                )
-                return _build_password_only_auth_response(
-                    new_user,
-                    db,
-                    mark_verified=True,
-                )
             logger.warning(
                 "signup_otp_delivery_failed_cleanup user_id=%s email=%s",
                 new_user.id,
@@ -680,36 +630,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             detail="User account is inactive",
         )
 
-    if not _should_require_email_verification():
-        logger.info(
-            "login_password_only_fallback_enabled user_id=%s email=%s",
-            user.id,
-            user.email,
-        )
-        return _build_password_only_auth_response(
-            user,
-            db,
-            mark_verified=not user.is_verified,
-        )
-
-    try:
-        return _issue_login_otp(user, db)
-    except HTTPException as exc:
-        if (
-            exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
-            and _password_only_fallback_enabled()
-        ):
-            logger.warning(
-                "login_otp_delivery_failed_password_only_fallback user_id=%s email=%s",
-                user.id,
-                user.email,
-            )
-            return _build_password_only_auth_response(
-                user,
-                db,
-                mark_verified=not user.is_verified,
-            )
-        raise
+    return _issue_login_otp(user, db)
 
 
 @router.post("/login/otp/verify", response_model=TokenResponse)
