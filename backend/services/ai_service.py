@@ -97,7 +97,7 @@ _IMAGE_QUALITY_HINTS = {
 }
 _TASK_PROVIDER_PREFERENCES = {
     "quick": ["groq", "openai", "google", "deepseek", "anthropic", "ollama"],
-    "concept": ["openai", "anthropic", "google", "deepseek", "groq", "ollama"],
+    "concept": ["openai", "groq", "anthropic", "google", "deepseek", "ollama"],
     "writing": ["openai", "anthropic", "google", "deepseek", "groq", "ollama"],
     "coding": ["openai", "deepseek", "anthropic", "google", "groq", "ollama"],
     "research": ["google", "openai", "anthropic", "deepseek", "groq", "ollama"],

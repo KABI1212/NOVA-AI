@@ -118,6 +118,16 @@ def test_infer_use_case_prefers_concept_for_explanations() -> None:
     assert ai_service_module.infer_use_case("chat", "Explain what recursion is in simple terms.") == "concept"
 
 
+def test_concept_provider_chain_keeps_groq_in_default_attempt_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ai_service_module, "_configured_provider_override", lambda: None)
+    monkeypatch.setattr(ai_service_module, "_resolve_provider", lambda: "openai")
+    monkeypatch.setattr(ai_service_module.settings, "AI_AUTO_MAX_PROVIDER_ATTEMPTS", 2)
+
+    chain = ai_service_module._provider_chain(None, use_case="concept")
+
+    assert chain[:2] == ["openai", "groq"]
+
+
 def test_infer_use_case_avoids_quick_for_multi_part_definition_question() -> None:
     assert (
         ai_service_module.infer_use_case("chat", "what is java and how can be classified?")
