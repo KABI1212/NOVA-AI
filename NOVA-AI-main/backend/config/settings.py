@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings
 from pathlib import Path
-from typing import List
+from typing import Any, List
+from pydantic import field_validator
 
 _BASE_DIR = Path(__file__).resolve().parents[1]
 _ENV_FILE = _BASE_DIR / ".env"
@@ -81,10 +82,24 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> List[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
 
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def _parse_debug(cls, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return True
+        normalized = str(value).strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on", "debug", "development"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off", "release", "prod", "production", "warn", "warning"}:
+            return False
+        return bool(value)
+
     class Config:
         env_file = (str(_ROOT_BACKEND_ENV_FILE), str(_ENV_FILE))
         case_sensitive = True
+        extra = "ignore"
 
 
 settings = Settings()
-
