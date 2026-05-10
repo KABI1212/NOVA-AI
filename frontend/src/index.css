@@ -4792,7 +4792,7 @@ body {
 .app,
 .chat-container,
 .main {
-  --composer-reserved-space: 190px;
+  --composer-reserved-space: 230px;
   height: 100vh;
   min-height: 0;
 }
@@ -4815,6 +4815,10 @@ body {
   overflow-x: hidden !important;
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
+}
+
+.chat-inner {
+  padding-bottom: 24px !important;
 }
 
 .hero-wrap {
@@ -4846,6 +4850,43 @@ body {
   text-overflow: clip !important;
   -webkit-line-clamp: unset !important;
   line-clamp: unset !important;
+}
+
+.msg {
+  position: relative !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.message-actions,
+.message-actions.user,
+.message-actions.assistant {
+  position: static !important;
+  inset: auto !important;
+  display: flex !important;
+  width: auto !important;
+  height: auto !important;
+  margin-top: 12px !important;
+  gap: 10px !important;
+  transform: none !important;
+  z-index: auto !important;
+  opacity: 0.72;
+}
+
+.message-actions.user {
+  align-self: flex-end !important;
+  justify-content: flex-end !important;
+}
+
+.message-actions.assistant {
+  align-self: flex-start !important;
+  justify-content: flex-start !important;
+}
+
+.message-action {
+  position: static !important;
+  transform: none !important;
+  flex: 0 0 auto;
 }
 
 .bb,
@@ -4881,7 +4922,7 @@ body {
   .app,
   .chat-container,
   .main {
-    --composer-reserved-space: 220px;
+    --composer-reserved-space: 260px;
   }
 
   .chat {
