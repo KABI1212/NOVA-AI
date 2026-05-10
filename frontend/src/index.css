@@ -4775,3 +4775,88 @@ body,
   border-radius: 10px !important;
   box-shadow: none !important;
 }
+
+/* Long answer scroll safety */
+html,
+body {
+  height: 100%;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+#root,
+.app {
+  min-height: 100%;
+}
+
+.app,
+.chat-container,
+.main {
+  height: 100vh;
+  min-height: 0;
+}
+
+.chat-container,
+.main {
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden !important;
+  overflow-x: hidden !important;
+}
+
+.chat {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  max-height: none !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chat-inner,
+.msg,
+.msg.a,
+.msg.u,
+.bb,
+.msg.a .bb,
+.msg.u .bb,
+.nova-markdown {
+  height: auto !important;
+  min-height: 0;
+  max-height: none !important;
+  overflow-y: visible !important;
+  text-overflow: clip !important;
+  -webkit-line-clamp: unset !important;
+  line-clamp: unset !important;
+}
+
+.bb,
+.msg.a .bb,
+.msg.u .bb,
+.nova-markdown,
+.nova-markdown-fallback,
+.nova-p,
+.nova-list-item {
+  white-space: normal;
+  word-wrap: break-word;
+  overflow-wrap: anywhere !important;
+  word-break: break-word !important;
+}
+
+.msg.u .bb {
+  white-space: pre-wrap;
+}
+
+.nova-code-block,
+.nova-code-pre,
+.nova-table-wrap {
+  max-height: none !important;
+  overflow-y: visible !important;
+}
+
+.nova-code-pre,
+.nova-table-wrap {
+  overflow-x: auto !important;
+}
