@@ -4989,10 +4989,37 @@ body {
 
 .message-divider,
 .message-line {
+  position: relative;
   width: 100%;
-  height: 1px;
+  height: 8px;
   margin-bottom: 18px;
-  background: rgba(255, 255, 255, 0.08);
+  background: transparent;
+}
+
+.message-divider::before,
+.message-divider::after,
+.message-line::before,
+.message-line::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  border-radius: 999px;
+}
+
+.message-divider::before,
+.message-line::before {
+  top: 0;
+  background: linear-gradient(90deg, rgba(212, 175, 55, 0.95), rgba(212, 175, 55, 0.28), transparent);
+  box-shadow: 0 0 14px rgba(212, 175, 55, 0.22);
+}
+
+.message-divider::after,
+.message-line::after {
+  bottom: 0;
+  background: linear-gradient(90deg, rgba(27, 157, 255, 0.95), rgba(27, 157, 255, 0.28), transparent);
+  box-shadow: 0 0 14px rgba(27, 157, 255, 0.2);
 }
 
 .message-action {
