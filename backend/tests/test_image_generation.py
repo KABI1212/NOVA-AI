@@ -19,6 +19,7 @@ ai_service_module = importlib.import_module("services.ai_service")
 def _reset_image_provider_state(monkeypatch):
     monkeypatch.setattr(settings, "AI_IMAGE_PROVIDER", "")
     monkeypatch.setattr(settings, "OPENROUTER_API_KEY", "")
+    monkeypatch.setattr(settings, "KIE_API_KEY", "")
     ai_service_module._IMAGE_PROVIDER_DISABLED_UNTIL.clear()
 
 
@@ -55,6 +56,30 @@ def test_ai_service_generate_image_uses_gemini_when_google_is_configured(
     async def scenario() -> None:
         result = await ai_service.generate_image("A cinematic tiger in rain")
         assert result == ["data:image/png;base64,gemini-image"]
+
+    asyncio.run(scenario())
+
+
+def test_ai_service_generate_image_uses_kie_when_configured(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings, "AI_IMAGE_PROVIDER", "kie")
+    monkeypatch.setattr(settings, "KIE_API_KEY", "kie-key")
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(settings, "GOOGLE_API_KEY", "")
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "")
+
+    async def fake_generate(prompt: str, size: str = "1024x1024", n: int = 1, quality: str = "standard"):
+        assert "A cinematic tiger in rain" in prompt
+        assert size == "1024x1024"
+        assert n == 1
+        return ["https://example.com/kie-image.png"]
+
+    monkeypatch.setattr(ai_service_module, "_generate_image_with_kie", fake_generate)
+
+    async def scenario() -> None:
+        result = await ai_service.generate_image("A cinematic tiger in rain")
+        assert result == ["https://example.com/kie-image.png"]
 
     asyncio.run(scenario())
 

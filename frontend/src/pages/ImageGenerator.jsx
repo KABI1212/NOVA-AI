@@ -24,6 +24,7 @@ const QUALITIES = [
 const DEFAULT_PROVIDER_OPTIONS = [
   { id: 'auto', name: 'Auto', available: true, description: 'Pick the best configured image model.' },
   { id: 'google', name: 'Gemini', available: true, description: 'Google image generation.' },
+  { id: 'kie', name: 'KIE', available: true, description: 'KIE 4o Image API generation.' },
   { id: 'openrouter', name: 'OpenRouter', available: true, description: 'OpenRouter image generation fallback.' },
   { id: 'openai', name: 'ChatGPT', available: true, description: 'OpenAI image generation.' },
 ];
@@ -201,7 +202,7 @@ export default function ImageGenerator() {
         <div className="flex w-96 flex-col gap-5 overflow-y-auto border-r border-gray-800 p-6">
           <div>
             <h1 className="text-xl font-semibold text-white">Image Generator</h1>
-            <p className="mt-1 text-sm text-gray-500">Generate with Gemini, OpenRouter, or ChatGPT and polish prompts for Canva, Gemini, or ChatGPT.</p>
+            <p className="mt-1 text-sm text-gray-500">Generate with Gemini, KIE, OpenRouter, or ChatGPT and polish prompts for Canva, Gemini, or ChatGPT.</p>
           </div>
 
           <div>
@@ -279,7 +280,7 @@ export default function ImageGenerator() {
               ))}
             </div>
             {availableProviders.length <= 1 && (
-              <p className="mt-2 text-xs text-amber-300">No dedicated image provider key is configured yet. Prompt optimization can still help, but image generation will stay unavailable until Gemini, OpenRouter, or ChatGPT credentials are set.</p>
+              <p className="mt-2 text-xs text-amber-300">No dedicated image provider key is configured yet. Prompt optimization can still help, but image generation will stay unavailable until Gemini, KIE, OpenRouter, or ChatGPT credentials are set.</p>
             )}
           </div>
 

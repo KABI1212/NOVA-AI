@@ -110,6 +110,14 @@ def test_complete_non_stream_limits_automatic_provider_fallback_attempts(
     asyncio.run(scenario())
 
 
+def test_default_auto_provider_attempt_limit_covers_full_fallback_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delattr(ai_service_module.settings, "AI_AUTO_MAX_PROVIDER_ATTEMPTS", raising=False)
+
+    assert ai_service_module._auto_provider_attempt_limit() == 6
+
+
 def test_infer_use_case_prefers_writing_for_rewrite_requests() -> None:
     assert ai_service_module.infer_use_case("chat", "Rewrite this email to sound professional.") == "writing"
 

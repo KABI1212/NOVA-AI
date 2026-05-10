@@ -74,11 +74,15 @@ _IMAGE_PROVIDER_ALIASES = {
     "chatgpt": "openai",
     "google": "google",
     "gemini": "google",
+    "kie": "kie",
+    "kie.ai": "kie",
+    "kieai": "kie",
     "openrouter": "openrouter",
 }
 _IMAGE_PROVIDER_LABELS = {
     "openai": "ChatGPT",
     "google": "Gemini",
+    "kie": "KIE",
     "openrouter": "OpenRouter",
 }
 _IMAGE_PROMPT_TARGET_GUIDANCE = {
@@ -102,7 +106,7 @@ _TASK_PROVIDER_PREFERENCES = {
     "coding": ["openai", "deepseek", "anthropic", "google", "groq", "ollama"],
     "research": ["google", "openai", "anthropic", "deepseek", "groq", "ollama"],
     "document": ["anthropic", "google", "openai", "deepseek", "groq", "ollama"],
-    "image_generation": ["google", "openrouter", "openai"],
+    "image_generation": ["google", "kie", "openrouter", "openai"],
     "image_prompting": ["openai", "deepseek", "google", "anthropic", "groq", "ollama"],
     "budget": ["deepseek", "groq", "google", "ollama", "openai", "anthropic"],
 }
@@ -465,6 +469,10 @@ def _openrouter_api_key() -> str:
     return getattr(settings, "OPENROUTER_API_KEY", "") or ""
 
 
+def _kie_api_key() -> str:
+    return getattr(settings, "KIE_API_KEY", "") or ""
+
+
 def is_quick_answer_request(mode: Optional[str] = None, message: Optional[str] = None) -> bool:
     normalized_mode = str(mode or "chat").strip().lower()
     if normalized_mode != "chat":
@@ -609,6 +617,8 @@ def _image_provider_ready(provider: str) -> bool:
         return bool(_openai_api_key())
     if provider == "google":
         return bool(_google_api_key())
+    if provider == "kie":
+        return bool(_kie_api_key())
     if provider == "openrouter":
         return bool(_openrouter_api_key())
     return False
@@ -630,6 +640,8 @@ def _resolve_image_provider(provider: Optional[str] = None) -> Optional[str]:
 
     if _image_provider_available("google"):
         return "google"
+    if _image_provider_available("kie"):
+        return "kie"
     if _image_provider_available("openrouter"):
         return "openrouter"
     if _image_provider_available("openai"):
@@ -652,7 +664,7 @@ def _resolve_image_provider_chain(provider: Optional[str] = None) -> List[str]:
 
     for candidate in preferred_chain:
         if (
-            candidate in {"google", "openai", "openrouter"}
+            candidate in {"google", "kie", "openai", "openrouter"}
             and _image_provider_available(candidate)
             and candidate not in chain
         ):
@@ -1224,6 +1236,117 @@ async def _generate_image_with_openrouter(
     return []
 
 
+def _kie_size_ratio(size: str) -> str:
+    raw_size = str(size or "").strip().lower()
+    if raw_size in {"1:1", "3:2", "2:3"}:
+        return raw_size
+
+    match = re.match(r"^\s*(\d+)\s*x\s*(\d+)\s*$", raw_size)
+    if not match:
+        return "1:1"
+
+    width = int(match.group(1))
+    height = int(match.group(2))
+    if width > height:
+        return "3:2"
+    if height > width:
+        return "2:3"
+    return "1:1"
+
+
+def _kie_headers(api_key: str) -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+
+def _kie_successful_response_urls(data: Any) -> List[str]:
+    if not isinstance(data, dict):
+        return []
+
+    response = data.get("response")
+    if isinstance(response, str):
+        try:
+            response = json.loads(response)
+        except ValueError:
+            response = {}
+
+    if not isinstance(response, dict):
+        return []
+
+    urls = response.get("result_urls") or response.get("resultUrls") or response.get("urls") or []
+    if isinstance(urls, str):
+        urls = [urls]
+    return [str(url).strip() for url in urls if str(url or "").strip()]
+
+
+async def _generate_image_with_kie(
+    cleaned_prompt: str,
+    size: str = "1024x1024",
+    n: int = 1,
+    quality: str = "standard",
+) -> List[str]:
+    api_key = _kie_api_key()
+    if not api_key:
+        return []
+
+    base_url = str(getattr(settings, "KIE_BASE_URL", "https://api.kie.ai") or "https://api.kie.ai").rstrip("/")
+    endpoint = f"{base_url}/api/v1/gpt4o-image/generate"
+    status_endpoint = f"{base_url}/api/v1/gpt4o-image/record-info"
+    requested_images = max(1, min(int(n or 1), 4))
+    headers = _kie_headers(api_key)
+    timeout_seconds = max(30, int(getattr(settings, "KIE_IMAGE_TIMEOUT_SECONDS", 300) or 300))
+    poll_interval = max(1.0, float(getattr(settings, "KIE_IMAGE_POLL_INTERVAL_SECONDS", 5.0) or 5.0))
+
+    request_body = {
+        "prompt": cleaned_prompt,
+        "size": _kie_size_ratio(size),
+        "nVariants": 4 if requested_images >= 4 else 2 if requested_images >= 2 else 1,
+        "isEnhance": quality == "hd",
+        "enableFallback": True,
+    }
+
+    async with httpx.AsyncClient(timeout=_image_request_timeout_seconds()) as client:
+        response = await client.post(endpoint, headers=headers, json=request_body)
+        try:
+            payload: Any = response.json()
+        except ValueError:
+            payload = {"msg": response.text}
+
+        if response.status_code >= 400 or payload.get("code") != 200:
+            raise RuntimeError(f"KIE image generation failed: {payload.get('msg') or response.text}")
+
+        task_id = str((payload.get("data") or {}).get("taskId") or "").strip()
+        if not task_id:
+            raise RuntimeError("KIE image generation did not return a taskId")
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            await asyncio.sleep(poll_interval)
+            status_response = await client.get(
+                status_endpoint,
+                headers=headers,
+                params={"taskId": task_id},
+            )
+            try:
+                status_payload: Any = status_response.json()
+            except ValueError:
+                status_payload = {"msg": status_response.text}
+
+            if status_response.status_code >= 400 or status_payload.get("code") != 200:
+                raise RuntimeError(f"KIE image status check failed: {status_payload.get('msg') or status_response.text}")
+
+            data = status_payload.get("data") or {}
+            success_flag = data.get("successFlag")
+            if success_flag == 1:
+                return _kie_successful_response_urls(data)[:requested_images]
+            if success_flag == 2:
+                raise RuntimeError(str(data.get("errorMessage") or "KIE image generation failed"))
+
+        raise RuntimeError("KIE image generation timed out")
+
+
 async def _edit_image_with_google(
     prompt: str,
     image_bytes: bytes,
@@ -1752,7 +1875,7 @@ def _provider_available(provider: str) -> bool:
 
 
 def _auto_provider_attempt_limit() -> int:
-    value = int(getattr(settings, "AI_AUTO_MAX_PROVIDER_ATTEMPTS", 2) or 2)
+    value = int(getattr(settings, "AI_AUTO_MAX_PROVIDER_ATTEMPTS", 6) or 6)
     return max(1, value)
 
 
@@ -2451,6 +2574,13 @@ class AIService:
             try:
                 if candidate_provider == "google":
                     images = await _generate_image_with_google(generation_prompt, size=size, n=n)
+                elif candidate_provider == "kie":
+                    images = await _generate_image_with_kie(
+                        generation_prompt,
+                        size=size,
+                        n=n,
+                        quality=quality,
+                    )
                 elif candidate_provider == "openrouter":
                     images = await _generate_image_with_openrouter(
                         generation_prompt,
@@ -2657,6 +2787,9 @@ class AIService:
                     images = sanitize_image_assets(
                         await _edit_image_with_google(edit_prompt, image_bytes, mime_type=mime_type)
                     )
+                elif candidate_provider == "kie":
+                    logger.info("KIE image editing skipped because uploaded-image edits require public file URLs")
+                    continue
                 elif candidate_provider == "openrouter":
                     images = sanitize_image_assets(
                         await _edit_image_with_openrouter(edit_prompt, image_bytes, mime_type=mime_type)
@@ -2689,7 +2822,7 @@ class AIService:
                 "id": "auto",
                 "name": "Auto",
                 "available": bool(_resolve_image_provider()),
-                "description": "Default image stack: Gemini first, then OpenRouter, then ChatGPT.",
+                "description": "Default image stack: Gemini first, then KIE, OpenRouter, and ChatGPT.",
             }
         ]
 
@@ -2699,6 +2832,14 @@ class AIService:
                 "name": "Gemini",
                 "available": _image_provider_available("google"),
                 "description": "Default for image generation, search-backed prompts, and fast image work.",
+            }
+        )
+        providers.append(
+            {
+                "id": "kie",
+                "name": "KIE",
+                "available": _image_provider_available("kie"),
+                "description": "KIE 4o Image API for text-to-image generation.",
             }
         )
         providers.append(

@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     PERPLEXITY_API_KEY: str = ""
     GROQ_API_KEY: str = ""
     OPENROUTER_API_KEY: str = ""
+    KIE_API_KEY: str = ""
     TOGETHER_API_KEY: str = ""
 
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
@@ -85,6 +86,9 @@ class Settings(BaseSettings):
     OPENROUTER_SITE: str = ""
     OPENROUTER_APP: str = ""
     OPENROUTER_IMAGE_MODEL: str = "sourceful/riverflow-v2-fast-preview"
+    KIE_BASE_URL: str = "https://api.kie.ai"
+    KIE_IMAGE_POLL_INTERVAL_SECONDS: float = 5.0
+    KIE_IMAGE_TIMEOUT_SECONDS: int = 300
     ANTHROPIC_MODEL: str = ""
     GROQ_MODEL: str = ""
 
@@ -105,7 +109,7 @@ class Settings(BaseSettings):
     AI_STREAM_REPAIR_MAX_TOKENS: int = 4096
     AI_STREAM_REPAIR_ATTEMPTS: int = 3
     AI_IMAGE_REQUEST_TIMEOUT_SECONDS: int = 180
-    AI_AUTO_MAX_PROVIDER_ATTEMPTS: int = 2
+    AI_AUTO_MAX_PROVIDER_ATTEMPTS: int = 6
     AI_DEBUG_LOGGING: bool = False
     AI_LOG_PREVIEW_CHARS: int = 400
     CHAT_AUTO_WEB_SEARCH_IN_CHAT: bool = False
