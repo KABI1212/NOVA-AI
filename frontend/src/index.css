@@ -4792,6 +4792,7 @@ body {
 .app,
 .chat-container,
 .main {
+  --composer-reserved-space: 190px;
   height: 100vh;
   min-height: 0;
 }
@@ -4809,10 +4810,25 @@ body {
   min-height: 0;
   height: auto;
   max-height: none !important;
+  padding-bottom: var(--composer-reserved-space) !important;
   overflow-y: auto !important;
   overflow-x: hidden !important;
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
+}
+
+.hero-wrap {
+  padding-bottom: var(--composer-reserved-space) !important;
+}
+
+.input-wrap {
+  position: absolute !important;
+  left: 50% !important;
+  right: auto !important;
+  bottom: 18px !important;
+  z-index: 1000 !important;
+  width: min(820px, calc(100% - 48px)) !important;
+  transform: translateX(-50%) !important;
 }
 
 .chat-inner,
@@ -4859,4 +4875,28 @@ body {
 .nova-code-pre,
 .nova-table-wrap {
   overflow-x: auto !important;
+}
+
+@media (max-width: 760px) {
+  .app,
+  .chat-container,
+  .main {
+    --composer-reserved-space: 220px;
+  }
+
+  .chat {
+    padding-bottom: var(--composer-reserved-space) !important;
+  }
+
+  .hero-wrap {
+    padding-bottom: var(--composer-reserved-space) !important;
+  }
+
+  .input-wrap {
+    left: 11px !important;
+    right: 11px !important;
+    bottom: 12px !important;
+    width: auto !important;
+    transform: none !important;
+  }
 }
