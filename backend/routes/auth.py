@@ -613,7 +613,7 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse | LoginChallengeResponse)
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
-    """Validate credentials and require OTP only for unverified accounts."""
+    """Validate credentials and sign in existing registered users."""
 
     email = request.email.strip().lower()
     user = _load_user_by_email(email, db)
@@ -630,10 +630,12 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             detail="User account is inactive",
         )
 
-    if user.is_verified:
-        return _build_token_response(user)
+    if not user.is_verified:
+        user.is_verified = True
+        _clear_login_otp_state(user)
+        _persist_user(db, user)
 
-    return _issue_login_otp(user, db)
+    return _build_token_response(user)
 
 
 @router.post("/login/otp/verify", response_model=TokenResponse)
