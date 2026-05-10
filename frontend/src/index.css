@@ -4853,10 +4853,10 @@ body {
 }
 
 .input-wrapper {
-  position: absolute !important;
-  left: 20px !important;
-  right: 20px !important;
-  bottom: 18px !important;
+  position: fixed !important;
+  left: 320px !important;
+  right: 24px !important;
+  bottom: 24px !important;
   z-index: 1000 !important;
   width: auto !important;
   max-width: none !important;
@@ -4940,7 +4940,7 @@ body {
 
 .ai-message {
   width: 100% !important;
-  margin-bottom: 60px !important;
+  margin-bottom: 40px !important;
   color: #ffffff;
   line-height: 1.75;
   white-space: normal;
@@ -4963,8 +4963,8 @@ body {
   width: auto !important;
   height: auto !important;
   margin-top: 16px !important;
-  margin-bottom: 40px !important;
-  gap: 10px !important;
+  margin-bottom: 80px !important;
+  gap: 14px !important;
   transform: none !important;
   z-index: auto !important;
   opacity: 0.72;
@@ -4982,14 +4982,14 @@ body {
 
 .message-footer {
   width: 100%;
-  margin-top: 30px !important;
+  margin-top: 24px !important;
   animation: messageFooterFadeIn 0.3s ease both;
 }
 
 .message-line {
   width: 100%;
   height: 1px;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -5067,7 +5067,7 @@ body {
   .input-wrapper {
     left: 11px !important;
     right: 11px !important;
-    bottom: 12px !important;
+    bottom: 14px !important;
     width: auto !important;
   }
 
