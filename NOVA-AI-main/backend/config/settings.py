@@ -4,6 +4,7 @@ from typing import List
 
 _BASE_DIR = Path(__file__).resolve().parents[1]
 _ENV_FILE = _BASE_DIR / ".env"
+_ROOT_BACKEND_ENV_FILE = _BASE_DIR.parents[1] / "backend" / ".env"
 
 
 class Settings(BaseSettings):
@@ -19,6 +20,24 @@ class Settings(BaseSettings):
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+
+    # Email OTP
+    AUTH_OTP_EXPIRE_MINUTES: int = 5
+    AUTH_OTP_LENGTH: int = 6
+    EMAIL_PROVIDER: str = ""
+    EMAIL_FROM: str = ""
+    EMAIL_FROM_ADDRESS: str = ""
+    EMAIL_FROM_NAME: str = "NOVA AI"
+    EMAIL_REPLY_TO: str = ""
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASS: str = ""
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_USE_TLS: bool = True
+    SMTP_USE_SSL: bool = False
+    SMTP_TIMEOUT_SECONDS: int = 20
 
     # OpenAI
     OPENAI_API_KEY: str = ""
@@ -63,10 +82,9 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
 
     class Config:
-        env_file = str(_ENV_FILE)
+        env_file = (str(_ROOT_BACKEND_ENV_FILE), str(_ENV_FILE))
         case_sensitive = True
 
 
 settings = Settings()
-
 

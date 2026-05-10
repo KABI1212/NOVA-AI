@@ -22,7 +22,7 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    if (error.response?.status === 401 && localStorage.getItem('token')) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       window.location.href = '/login';
@@ -35,6 +35,10 @@ api.interceptors.response.use(
 export const authAPI = {
   signup: (data) => api.post('/api/auth/signup', data),
   login: (data) => api.post('/api/auth/login', data),
+  verifyLoginOtp: (data) => api.post('/api/auth/login/otp/verify', data),
+  resendLoginOtp: (data) => api.post('/api/auth/login/otp/resend', data),
+  forgotPassword: (data) => api.post('/api/auth/password/forgot', data),
+  resetPassword: (data) => api.post('/api/auth/password/reset', data),
 };
 
 // Chat API
