@@ -266,13 +266,16 @@ def _comparison_answer_instruction(message: str) -> str | None:
 
     return (
         "This is a comparison question.\n"
-        "- Do not answer in plain paragraphs only.\n"
-        "- Use a clear Markdown table as the main structure.\n"
+        "- Answer in a clean, professional Markdown comparison-table format, not long paragraph blocks.\n"
+        "- Use a short heading or subheading first, then keep the actual explanation inside tables.\n"
         "- Make the first column the comparison aspect or parameter.\n"
-        "- Put each item being compared in its own separate column so the differences are easy to scan.\n"
-        "- Cover the important differences with enough rows instead of only one or two surface points.\n"
-        "- After the table, add a short explanation or summary so the differences are easy to understand.\n"
-        "- If helpful, include one concise example."
+        "- Put each item being compared in its own separate column so the differences are easy to scan on mobile and desktop.\n"
+        "- Include table rows for: Definition, Features, Advantages, Disadvantages, Examples, Use Cases, Key Differences, and Conclusion / Summary.\n"
+        "- Use concise bullet-style phrases inside cells when multiple points are needed.\n"
+        "- Add tasteful emojis to row labels or headings where they improve readability.\n"
+        "- Use separators or section lines around the table when helpful.\n"
+        "- Keep every cell short, clear, and easy to read.\n"
+        "- Put the conclusion summary as the final table row or final small summary table, not as a separate paragraph."
     )
 
 

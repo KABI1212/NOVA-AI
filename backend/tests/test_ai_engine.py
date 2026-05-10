@@ -213,11 +213,16 @@ def test_build_messages_strengthens_comparison_table_guidance() -> None:
     ]
 
     assert any(
-        "Use a clear Markdown table as the main structure." in content
+        "Make the first column the comparison aspect or parameter." in content
         for content in system_messages
     )
     assert any(
-        "Make the first column the comparison aspect or parameter." in content
+        "Definition, Features, Advantages, Disadvantages, Examples, Use Cases, Key Differences, and Conclusion / Summary"
+        in content
+        for content in system_messages
+    )
+    assert any(
+        "not as a separate paragraph" in content
         for content in system_messages
     )
 
