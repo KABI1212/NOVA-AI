@@ -219,6 +219,7 @@ function ChatWindow({
             const isUser = message.role === "user";
             const isSpeaking = !isUser && speakingMessageId === message.id;
             const canSpeak = !isUser && speechSupported && Boolean(String(message?.content || "").trim());
+            const isAssistantComplete = !isUser && !message.streaming;
             const copyStateKey = `${isUser ? "question" : "answer"}:${message.id}`;
             const isCopied = copiedKey === copyStateKey;
             const canRegenerate = !isUser && regeneratableMessageId === message.id && typeof onRegenerate === "function";
@@ -276,39 +277,42 @@ function ChatWindow({
                       <Pencil />
                     </button>
                   </div>
-                ) : (
-                  <div className="message-actions assistant" aria-label="Answer actions">
-                    <button
-                      className={`message-action${isCopied ? " active" : ""}`}
-                      type="button"
-                      title={isCopied ? "Answer copied" : "Copy answer"}
-                      aria-label={isCopied ? "Answer copied" : "Copy answer"}
-                      onClick={handleCopy}
-                    >
-                      {isCopied ? <Check /> : <Copy />}
-                    </button>
-                    <button
-                      className={`message-action${isSpeaking ? " active negative speaking" : ""}${canSpeak ? "" : " disabled"}`}
-                      type="button"
-                      title={isSpeaking ? "Stop reading answer" : "Read answer aloud"}
-                      aria-label={isSpeaking ? "Stop reading answer" : "Read answer aloud"}
-                      onClick={() => onSpeak?.(message)}
-                      disabled={!canSpeak}
-                    >
-                      {isSpeaking ? <VolumeX /> : <Volume2 />}
-                    </button>
-                    <button
-                      className={`message-action${canRegenerate ? "" : " disabled"}`}
-                      type="button"
-                      title={canRegenerate ? "Regenerate answer" : "Only the latest AI answer can be regenerated"}
-                      aria-label={canRegenerate ? "Regenerate answer" : "Only the latest AI answer can be regenerated"}
-                      onClick={() => onRegenerate?.(message.id)}
-                      disabled={!canRegenerate}
-                    >
-                      <RotateCcw />
-                    </button>
+                ) : isAssistantComplete ? (
+                  <div className="message-footer">
+                    <div className="message-line" aria-hidden="true" />
+                    <div className="message-actions assistant" aria-label="Answer actions">
+                      <button
+                        className={`message-action${isCopied ? " active" : ""}`}
+                        type="button"
+                        title={isCopied ? "Answer copied" : "Copy answer"}
+                        aria-label={isCopied ? "Answer copied" : "Copy answer"}
+                        onClick={handleCopy}
+                      >
+                        {isCopied ? <Check /> : <Copy />}
+                      </button>
+                      <button
+                        className={`message-action${isSpeaking ? " active negative speaking" : ""}${canSpeak ? "" : " disabled"}`}
+                        type="button"
+                        title={isSpeaking ? "Stop reading answer" : "Read answer aloud"}
+                        aria-label={isSpeaking ? "Stop reading answer" : "Read answer aloud"}
+                        onClick={() => onSpeak?.(message)}
+                        disabled={!canSpeak}
+                      >
+                        {isSpeaking ? <VolumeX /> : <Volume2 />}
+                      </button>
+                      <button
+                        className={`message-action${canRegenerate ? "" : " disabled"}`}
+                        type="button"
+                        title={canRegenerate ? "Regenerate answer" : "Only the latest AI answer can be regenerated"}
+                        aria-label={canRegenerate ? "Regenerate answer" : "Only the latest AI answer can be regenerated"}
+                        onClick={() => onRegenerate?.(message.id)}
+                        disabled={!canRegenerate}
+                      >
+                        <RotateCcw />
+                      </button>
+                    </div>
                   </div>
-                )}
+                ) : null}
 
                 {!isUser ? (
                   <>

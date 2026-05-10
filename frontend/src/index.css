@@ -4980,6 +4980,19 @@ body {
   justify-content: flex-start !important;
 }
 
+.message-footer {
+  width: 100%;
+  margin-top: 30px !important;
+  animation: messageFooterFadeIn 0.3s ease both;
+}
+
+.message-line {
+  width: 100%;
+  height: 1px;
+  margin-bottom: 16px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .message-action {
   position: static !important;
   transform: none !important;
@@ -5021,6 +5034,18 @@ body {
 .nova-code-pre,
 .nova-table-wrap {
   overflow-x: auto !important;
+}
+
+@keyframes messageFooterFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @media (max-width: 760px) {
