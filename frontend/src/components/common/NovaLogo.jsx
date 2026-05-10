@@ -1,13 +1,15 @@
 // @ts-nocheck
 
-const NOVA_LOGO_SRC = "/icons/nova-ai-logo.png";
+const NOVA_WORDMARK_SRC = "/icons/nova-ai-logo.png";
+const NOVA_APP_ICON_SRC = "/icons/nova-app-icon.png";
 
 function NovaLogo({
   size = 32,
   className = '',
   showText = true,
 }) {
-  const imageWidth = Math.round(size * (showText ? 2.8 : 1.9));
+  const imageWidth = Math.round(size * (showText ? 3.1 : 1));
+  const imageSrc = showText ? NOVA_WORDMARK_SRC : NOVA_APP_ICON_SRC;
 
   return (
     <div
@@ -15,7 +17,7 @@ function NovaLogo({
       style={{ width: imageWidth, height: size, flexShrink: 0 }}
     >
       <img
-        src={NOVA_LOGO_SRC}
+        src={imageSrc}
         alt="NOVA AI"
         width={imageWidth}
         height={size}
