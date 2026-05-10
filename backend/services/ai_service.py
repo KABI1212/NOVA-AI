@@ -1882,7 +1882,7 @@ def _auto_provider_attempt_limit() -> int:
 def _provider_chain(provider: Optional[str], use_case: Optional[str] = None) -> List[str]:
     explicit_provider = (provider or "").lower().strip()
     if explicit_provider:
-        return [explicit_provider]
+        return list(dict.fromkeys([explicit_provider, *_provider_chain_for_use_case(use_case), *_FALLBACK_CHAIN]))
 
     configured_provider = _configured_provider_override()
     if configured_provider:
@@ -1901,8 +1901,6 @@ def _provider_chain(provider: Optional[str], use_case: Optional[str] = None) -> 
 def _ready_provider_chain(provider: Optional[str], use_case: Optional[str] = None) -> List[str]:
     chain = _provider_chain(provider, use_case=use_case)
     ready_chain = [item for item in chain if _provider_available(item)]
-    if provider:
-        return ready_chain
 
     attempt_limit = _auto_provider_attempt_limit()
     if len(ready_chain) > attempt_limit:
@@ -2158,14 +2156,6 @@ async def _complete_non_stream(
                     model_for_provider,
                     len(partial),
                 )
-                if provider:
-                    raise RuntimeError(
-                        f"Provider '{current_provider}' failed after a partial response; refusing to return an incomplete answer"
-                    ) from exc
-
-        if provider:
-            break
-
     raise RuntimeError("All configured AI providers failed or returned empty responses: " + "; ".join(errors))
 
 

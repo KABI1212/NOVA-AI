@@ -8,25 +8,64 @@ import pytest
 ai_service_module = importlib.import_module("services.ai_service")
 
 
-def test_complete_non_stream_rejects_partial_provider_output(
+def test_complete_non_stream_recovers_from_partial_failure_when_provider_is_explicit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def partial_failure(messages, model, temperature, max_tokens):
         yield "Half answer"
         raise RuntimeError("stream dropped")
 
-    monkeypatch.setattr(ai_service_module, "_provider_ready", lambda provider: True)
-    monkeypatch.setattr(ai_service_module, "_PROVIDER_STREAM_MAP", {"openai": partial_failure})
+    async def successful_provider(messages, model, temperature, max_tokens):
+        yield "Recovered answer"
+
+    monkeypatch.setattr(ai_service_module.settings, "AI_AUTO_MAX_PROVIDER_ATTEMPTS", 6)
+    monkeypatch.setattr(ai_service_module, "_provider_available", lambda provider: True)
+    monkeypatch.setattr(
+        ai_service_module,
+        "_provider_chain",
+        lambda provider=None, use_case=None: ["openai", "google"],
+    )
+    monkeypatch.setattr(ai_service_module, "_configured_provider_override", lambda: None)
+    monkeypatch.setattr(ai_service_module, "_resolve_provider", lambda: "openai")
+    monkeypatch.setattr(
+        ai_service_module,
+        "_model_for_provider",
+        lambda current_provider, requested_provider, model: model if current_provider == requested_provider else None,
+    )
+    monkeypatch.setattr(
+        ai_service_module,
+        "_PROVIDER_STREAM_MAP",
+        {"openai": partial_failure, "google": successful_provider},
+    )
 
     async def scenario() -> None:
-        with pytest.raises(RuntimeError, match="partial response"):
-            await ai_service_module._complete_non_stream(
-                [{"role": "user", "content": "Answer all questions from this paper."}],
-                provider="openai",
-                model="test-model",
-            )
+        result = await ai_service_module._complete_non_stream(
+            [{"role": "user", "content": "Answer all questions from this paper."}],
+            provider="openai",
+            model="test-model",
+        )
+        assert result == "Recovered answer"
 
     asyncio.run(scenario())
+
+
+def test_explicit_provider_chain_tries_requested_provider_first_then_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        ai_service_module,
+        "_provider_chain_for_use_case",
+        lambda use_case=None: ["google", "groq", "openai"],
+    )
+
+    assert ai_service_module._provider_chain("openai", use_case="concept") == [
+        "openai",
+        "google",
+        "groq",
+        "anthropic",
+        "deepseek",
+        "ollama",
+    ]
 
 
 def test_complete_non_stream_recovers_from_partial_failure_when_provider_is_auto(
