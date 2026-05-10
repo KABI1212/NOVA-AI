@@ -663,7 +663,7 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse | LoginChallengeResponse)
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
-    """Validate credentials and require OTP until the account has been verified."""
+    """Validate credentials and require an email OTP for sign-in."""
 
     email = request.email.strip().lower()
     user = _load_user_by_email(email, db)
@@ -680,43 +680,36 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             detail="User account is inactive",
         )
 
-    if not user.is_verified:
-        if not _should_require_email_verification():
-            logger.info(
-                "login_password_only_fallback_enabled user_id=%s email=%s",
+    if not _should_require_email_verification():
+        logger.info(
+            "login_password_only_fallback_enabled user_id=%s email=%s",
+            user.id,
+            user.email,
+        )
+        return _build_password_only_auth_response(
+            user,
+            db,
+            mark_verified=not user.is_verified,
+        )
+
+    try:
+        return _issue_login_otp(user, db)
+    except HTTPException as exc:
+        if (
+            exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+            and _password_only_fallback_enabled()
+        ):
+            logger.warning(
+                "login_otp_delivery_failed_password_only_fallback user_id=%s email=%s",
                 user.id,
                 user.email,
             )
             return _build_password_only_auth_response(
                 user,
                 db,
-                mark_verified=True,
+                mark_verified=not user.is_verified,
             )
-
-        try:
-            return _issue_login_otp(user, db)
-        except HTTPException as exc:
-            if (
-                exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
-                and _password_only_fallback_enabled()
-            ):
-                logger.warning(
-                    "login_otp_delivery_failed_password_only_fallback user_id=%s email=%s",
-                    user.id,
-                    user.email,
-                )
-                return _build_password_only_auth_response(
-                    user,
-                    db,
-                    mark_verified=True,
-                )
-            raise
-
-    return _build_password_only_auth_response(
-        user,
-        db,
-        mark_verified=False,
-    )
+        raise
 
 
 @router.post("/login/otp/verify", response_model=TokenResponse)

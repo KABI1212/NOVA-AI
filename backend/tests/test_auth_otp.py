@@ -390,10 +390,21 @@ def test_issue_login_otp_never_returns_raw_otp(
     asyncio.run(scenario())
 
 
-def test_login_returns_token_without_requiring_otp_for_verified_user() -> None:
+def test_login_requires_otp_for_verified_user(monkeypatch: pytest.MonkeyPatch) -> None:
     user = _make_user()
     user.is_verified = True
     db = _FakeSession([user])
+    sent_email: dict = {}
+
+    def fake_send_login_otp(*, recipient_email: str, otp_code: str, recipient_name: str = "") -> str:
+        sent_email.update(
+            {
+                "recipient_email": recipient_email,
+                "otp_code": otp_code,
+                "recipient_name": recipient_name,
+            }
+        )
+        return "email"
 
     async def scenario() -> None:
         response = await auth_module.login(
@@ -401,10 +412,17 @@ def test_login_returns_token_without_requiring_otp_for_verified_user() -> None:
             db=db,
         )
 
-        assert response["requires_otp"] is False
-        assert response["access_token"]
-        assert response["user"]["email"] == user.email
+        assert response["requires_otp"] is True
+        assert response["email"] == user.email
+        assert response["delivery_mode"] == "email"
+        assert sent_email["recipient_email"] == user.email
+        assert auth_module.verify_secret_value(
+            sent_email["otp_code"],
+            user.login_otp_code_hash,
+        )
+        assert user.is_verified is True
 
+    monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
     asyncio.run(scenario())
 
 
