@@ -237,9 +237,9 @@ function ChatWindow({
             };
 
             return (
-              <div key={message.id} className={`msg ${isUser ? "u" : "a"}`}>
+              <div key={message.id} className={`message msg ${isUser ? "u" : "a"}`}>
                 <div className="mlb">{isUser ? "You" : "Nova AI"}</div>
-                <div className="bb">
+                <div className={`message-content bb ${isUser ? "user-message" : "ai-message"}`}>
                   {isUser ? (
                     <>
                       {message.content}
@@ -331,9 +331,9 @@ function ChatWindow({
             );
           })}
           {isTyping ? (
-            <div className="msg a">
+            <div className="message msg a">
               <div className="mlb">Nova AI</div>
-              <div className="bb">
+              <div className="message-content bb ai-message">
                 <TypingIndicator />
               </div>
             </div>
