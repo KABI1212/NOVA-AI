@@ -613,7 +613,7 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse | LoginChallengeResponse)
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
-    """Validate credentials and require an email OTP for sign-in."""
+    """Validate credentials and require OTP only for unverified accounts."""
 
     email = request.email.strip().lower()
     user = _load_user_by_email(email, db)
@@ -629,6 +629,9 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive",
         )
+
+    if user.is_verified:
+        return _build_token_response(user)
 
     return _issue_login_otp(user, db)
 

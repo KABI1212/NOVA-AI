@@ -34,6 +34,13 @@ function Signup() {
         username: formData.username.trim(),
         full_name: formData.full_name.trim(),
       });
+      if (!response.data?.requires_otp) {
+        const { access_token, user } = response.data;
+        setAuth(user, access_token);
+        toast.success('Account created successfully!');
+        navigate('/chat');
+        return;
+      }
       setChallenge(response.data);
       setOtp('');
       setStep('otp');

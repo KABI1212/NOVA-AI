@@ -288,7 +288,7 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
 
 @router.post("/login")
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
-    """Validate password and send an email OTP before sign-in."""
+    """Validate password and require OTP only for unverified accounts."""
 
     email = request.email.strip().lower()
     user = db.query(User).filter(User.email == email).first()
@@ -304,6 +304,9 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive",
         )
+
+    if user.is_verified:
+        return _token_response(user)
 
     try:
         return _issue_challenge(user=user, purpose="login")

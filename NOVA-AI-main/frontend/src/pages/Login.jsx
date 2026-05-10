@@ -32,6 +32,13 @@ function Login() {
         email: formData.email.trim(),
         password: formData.password,
       });
+      if (!response.data?.requires_otp) {
+        const { access_token, user } = response.data;
+        setAuth(user, access_token);
+        toast.success('Welcome back!');
+        navigate('/chat');
+        return;
+      }
       setChallenge(response.data);
       setOtp('');
       setStep('otp');
