@@ -162,6 +162,47 @@ def test_test_email_raises_when_provider_is_not_configured(monkeypatch: pytest.M
         )
 
 
+def test_unknown_email_provider_reports_supported_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = EmailService()
+
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_PROVIDER", "mailgun")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_HOST", "")
+    monkeypatch.setattr(email_service_module.settings, "SENDGRID_API_KEY", "")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM", "sender@example.com")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "")
+
+    with pytest.raises(email_service_module.EmailDeliveryError) as exc_info:
+        service.send_test_email(
+            recipient_email="someone@example.com",
+            recipient_name="Alex",
+        )
+
+    assert "Unknown EMAIL_PROVIDER 'mailgun'" in str(exc_info.value)
+    assert "smtp" in str(exc_info.value)
+    assert "sendgrid" in str(exc_info.value)
+
+
+def test_smtp_username_requires_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = EmailService()
+
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_PROVIDER", "smtp")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USER", "sender@example.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASS", "")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USERNAME", "")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM", "sender@example.com")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "")
+
+    with pytest.raises(email_service_module.EmailDeliveryError) as exc_info:
+        service.send_test_email(
+            recipient_email="someone@example.com",
+            recipient_name="Alex",
+        )
+
+    assert "SMTP password is required" in str(exc_info.value)
+
+
 def test_delivery_status_auto_detects_smtp_when_provider_is_blank(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

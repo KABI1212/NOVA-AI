@@ -12,6 +12,7 @@ from config.settings import settings
 
 
 logger = logging.getLogger(__name__)
+SUPPORTED_EMAIL_PROVIDERS = {"sendgrid", "smtp"}
 
 
 class EmailDeliveryError(RuntimeError):
@@ -148,9 +149,13 @@ class EmailService:
             )
             return "email"
 
-        raise EmailDeliveryError(
-            "Email delivery is not configured. Set EMAIL_PROVIDER=smtp and provide SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and EMAIL_FROM."
-        )
+        configured_provider = (settings.EMAIL_PROVIDER or "").strip().lower()
+        if configured_provider and configured_provider not in SUPPORTED_EMAIL_PROVIDERS:
+            raise EmailDeliveryError(
+                f"Unknown EMAIL_PROVIDER '{configured_provider}'. Use 'smtp' or 'sendgrid'."
+            )
+
+        raise EmailDeliveryError(self._configuration_error_message())
 
     def _build_login_otp_email(
         self,
@@ -476,6 +481,11 @@ class EmailService:
 
         if not host:
             raise EmailDeliveryError("SMTP_HOST is required when EMAIL_PROVIDER=smtp.")
+        if smtp_username and not smtp_password:
+            raise EmailDeliveryError(
+                "SMTP password is required when SMTP_USER or SMTP_USERNAME is set. "
+                "Set SMTP_PASS or SMTP_PASSWORD."
+            )
 
         message = EmailMessage()
         message["Subject"] = subject
@@ -547,6 +557,15 @@ class EmailService:
         return (
             (settings.SMTP_PASS or "").strip()
             or (settings.SMTP_PASSWORD or "").strip()
+        )
+
+    def _configuration_error_message(self) -> str:
+        return (
+            "Email delivery is not configured. For SMTP, set EMAIL_PROVIDER=smtp, "
+            "SMTP_HOST, SMTP_PORT, SMTP_USER or SMTP_USERNAME, SMTP_PASS or "
+            "SMTP_PASSWORD, and EMAIL_FROM or EMAIL_FROM_ADDRESS. For SendGrid, "
+            "set EMAIL_PROVIDER=sendgrid, SENDGRID_API_KEY, and EMAIL_FROM or "
+            "EMAIL_FROM_ADDRESS."
         )
 
 
