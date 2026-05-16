@@ -88,6 +88,24 @@ class EmailService:
             html_body=html_body,
         )
 
+    def send_registration_otp(
+        self,
+        *,
+        recipient_email: str,
+        otp_code: str,
+        recipient_name: str = "",
+    ) -> str:
+        subject, text_body, html_body = self._build_registration_otp_email(
+            otp_code=otp_code,
+            recipient_name=recipient_name,
+        )
+        return self._deliver_email(
+            recipient_email=recipient_email,
+            subject=subject,
+            text_body=text_body,
+            html_body=html_body,
+        )
+
     def send_password_reset_otp(
         self,
         *,
@@ -223,6 +241,75 @@ class EmailService:
             """.strip(),
             footer_html=(
                 "This is an automated security email from "
+                f"{escape(app_name)}. Please do not reply unless you configured a reply-to address."
+            ),
+        )
+
+        return subject, text_body, html_body
+
+    def _build_registration_otp_email(
+        self,
+        *,
+        otp_code: str,
+        recipient_name: str,
+    ) -> tuple[str, str, str]:
+        greeting_name = recipient_name.strip() or "there"
+        app_name = settings.APP_NAME
+        expiry_minutes = settings.AUTH_OTP_EXPIRE_MINUTES
+        subject = f"Verify your {app_name} account"
+
+        text_body = (
+            f"Hi {greeting_name},\n\n"
+            f"Thanks for registering for {app_name}. Use this verification code to activate your account:\n\n"
+            f"{otp_code}\n\n"
+            f"This code expires in {expiry_minutes} minutes.\n\n"
+            "Enter the code on the verification screen to complete your registration.\n"
+            f"If you did not create a {app_name} account, you can ignore this email."
+        )
+
+        html_body = self._build_email_shell(
+            preheader=f"Your {app_name} account verification code is {otp_code}. It expires in {expiry_minutes} minutes.",
+            eyebrow="Account verification",
+            title=f"Welcome to {app_name}",
+            greeting_name=greeting_name,
+            intro_html=(
+                f"Thanks for registering for <strong>{escape(app_name)}</strong>. "
+                "Use the code below to verify your email address and activate your account."
+            ),
+            highlight_html=f"""
+              <div style="margin:0 0 14px;font-size:12px;line-height:1.5;color:#cbd5e1;letter-spacing:0.12em;text-transform:uppercase;">
+                Registration code
+              </div>
+              <div style="margin:0 0 8px;font-size:38px;line-height:1;font-weight:800;letter-spacing:10px;color:#ffffff;">
+                {escape(otp_code)}
+              </div>
+              <div style="font-size:13px;line-height:1.6;color:#bfdbfe;">
+                Expires in {expiry_minutes} minutes
+              </div>
+            """.strip(),
+            body_html=f"""
+              <div style="margin:0 0 18px;padding:16px 18px;border-radius:16px;background:#f8fafc;border:1px solid #e2e8f0;">
+                <div style="margin:0 0 10px;font-size:13px;line-height:1.5;color:#475569;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">
+                  Next step
+                </div>
+                <div style="margin:0 0 8px;font-size:15px;line-height:1.7;color:#0f172a;">
+                  Return to the {escape(app_name)} verification screen and enter the six-digit code exactly as shown.
+                </div>
+                <div style="margin:0;font-size:15px;line-height:1.7;color:#0f172a;">
+                  Your account will be activated after the code is verified.
+                </div>
+              </div>
+              <div style="margin:0;padding:16px 18px;border-radius:16px;background:#fff7ed;border:1px solid #fed7aa;">
+                <div style="margin:0 0 8px;font-size:14px;line-height:1.5;color:#9a3412;font-weight:700;">
+                  Security note
+                </div>
+                <div style="margin:0;font-size:14px;line-height:1.7;color:#9a3412;">
+                  If you did not create this account, you can ignore this message. No account access is granted until the code is verified.
+                </div>
+              </div>
+            """.strip(),
+            footer_html=(
+                "This is an automated account verification email from "
                 f"{escape(app_name)}. Please do not reply unless you configured a reply-to address."
             ),
         )

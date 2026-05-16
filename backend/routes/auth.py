@@ -342,7 +342,13 @@ def _ensure_login_not_locked(user: User, db: Session) -> None:
     )
 
 
-def _issue_login_otp(user: User, db: Session, *, is_resend: bool = False) -> dict:
+def _issue_login_otp(
+    user: User,
+    db: Session,
+    *,
+    is_resend: bool = False,
+    is_registration: bool = False,
+) -> dict:
     _ensure_login_not_locked(user, db)
 
     now = utcnow_naive()
@@ -382,14 +388,20 @@ def _issue_login_otp(user: User, db: Session, *, is_resend: bool = False) -> dic
     _persist_user(db, user)
 
     try:
-        delivery_mode = email_service.send_login_otp(
+        send_otp = (
+            email_service.send_registration_otp
+            if is_registration
+            else email_service.send_login_otp
+        )
+        delivery_mode = send_otp(
             recipient_email=user.email,
             otp_code=otp_code,
             recipient_name=user.full_name or user.username,
         )
     except EmailDeliveryError as exc:
         logger.error(
-            "login_otp_email_delivery_failed user_id=%s email=%s error=%s",
+            "login_otp_email_delivery_failed purpose=%s user_id=%s email=%s error=%s",
+            "registration" if is_registration else "login",
             user.id,
             user.email,
             exc,
@@ -591,7 +603,7 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
     db.refresh(new_user)
 
     try:
-        return _issue_login_otp(new_user, db)
+        return _issue_login_otp(new_user, db, is_registration=True)
     except HTTPException as exc:
         if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
             logger.warning(

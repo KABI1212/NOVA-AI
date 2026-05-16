@@ -26,6 +26,23 @@ def test_build_login_otp_email_renders_branded_html() -> None:
     assert "123456" in html_body
 
 
+def test_build_registration_otp_email_renders_account_verification_copy() -> None:
+    service = EmailService()
+
+    subject, text_body, html_body = service._build_registration_otp_email(
+        otp_code="123456",
+        recipient_name="Alex",
+    )
+
+    assert "verify your nova ai account" in subject.lower()
+    assert "Thanks for registering" in text_body
+    assert "123456" in text_body
+    assert "Welcome to NOVA AI" in html_body
+    assert "Registration code" in html_body
+    assert "activate your account" in html_body
+    assert "123456" in html_body
+
+
 def test_build_password_reset_otp_email_matches_branded_code_layout() -> None:
     service = EmailService()
 

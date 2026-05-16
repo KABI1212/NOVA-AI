@@ -147,7 +147,7 @@ def test_signup_creates_user_and_requires_verification(
         assert len(db.users) == 1
         assert db.users[0].is_verified is False
 
-    monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
+    monkeypatch.setattr(auth_module.email_service, "send_registration_otp", fake_send_login_otp)
     asyncio.run(scenario())
 
 
@@ -196,7 +196,7 @@ def test_signup_can_include_debug_otp_when_explicitly_enabled(
 
     monkeypatch.setattr(auth_module.settings, "DEBUG", True)
     monkeypatch.setattr(auth_module.settings, "AUTH_EXPOSE_DEBUG_OTP", True)
-    monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
+    monkeypatch.setattr(auth_module.email_service, "send_registration_otp", fake_send_login_otp)
     asyncio.run(scenario())
 
 
@@ -224,7 +224,7 @@ def test_signup_cleans_up_user_when_otp_delivery_fails(
         assert exc_info.value.detail == auth_module.EMAIL_DELIVERY_FAILURE_MESSAGE
         assert db.users == []
 
-    monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
+    monkeypatch.setattr(auth_module.email_service, "send_registration_otp", fake_send_login_otp)
     asyncio.run(scenario())
 
 
@@ -257,7 +257,7 @@ def test_signup_does_not_bypass_otp_when_fallback_is_enabled(
         "AUTH_ALLOW_PASSWORD_ONLY_FALLBACK",
         True,
     )
-    monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
+    monkeypatch.setattr(auth_module.email_service, "send_registration_otp", fake_send_login_otp)
     asyncio.run(scenario())
 
 
@@ -330,7 +330,7 @@ async def _issue_signup_challenge(
         )
         return delivery_mode
 
-    monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
+    monkeypatch.setattr(auth_module.email_service, "send_registration_otp", fake_send_login_otp)
 
     response = await auth_module.signup(
         auth_module.SignupRequest(
