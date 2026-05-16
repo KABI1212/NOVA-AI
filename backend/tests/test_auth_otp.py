@@ -389,10 +389,21 @@ def test_issue_login_otp_never_returns_raw_otp(
     asyncio.run(scenario())
 
 
-def test_login_returns_token_without_requiring_otp_for_verified_user() -> None:
+def test_login_sends_otp_for_verified_user(monkeypatch: pytest.MonkeyPatch) -> None:
     user = _make_user()
     user.is_verified = True
     db = _FakeSession([user])
+    sent_email: dict = {}
+
+    def fake_send_login_otp(*, recipient_email: str, otp_code: str, recipient_name: str = "") -> str:
+        sent_email.update(
+            {
+                "recipient_email": recipient_email,
+                "otp_code": otp_code,
+                "recipient_name": recipient_name,
+            }
+        )
+        return "email"
 
     async def scenario() -> None:
         response = await auth_module.login(
@@ -400,17 +411,28 @@ def test_login_returns_token_without_requiring_otp_for_verified_user() -> None:
             db=db,
         )
 
-        assert response["requires_otp"] is False
-        assert response["access_token"]
-        assert response["user"]["email"] == user.email
+        assert response["requires_otp"] is True
+        assert response["email"] == user.email
+        assert response["delivery_mode"] == "email"
+        assert sent_email["recipient_email"] == user.email
+        assert auth_module.verify_secret_value(
+            sent_email["otp_code"],
+            user.login_otp_code_hash,
+        )
 
+    monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
     asyncio.run(scenario())
 
 
-def test_login_marks_existing_unverified_user_verified_without_otp() -> None:
+def test_login_sends_otp_for_existing_unverified_user(monkeypatch: pytest.MonkeyPatch) -> None:
     user = _make_user()
     user.is_verified = False
     db = _FakeSession([user])
+    sent_email: dict = {}
+
+    def fake_send_login_otp(*, recipient_email: str, otp_code: str, recipient_name: str = "") -> str:
+        sent_email["otp_code"] = otp_code
+        return "email"
 
     async def scenario() -> None:
         response = await auth_module.login(
@@ -418,17 +440,20 @@ def test_login_marks_existing_unverified_user_verified_without_otp() -> None:
             db=db,
         )
 
-        assert response["requires_otp"] is False
-        assert response["access_token"]
-        assert response["user"]["email"] == user.email
-        assert user.is_verified is True
-        assert user.login_otp_code_hash is None
-        assert user.login_otp_challenge_hash is None
+        assert response["requires_otp"] is True
+        assert response["email"] == user.email
+        assert user.is_verified is False
+        assert auth_module.verify_secret_value(
+            sent_email["otp_code"],
+            user.login_otp_code_hash,
+        )
+        assert user.login_otp_challenge_hash is not None
 
+    monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
     asyncio.run(scenario())
 
 
-def test_login_does_not_send_email_when_fallback_is_enabled(
+def test_login_does_not_bypass_otp_when_fallback_is_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user = _make_user()
@@ -439,14 +464,15 @@ def test_login_does_not_send_email_when_fallback_is_enabled(
         raise auth_module.EmailDeliveryError("SMTP could not deliver the verification email.")
 
     async def scenario() -> None:
-        response = await auth_module.login(
-            auth_module.LoginRequest(email=user.email, password="Sup3rSecret!"),
-            db=db,
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_module.login(
+                auth_module.LoginRequest(email=user.email, password="Sup3rSecret!"),
+                db=db,
+            )
 
-        assert response["requires_otp"] is False
-        assert response["access_token"]
-        assert user.is_verified is True
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.detail == auth_module.EMAIL_DELIVERY_FAILURE_MESSAGE
+        assert user.is_verified is False
         assert user.login_otp_code_hash is None
         assert user.login_otp_challenge_hash is None
 
@@ -584,13 +610,14 @@ def test_verify_login_otp_locks_after_three_failed_attempts(
         assert user.login_otp_code_hash is None
         assert user.login_otp_challenge_hash is None
 
-        login_response = await auth_module.login(
-            auth_module.LoginRequest(email=user.email, password="Sup3rSecret!"),
-            db=db,
-        )
+        with pytest.raises(HTTPException) as locked_exc:
+            await auth_module.login(
+                auth_module.LoginRequest(email=user.email, password="Sup3rSecret!"),
+                db=db,
+            )
 
-        assert login_response["requires_otp"] is False
-        assert login_response["access_token"]
+        assert locked_exc.value.status_code == 423
+        assert locked_exc.value.detail == auth_module.OTP_LOCKED_MESSAGE
 
     asyncio.run(scenario())
 
