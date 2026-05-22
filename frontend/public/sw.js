@@ -1,6 +1,7 @@
-const CACHE_NAME = "nova-ai-pwa-v8";
+const CACHE_NAME = "nova-ai-pwa-v9";
 const APP_SHELL = [
   "/",
+  "/index.html",
   "/manifest.json",
   "/favicon.svg",
   "/favicon.ico",
@@ -43,6 +44,21 @@ self.addEventListener("fetch", (event) => {
   }
 
   event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request))
+    fetch(event.request).catch(async () => {
+      const cachedResponse = await caches.match(event.request);
+      if (cachedResponse) {
+        return cachedResponse;
+      }
+
+      if (event.request.mode === "navigate") {
+        return (
+          (await caches.match("/index.html")) ||
+          (await caches.match("/")) ||
+          Response.error()
+        );
+      }
+
+      return Response.error();
+    })
   );
 });
