@@ -113,7 +113,7 @@ function Signup() {
         setChallenge(response.data);
         setOtp('');
         setStep('otp');
-        toast.success(response.data.message || 'OTP sent to your email.');
+        toast.success(response.data.message || 'Verification code sent to your email.');
       } else {
         const { access_token, user } = response.data;
         setAuth(user, access_token);
@@ -135,7 +135,7 @@ function Signup() {
     setAuthError('');
 
     try {
-      const response = await authAPI.verifyLoginOtp({
+      const response = await authAPI.verifySignupOtp({
         email: challenge.email,
         otp,
         challenge_token: challenge.challenge_token,
@@ -162,7 +162,7 @@ function Signup() {
     setAuthError('');
 
     try {
-      const response = await authAPI.resendLoginOtp({
+      const response = await authAPI.resendSignupOtp({
         email: challenge.email,
         challenge_token: challenge.challenge_token,
       });

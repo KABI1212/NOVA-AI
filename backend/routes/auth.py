@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, field_validator
+from starlette.concurrency import run_in_threadpool
 try:
     from sqlalchemy.exc import IntegrityError
 except ImportError:
@@ -97,8 +98,16 @@ class SignupRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
+
+    @field_validator("email")
+    @classmethod
+    def validate_identifier(cls, value: str) -> str:
+        identifier = (value or "").strip()
+        if not identifier:
+            raise ValueError("Email or username is required.")
+        return identifier
 
 
 class LoginOtpVerifyRequest(BaseModel):
@@ -259,6 +268,17 @@ def _clear_password_reset_state(user: User) -> None:
     user.password_reset_otp_challenge_hash = None
 
 
+def _reset_password_reset_security_state(user: User) -> None:
+    user.password_reset_otp_failed_attempts = 0
+    user.password_reset_otp_resend_count = 0
+    user.password_reset_otp_locked_until = None
+
+
+def _clear_all_password_reset_state(user: User) -> None:
+    _clear_password_reset_state(user)
+    _reset_password_reset_security_state(user)
+
+
 def _persist_user(db: Session, user: User) -> None:
     db.add(user)
     try:
@@ -290,7 +310,24 @@ def _snapshot_login_otp_state(user: User) -> dict[str, Any]:
     }
 
 
+def _snapshot_password_reset_state(user: User) -> dict[str, Any]:
+    return {
+        "password_reset_otp_code_hash": user.password_reset_otp_code_hash,
+        "password_reset_otp_expires_at": user.password_reset_otp_expires_at,
+        "password_reset_otp_sent_at": user.password_reset_otp_sent_at,
+        "password_reset_otp_challenge_hash": user.password_reset_otp_challenge_hash,
+        "password_reset_otp_failed_attempts": _safe_int(user.password_reset_otp_failed_attempts),
+        "password_reset_otp_resend_count": _safe_int(user.password_reset_otp_resend_count),
+        "password_reset_otp_locked_until": user.password_reset_otp_locked_until,
+    }
+
+
 def _restore_login_otp_state(user: User, snapshot: dict[str, Any]) -> None:
+    for field_name, value in snapshot.items():
+        setattr(user, field_name, value)
+
+
+def _restore_password_reset_state(user: User, snapshot: dict[str, Any]) -> None:
     for field_name, value in snapshot.items():
         setattr(user, field_name, value)
 
@@ -342,7 +379,24 @@ def _ensure_login_not_locked(user: User, db: Session) -> None:
     )
 
 
-def _issue_login_otp(
+def _ensure_password_reset_not_locked(user: User, db: Session) -> None:
+    locked_until = user.password_reset_otp_locked_until
+    if locked_until is None:
+        return
+
+    now = utcnow_naive()
+    if locked_until <= now:
+        _reset_password_reset_security_state(user)
+        _persist_user(db, user)
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_423_LOCKED,
+        detail=OTP_LOCKED_MESSAGE,
+    )
+
+
+async def _issue_login_otp(
     user: User,
     db: Session,
     *,
@@ -393,7 +447,8 @@ def _issue_login_otp(
             if is_registration
             else email_service.send_login_otp
         )
-        delivery_mode = send_otp(
+        delivery_mode = await run_in_threadpool(
+            send_otp,
             recipient_email=user.email,
             otp_code=otp_code,
             recipient_name=user.full_name or user.username,
@@ -422,20 +477,53 @@ def _issue_login_otp(
     )
 
 
-def _issue_password_reset_otp(user: User, db: Session) -> dict:
+def _password_reset_resend_available_at(user: User) -> datetime:
+    sent_at = user.password_reset_otp_sent_at or utcnow_naive()
+    return sent_at + timedelta(seconds=settings.AUTH_OTP_RESEND_COOLDOWN_SECONDS)
+
+
+async def _issue_password_reset_otp(user: User, db: Session) -> dict:
+    _ensure_password_reset_not_locked(user, db)
+
+    now = utcnow_naive()
+    snapshot = _snapshot_password_reset_state(user)
+
+    if user.password_reset_otp_sent_at:
+        resend_available_at = _password_reset_resend_available_at(user)
+        if resend_available_at > now:
+            seconds_remaining = max(
+                int((resend_available_at - now).total_seconds() + 0.999),
+                1,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Please wait {seconds_remaining} seconds before requesting a new reset code.",
+            )
+
+        resend_count = _safe_int(user.password_reset_otp_resend_count)
+        if resend_count >= settings.AUTH_OTP_MAX_RESEND_ATTEMPTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many password reset code requests. Please try again later.",
+            )
+        user.password_reset_otp_resend_count = resend_count + 1
+    else:
+        _reset_password_reset_security_state(user)
+
     otp_code = generate_numeric_otp()
     challenge_token = generate_login_challenge_token()
-    expires_at = utcnow_naive() + timedelta(minutes=settings.AUTH_OTP_EXPIRE_MINUTES)
+    expires_at = now + timedelta(minutes=settings.AUTH_OTP_EXPIRE_MINUTES)
 
     user.password_reset_otp_code_hash = hash_secret_value(otp_code)
     user.password_reset_otp_challenge_hash = hash_secret_value(challenge_token)
     user.password_reset_otp_expires_at = expires_at
-    user.password_reset_otp_sent_at = utcnow_naive()
+    user.password_reset_otp_sent_at = now
 
     _persist_user(db, user)
 
     try:
-        delivery_mode = email_service.send_password_reset_otp(
+        delivery_mode = await run_in_threadpool(
+            email_service.send_password_reset_otp,
             recipient_email=user.email,
             otp_code=otp_code,
             recipient_name=user.full_name or user.username,
@@ -447,7 +535,7 @@ def _issue_password_reset_otp(user: User, db: Session) -> dict:
             user.email,
             exc,
         )
-        _clear_password_reset_state(user)
+        _restore_password_reset_state(user, snapshot)
         _persist_user(db, user)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -468,6 +556,18 @@ def _issue_password_reset_otp(user: User, db: Session) -> dict:
 
 def _load_user_by_email(email: str, db: Session) -> User | None:
     return db.query(User).filter(User.email == email).first()
+
+
+def _load_user_by_login_identifier(identifier: str, db: Session) -> User | None:
+    raw_identifier = (identifier or "").strip()
+    normalized = raw_identifier.lower()
+    if not raw_identifier:
+        return None
+    return db.query(User).filter(
+        (User.email == normalized)
+        | (User.username == raw_identifier)
+        | (User.username == normalized)
+    ).first()
 
 
 def _validate_pending_login(
@@ -603,7 +703,7 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
     db.refresh(new_user)
 
     try:
-        return _issue_login_otp(new_user, db, is_registration=True)
+        return await _issue_login_otp(new_user, db, is_registration=True)
     except HTTPException as exc:
         if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
             logger.warning(
@@ -625,10 +725,10 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse | LoginChallengeResponse)
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
-    """Validate credentials and send an email OTP before issuing a session."""
+    """Validate credentials and issue a session for verified accounts."""
 
-    email = request.email.strip().lower()
-    user = _load_user_by_email(email, db)
+    identifier = request.email.strip().lower()
+    user = _load_user_by_login_identifier(identifier, db)
 
     if not user or not verify_password(request.password, user.hashed_password):
         raise HTTPException(
@@ -642,15 +742,27 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             detail="User account is inactive",
         )
 
-    return _issue_login_otp(user, db)
+    if not user.is_verified and _has_login_otp_state(user):
+        return await _issue_login_otp(user, db, is_registration=True)
+
+    if not user.is_verified:
+        user.is_verified = True
+        _persist_user(db, user)
+
+    if _has_login_otp_state(user):
+        _clear_login_otp_state(user)
+        _persist_user(db, user)
+
+    return _build_token_response(user)
 
 
+@router.post("/signup/otp/verify", response_model=TokenResponse)
 @router.post("/login/otp/verify", response_model=TokenResponse)
 async def verify_login_otp(
     request: LoginOtpVerifyRequest,
     db: Session = Depends(get_db),
 ):
-    """Verify a pending login OTP and return the authenticated session token."""
+    """Verify a pending signup OTP and activate the account."""
 
     email = request.email.strip().lower()
     otp = "".join(character for character in request.otp if character.isdigit())
@@ -699,6 +811,11 @@ async def verify_login_otp(
 
 
 @router.post(
+    "/signup/otp/resend",
+    response_model=LoginChallengeResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+@router.post(
     "/login/otp/resend",
     response_model=LoginChallengeResponse,
     status_code=status.HTTP_202_ACCEPTED,
@@ -707,7 +824,7 @@ async def resend_login_otp(
     request: LoginOtpResendRequest,
     db: Session = Depends(get_db),
 ):
-    """Reissue a login OTP for an active verification challenge."""
+    """Reissue a signup verification OTP for an active verification challenge."""
 
     email = request.email.strip().lower()
     user = _validate_pending_login(
@@ -717,7 +834,7 @@ async def resend_login_otp(
         allow_expired=True,
     )
 
-    return _issue_login_otp(user, db, is_resend=True)
+    return await _issue_login_otp(user, db, is_resend=True, is_registration=True)
 
 
 @router.post(
@@ -749,7 +866,7 @@ async def forgot_password(
             detail=PASSWORD_RESET_DELIVERY_FAILURE_MESSAGE,
         )
 
-    return _issue_password_reset_otp(user, db)
+    return await _issue_password_reset_otp(user, db)
 
 
 @router.post("/password/reset", response_model=PasswordResetResponse)
@@ -782,13 +899,34 @@ async def reset_password(
     )
 
     if not verify_secret_value(otp, user.password_reset_otp_code_hash):
+        user.password_reset_otp_failed_attempts = _safe_int(user.password_reset_otp_failed_attempts) + 1
+        attempts_remaining = max(
+            settings.AUTH_OTP_MAX_ATTEMPTS - _safe_int(user.password_reset_otp_failed_attempts),
+            0,
+        )
+        if attempts_remaining <= 0:
+            _clear_password_reset_state(user)
+            user.password_reset_otp_resend_count = 0
+            user.password_reset_otp_locked_until = utcnow_naive() + timedelta(
+                minutes=settings.AUTH_OTP_LOCK_MINUTES
+            )
+            _persist_user(db, user)
+            raise HTTPException(
+                status_code=status.HTTP_423_LOCKED,
+                detail=OTP_LOCKED_MESSAGE,
+            )
+
+        _persist_user(db, user)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid verification code.",
+            detail=(
+                "Invalid verification code. "
+                f"You have {attempts_remaining} attempts remaining."
+            ),
         )
 
     user.hashed_password = get_password_hash(new_password)
-    _clear_password_reset_state(user)
+    _clear_all_password_reset_state(user)
     _clear_login_otp_state(user)
     _persist_user(db, user)
 

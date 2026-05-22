@@ -55,6 +55,7 @@ const formatStatusFallback = (error, fallback) => {
   const isAuthRequest =
     requestUrl.includes("/auth/login") ||
     requestUrl.includes("/auth/signup") ||
+    requestUrl.includes("/auth/signup/otp") ||
     requestUrl.includes("/auth/login/otp") ||
     requestUrl.includes("/auth/password/forgot") ||
     requestUrl.includes("/auth/password/reset");
@@ -64,7 +65,7 @@ const formatStatusFallback = (error, fallback) => {
   }
 
   if (status === 401 && requestUrl.includes("/auth/login")) {
-    return "Login failed. Check the email and password, or complete OTP verification if the account was just created.";
+    return "Login failed. Check your email or username and password.";
   }
 
   if (status === 503) {

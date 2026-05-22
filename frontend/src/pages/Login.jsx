@@ -119,7 +119,7 @@ function Login() {
         setChallenge(response.data);
         setOtp('');
         setStep('otp');
-        toast.success(response.data.message || 'OTP sent to your email.');
+        toast.success(response.data.message || 'Verification code sent to your email.');
       } else {
         const { access_token, user } = response.data;
         setAuth(user, access_token);
@@ -141,14 +141,14 @@ function Login() {
     setAuthError('');
 
     try {
-      const response = await authAPI.verifyLoginOtp({
+      const response = await authAPI.verifySignupOtp({
         email: challenge.email,
         otp,
         challenge_token: challenge.challenge_token,
       });
       const { access_token, user } = response.data;
       setAuth(user, access_token);
-      toast.success('Welcome back!');
+      toast.success('Account verified. Welcome!');
       navigate('/chat');
     } catch (error) {
       const message = formatApiError(error, 'Verification failed');
@@ -168,13 +168,13 @@ function Login() {
     setAuthError('');
 
     try {
-      const response = await authAPI.resendLoginOtp({
+      const response = await authAPI.resendSignupOtp({
         email: challenge.email,
         challenge_token: challenge.challenge_token,
       });
       setChallenge(response.data);
       setOtp('');
-      toast.success(response.data.message || 'A new OTP has been sent to your email.');
+      toast.success(response.data.message || 'A new verification code has been sent to your email.');
     } catch (error) {
       const message = formatApiError(error, 'Could not resend the code');
       setAuthError(message);
@@ -408,10 +408,10 @@ function Login() {
               </button>
 
               <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-3">
-                Enter Verification Code
+                Verify Your Account
               </h2>
               <p className="text-sm text-gray-600 dark:text-gray-400 mb-6 leading-6">
-                We sent a 6-digit code to{' '}
+                This account still needs email verification. Enter the 6-digit code sent to{' '}
                 <span className="font-medium text-gray-900 dark:text-gray-100">
                   {maskedEmail}
                 </span>

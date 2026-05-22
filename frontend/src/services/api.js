@@ -277,6 +277,8 @@ api.interceptors.response.use(
 export const authAPI = {
   signup: (data) => api.post('/auth/signup', data),
   login: (data) => api.post('/auth/login', data),
+  verifySignupOtp: (data) => api.post('/auth/signup/otp/verify', data),
+  resendSignupOtp: (data) => api.post('/auth/signup/otp/resend', data),
   verifyLoginOtp: (data) => api.post('/auth/login/otp/verify', data),
   resendLoginOtp: (data) => api.post('/auth/login/otp/resend', data),
   forgotPassword: (data) => api.post('/auth/password/forgot', data),

@@ -26,6 +26,9 @@ class User(MongoModel):
     password_reset_otp_expires_at = Field(default=None)
     password_reset_otp_sent_at = Field(default=None)
     password_reset_otp_challenge_hash = Field(default=None)
+    password_reset_otp_failed_attempts = Field(default=0)
+    password_reset_otp_resend_count = Field(default=0)
+    password_reset_otp_locked_until = Field(default=None)
     created_at = Field(default_factory=utc_now)
     updated_at = Field(default_factory=utc_now)
 
