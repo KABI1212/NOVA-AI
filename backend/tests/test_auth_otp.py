@@ -435,10 +435,65 @@ def test_login_accepts_username_for_verified_user() -> None:
     asyncio.run(scenario())
 
 
-def test_login_backfills_legacy_unverified_user_without_pending_challenge() -> None:
+def test_login_accepts_mixed_case_username_for_verified_user() -> None:
+    user = _make_user()
+    user.username = "KABI"
+    user.is_verified = True
+    db = _FakeSession([user])
+
+    async def scenario() -> None:
+        response = await auth_module.login(
+            auth_module.LoginRequest(email="KABI", password="Sup3rSecret!"),
+            db=db,
+        )
+
+        assert response["requires_otp"] is False
+        assert response["access_token"]
+        assert response["user"]["email"] == user.email
+
+    asyncio.run(scenario())
+
+
+def test_login_issues_signup_otp_for_legacy_unverified_user_without_pending_challenge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     user = _make_user()
     user.is_verified = False
     db = _FakeSession([user])
+    sent_email: dict = {}
+
+    def fake_send_registration_otp(*, recipient_email: str, otp_code: str, recipient_name: str = "") -> str:
+        sent_email["otp_code"] = otp_code
+        return "email"
+
+    async def scenario() -> None:
+        response = await auth_module.login(
+            auth_module.LoginRequest(email=user.email, password="Sup3rSecret!"),
+            db=db,
+        )
+
+        assert response["requires_otp"] is True
+        assert response["email"] == user.email
+        assert user.is_verified is False
+        assert auth_module.verify_secret_value(
+            sent_email["otp_code"],
+            user.login_otp_code_hash,
+        )
+        assert user.login_otp_challenge_hash is not None
+
+    monkeypatch.setattr(auth_module.email_service, "send_registration_otp", fake_send_registration_otp)
+    asyncio.run(scenario())
+
+
+def test_login_password_only_fallback_can_verify_legacy_unverified_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = _make_user()
+    user.is_verified = False
+    db = _FakeSession([user])
+
+    def fail_send_registration_otp(*args, **kwargs) -> str:
+        raise AssertionError("password-only fallback must not send OTP")
 
     async def scenario() -> None:
         response = await auth_module.login(
@@ -451,6 +506,8 @@ def test_login_backfills_legacy_unverified_user_without_pending_challenge() -> N
         assert user.is_verified is True
         assert user.login_otp_challenge_hash is None
 
+    monkeypatch.setattr(auth_module.settings, "AUTH_ALLOW_PASSWORD_ONLY_FALLBACK", True)
+    monkeypatch.setattr(auth_module.email_service, "send_registration_otp", fail_send_registration_otp)
     asyncio.run(scenario())
 
 
@@ -487,7 +544,7 @@ def test_login_sends_signup_otp_for_pending_unverified_user(monkeypatch: pytest.
     asyncio.run(scenario())
 
 
-def test_login_does_not_bypass_otp_when_fallback_is_enabled(
+def test_login_password_only_fallback_bypasses_pending_unverified_user(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user = _make_user()
@@ -498,28 +555,27 @@ def test_login_does_not_bypass_otp_when_fallback_is_enabled(
     user.login_otp_sent_at = auth_module.utcnow_naive()
     db = _FakeSession([user])
 
-    def fake_send_registration_otp(*, recipient_email: str, otp_code: str, recipient_name: str = "") -> str:
-        raise auth_module.EmailDeliveryError("SMTP could not deliver the verification email.")
+    def fail_send_registration_otp(*args, **kwargs) -> str:
+        raise AssertionError("password-only fallback must not send OTP")
 
     async def scenario() -> None:
-        with pytest.raises(HTTPException) as exc_info:
-            await auth_module.login(
-                auth_module.LoginRequest(email=user.email, password="Sup3rSecret!"),
-                db=db,
-            )
+        response = await auth_module.login(
+            auth_module.LoginRequest(email=user.email, password="Sup3rSecret!"),
+            db=db,
+        )
 
-        assert exc_info.value.status_code == 503
-        assert exc_info.value.detail == auth_module.EMAIL_DELIVERY_FAILURE_MESSAGE
-        assert user.is_verified is False
-        assert auth_module.verify_secret_value("123456", user.login_otp_code_hash)
-        assert auth_module.verify_secret_value("challenge", user.login_otp_challenge_hash)
+        assert response["requires_otp"] is False
+        assert response["access_token"]
+        assert user.is_verified is True
+        assert user.login_otp_code_hash is None
+        assert user.login_otp_challenge_hash is None
 
     monkeypatch.setattr(
         auth_module.settings,
         "AUTH_ALLOW_PASSWORD_ONLY_FALLBACK",
         True,
     )
-    monkeypatch.setattr(auth_module.email_service, "send_registration_otp", fake_send_registration_otp)
+    monkeypatch.setattr(auth_module.email_service, "send_registration_otp", fail_send_registration_otp)
     asyncio.run(scenario())
 
 
@@ -744,6 +800,88 @@ def test_resend_login_otp_allows_expired_code_with_valid_challenge(
         assert resend_response["resend_attempts_remaining"] == (
             auth_module.settings.AUTH_OTP_MAX_RESEND_ATTEMPTS - 1
         )
+
+    asyncio.run(scenario())
+
+
+def test_resend_signup_otp_uses_registration_email(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = _make_user()
+    db = _FakeSession([user])
+    sent_email: dict = {}
+
+    def fake_send_registration_otp(*, recipient_email: str, otp_code: str, recipient_name: str = "") -> str:
+        sent_email["purpose"] = "registration"
+        sent_email["otp_code"] = otp_code
+        return "email"
+
+    def fail_send_login_otp(*args, **kwargs) -> str:
+        raise AssertionError("signup resend must not send a login OTP email")
+
+    async def scenario() -> None:
+        response, _sent_email = await _issue_login_challenge(monkeypatch, db, user)
+        user.login_otp_sent_at = user.login_otp_sent_at - timedelta(
+            seconds=auth_module.settings.AUTH_OTP_RESEND_COOLDOWN_SECONDS + 1
+        )
+        monkeypatch.setattr(auth_module.email_service, "send_registration_otp", fake_send_registration_otp)
+        monkeypatch.setattr(auth_module.email_service, "send_login_otp", fail_send_login_otp)
+
+        resend_response = await auth_module.resend_signup_otp(
+            auth_module.LoginOtpResendRequest(
+                email=user.email,
+                challenge_token=response["challenge_token"],
+            ),
+            db=db,
+        )
+
+        assert sent_email["purpose"] == "registration"
+        assert auth_module.verify_secret_value(
+            sent_email["otp_code"],
+            user.login_otp_code_hash,
+        )
+        assert resend_response["challenge_token"] != response["challenge_token"]
+
+    asyncio.run(scenario())
+
+
+def test_resend_login_otp_uses_login_email(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = _make_user()
+    db = _FakeSession([user])
+    sent_email: dict = {}
+
+    def fake_send_login_otp(*, recipient_email: str, otp_code: str, recipient_name: str = "") -> str:
+        sent_email["purpose"] = "login"
+        sent_email["otp_code"] = otp_code
+        return "email"
+
+    def fail_send_registration_otp(*args, **kwargs) -> str:
+        raise AssertionError("login resend must not send a registration OTP email")
+
+    async def scenario() -> None:
+        response, _sent_email = await _issue_login_challenge(monkeypatch, db, user)
+        user.login_otp_sent_at = user.login_otp_sent_at - timedelta(
+            seconds=auth_module.settings.AUTH_OTP_RESEND_COOLDOWN_SECONDS + 1
+        )
+        monkeypatch.setattr(auth_module.email_service, "send_login_otp", fake_send_login_otp)
+        monkeypatch.setattr(auth_module.email_service, "send_registration_otp", fail_send_registration_otp)
+
+        resend_response = await auth_module.resend_login_otp(
+            auth_module.LoginOtpResendRequest(
+                email=user.email,
+                challenge_token=response["challenge_token"],
+            ),
+            db=db,
+        )
+
+        assert sent_email["purpose"] == "login"
+        assert auth_module.verify_secret_value(
+            sent_email["otp_code"],
+            user.login_otp_code_hash,
+        )
+        assert resend_response["challenge_token"] != response["challenge_token"]
 
     asyncio.run(scenario())
 

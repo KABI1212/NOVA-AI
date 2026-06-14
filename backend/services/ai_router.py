@@ -5,7 +5,6 @@ from typing import List
 
 from config.settings import settings
 from prompts import get_mode_prompt
-from services.ai_service import ai_service
 
 from services.provider_clients import (
     ask_chatgpt,
@@ -225,9 +224,7 @@ async def _race_short(prompt: str) -> str:
         if name == "perplexity":
             task_map.append(asyncio.create_task(ask_perplexity(prompt, SYSTEM_PROMPT, "sonar-pro")))
 
-    tasks = task_map
-
-    done, pending = await asyncio.wait(tasks, timeout=FAST_TIMEOUT_SECONDS, return_when=asyncio.FIRST_COMPLETED)
+    done, pending = await asyncio.wait(task_map, timeout=FAST_TIMEOUT_SECONDS, return_when=asyncio.FIRST_COMPLETED)
     for task in pending:
         task.cancel()
 
@@ -256,35 +253,62 @@ def _merge_answers(primary: str, secondary: str) -> str:
 
 
 async def generate_answer(message: str, history: List[dict]) -> str:
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for item in history or []:
-        role = str(item.get("role", "user")).strip().lower()
-        content = str(item.get("content", "") or "").strip()
-        if role in {"system", "user", "assistant"} and content:
-            messages.append({"role": role, "content": content})
-    messages.append({"role": "user", "content": message})
-
-    provider = (getattr(settings, "AI_PROVIDER", "") or "").strip().lower() or None
-    model = (getattr(settings, "AI_MODEL", "") or "").strip() or None
-
+    prompt = build_prompt(history or [], message)
+    strategy = select_model(message)
     logger.info(
-        "ai_router.generate_answer provider=%s model=%s history_count=%s message=%s",
-        provider or "<auto>",
-        model or "<default>",
+        "ai_router.generate_answer strategy=%s history_count=%s message=%s",
+        strategy,
         len(history or []),
         " ".join((message or "").split())[:200],
     )
 
-    response_text = ""
-    async for chunk in ai_service.chat_completion(
-        messages,
-        stream=False,
-        provider=provider,
-        model=model,
-        temperature=float(getattr(settings, "AI_TEMPERATURE", 0.3) or 0.3),
-        max_tokens=int(getattr(settings, "AI_MAX_TOKENS", 8192) or 8192),
-    ):
-        response_text += chunk
+    if strategy == "instant":
+        response_text = await _fallback_fast(prompt)
+    elif strategy == "race":
+        response_text = await _race_short(prompt)
+    elif strategy == "groq":
+        if not _has_key("groq"):
+            response_text = await _fallback_fast(prompt)
+        else:
+            try:
+                response_text = await _call_with_timeout(
+                    ask_groq(prompt, SYSTEM_PROMPT, "llama-3.3-70b-versatile"),
+                    timeout=MODEL_TIMEOUT_SECONDS,
+                )
+            except Exception as exc:
+                logger.warning("ai_router_groq_failed error=%s", exc)
+                response_text = await _fallback_fast(prompt)
+    else:
+        responses = []
+        if _has_key("claude"):
+            responses.append(
+                _call_with_timeout(
+                    ask_claude(prompt, SYSTEM_PROMPT, "claude-sonnet-4-5"),
+                    timeout=MODEL_TIMEOUT_SECONDS,
+                )
+            )
+        if _has_key("deepseek"):
+            responses.append(
+                _call_with_timeout(
+                    ask_deepseek(prompt, SYSTEM_PROMPT, "deepseek-chat"),
+                    timeout=MODEL_TIMEOUT_SECONDS,
+                )
+            )
+
+        if not responses:
+            response_text = await _fallback_fast(prompt)
+        else:
+            results = await asyncio.gather(*responses, return_exceptions=True)
+            clean_results = [
+                str(result).strip()
+                for result in results
+                if not isinstance(result, Exception) and str(result).strip()
+            ]
+            response_text = ""
+            for result in clean_results:
+                response_text = _merge_answers(response_text, result)
+            if not response_text:
+                response_text = await _fallback_fast(prompt)
 
     response_text = response_text.strip()
     if response_text:

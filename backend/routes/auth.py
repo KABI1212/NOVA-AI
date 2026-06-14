@@ -558,15 +558,18 @@ def _load_user_by_email(email: str, db: Session) -> User | None:
     return db.query(User).filter(User.email == email).first()
 
 
-def _load_user_by_login_identifier(identifier: str, db: Session) -> User | None:
-    raw_identifier = (identifier or "").strip()
-    normalized = raw_identifier.lower()
+def _load_user_by_login_identifier(
+    raw_identifier: str,
+    normalized_identifier: str,
+    db: Session,
+) -> User | None:
+    raw_identifier = (raw_identifier or "").strip()
+    normalized = (normalized_identifier or "").strip().lower()
     if not raw_identifier:
         return None
     return db.query(User).filter(
         (User.email == normalized)
         | (User.username == raw_identifier)
-        | (User.username == normalized)
     ).first()
 
 
@@ -727,8 +730,9 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
     """Validate credentials and issue a session for verified accounts."""
 
-    identifier = request.email.strip().lower()
-    user = _load_user_by_login_identifier(identifier, db)
+    raw_identifier = request.email.strip()
+    normalized_identifier = raw_identifier.lower()
+    user = _load_user_by_login_identifier(raw_identifier, normalized_identifier, db)
 
     if not user or not verify_password(request.password, user.hashed_password):
         raise HTTPException(
@@ -742,12 +746,11 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             detail="User account is inactive",
         )
 
-    if not user.is_verified and _has_login_otp_state(user):
-        return await _issue_login_otp(user, db, is_registration=True)
-
-    if not user.is_verified:
+    if not user.is_verified and settings.AUTH_ALLOW_PASSWORD_ONLY_FALLBACK:
         user.is_verified = True
         _persist_user(db, user)
+    elif not user.is_verified:
+        return await _issue_login_otp(user, db, is_registration=True)
 
     if _has_login_otp_state(user):
         _clear_login_otp_state(user)
@@ -815,12 +818,7 @@ async def verify_login_otp(
     response_model=LoginChallengeResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-@router.post(
-    "/login/otp/resend",
-    response_model=LoginChallengeResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-async def resend_login_otp(
+async def resend_signup_otp(
     request: LoginOtpResendRequest,
     db: Session = Depends(get_db),
 ):
@@ -835,6 +833,28 @@ async def resend_login_otp(
     )
 
     return await _issue_login_otp(user, db, is_resend=True, is_registration=True)
+
+
+@router.post(
+    "/login/otp/resend",
+    response_model=LoginChallengeResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def resend_login_otp(
+    request: LoginOtpResendRequest,
+    db: Session = Depends(get_db),
+):
+    """Reissue a login OTP for an active verification challenge."""
+
+    email = request.email.strip().lower()
+    user = _validate_pending_login(
+        user=_load_user_by_email(email, db),
+        challenge_token=request.challenge_token.strip(),
+        db=db,
+        allow_expired=True,
+    )
+
+    return await _issue_login_otp(user, db, is_resend=True, is_registration=False)
 
 
 @router.post(
