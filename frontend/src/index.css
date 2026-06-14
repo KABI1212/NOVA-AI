@@ -2396,6 +2396,10 @@ pre {
   gap: 12px;
 }
 
+.settings-control-row {
+  position: relative;
+}
+
 .settings-copy {
   min-width: 0;
 }
@@ -2451,6 +2455,59 @@ pre {
   border-color: rgba(126, 200, 248, 0.24);
   background: rgba(30, 107, 184, 0.12);
   color: var(--atext);
+}
+
+.settings-switch-input {
+  position: absolute;
+  right: 0;
+  width: 46px !important;
+  height: 26px;
+  margin: 0 !important;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.settings-switch {
+  position: relative;
+  width: 46px;
+  height: 26px;
+  border-radius: 999px;
+  border: 0.5px solid var(--border2);
+  background: #3a3a37;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
+.settings-switch-input:focus-visible + .settings-switch {
+  outline: 2px solid rgba(126, 200, 248, 0.72);
+  outline-offset: 3px;
+}
+
+.settings-switch-input:hover + .settings-switch {
+  border-color: rgba(126, 200, 248, 0.32);
+}
+
+.settings-switch.on {
+  background: var(--accent);
+  border-color: var(--accent2);
+}
+
+.settings-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.28);
+  transition: transform 0.15s ease;
+}
+
+.settings-switch.on .settings-switch-thumb {
+  transform: translateX(20px);
 }
 
 .settings-action-grid {

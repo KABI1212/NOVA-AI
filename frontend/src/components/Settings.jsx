@@ -22,7 +22,7 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
   const ttsVoice = useVoiceStore((state) => state.ttsVoice);
   const setTtsVoice = useVoiceStore((state) => state.setTtsVoice);
   const manualPlayback = useVoiceStore((state) => state.manualPlayback);
-  const toggleManualPlayback = useVoiceStore((state) => state.toggleManualPlayback);
+  const setManualPlayback = useVoiceStore((state) => state.setManualPlayback);
 
   const [formData, setFormData] = useState({
     full_name: user?.full_name || "",
@@ -36,6 +36,23 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+
+  const effectiveBrowserVoiceOptions =
+    browserVoice === BROWSER_VOICE_AUTO ||
+    browserVoiceOptions.some((option) => option.id === browserVoice)
+      ? browserVoiceOptions
+      : [
+          ...browserVoiceOptions,
+          {
+            id: browserVoice,
+            label: `${browserVoice} (saved voice)`,
+          },
+        ];
+  const selectedBrowserVoiceLabel =
+    effectiveBrowserVoiceOptions.find((option) => option.id === browserVoice)?.label ||
+    "Auto (device default)";
+  const selectedTtsVoiceLabel =
+    TTS_VOICE_OPTIONS.find((option) => option.id === ttsVoice)?.label || "Nova";
 
   useEffect(() => {
     if (!open) {
@@ -124,9 +141,11 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
       const response = await authAPI.deleteMe();
       setDeleteConfirmation("");
       toast.success(response?.data?.message || "Account deleted successfully.");
-      onClose?.();
-      logout();
-      navigate("/signup", { replace: true });
+      setTimeout(() => {
+        onClose?.();
+        logout();
+        navigate("/signup", { replace: true });
+      }, 250);
     } catch (error) {
       toast.error(
         error?.response?.data?.detail || "Could not delete your account right now."
@@ -176,7 +195,13 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
             <h3>Settings</h3>
             <p>Manage your account and personalize the current NOVA AI workspace.</p>
           </div>
-          <button className="tb-ghost settings-close" type="button" onClick={onClose} aria-label="Close settings">
+          <button
+            className="tb-ghost settings-close"
+            type="button"
+            onClick={onClose}
+            aria-label="Close settings"
+            title="Close settings"
+          >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
@@ -199,12 +224,15 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
               </label>
               <input
                 id="settings-full-name"
+                name="full_name"
                 type="text"
                 value={formData.full_name}
                 onChange={(event) =>
                   setFormData((current) => ({ ...current, full_name: event.target.value }))
                 }
                 placeholder="Full name"
+                autoComplete="name"
+                maxLength={80}
                 disabled={isSaving}
               />
 
@@ -213,12 +241,19 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
               </label>
               <input
                 id="settings-username"
+                name="username"
                 type="text"
                 value={formData.username}
                 onChange={(event) =>
                   setFormData((current) => ({ ...current, username: event.target.value }))
                 }
                 placeholder="Username"
+                autoComplete="username"
+                minLength={3}
+                maxLength={32}
+                pattern="[A-Za-z0-9._-]+"
+                title="Use 3 to 32 letters, numbers, dots, underscores, or hyphens."
+                required
                 disabled={isSaving}
               />
 
@@ -227,12 +262,16 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
               </label>
               <input
                 id="settings-email"
+                name="email"
                 type="email"
                 value={formData.email}
                 onChange={(event) =>
                   setFormData((current) => ({ ...current, email: event.target.value }))
                 }
                 placeholder="Email"
+                autoComplete="email"
+                maxLength={254}
+                required
                 disabled={isSaving}
               />
 
@@ -248,7 +287,13 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
                 <strong>Sign out</strong>
                 <span>End this session and return to the login screen.</span>
               </div>
-              <button className="settings-chip" type="button" onClick={handleLogout}>
+              <button
+                className="settings-chip"
+                type="button"
+                onClick={handleLogout}
+                aria-label="Log out of NOVA AI"
+                title="Log out"
+              >
                 Log out
               </button>
             </div>
@@ -267,7 +312,13 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
                 <strong>{isDark ? "Dark mode" : "Light mode"}</strong>
                 <span>Theme preference is saved locally in your browser.</span>
               </div>
-              <button className="settings-chip" type="button" onClick={toggleTheme}>
+              <button
+                className="settings-chip"
+                type="button"
+                onClick={toggleTheme}
+                aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+                title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+              >
                 {isDark ? "Switch to light" : "Switch to dark"}
               </button>
             </div>
@@ -291,32 +342,43 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
               </span>
             </div>
 
-            <div className="settings-row">
-              <div className="settings-copy">
+            <div className="settings-row settings-control-row">
+              <label className="settings-copy" htmlFor="settings-manual-playback">
                 <strong>Manual playback only</strong>
                 <span>
                   {manualPlayback
                     ? "NOVA speaks only when you press a speak button."
                     : "NOVA can start playback automatically when a flow supports it."}
                 </span>
-              </div>
-              <button className="settings-chip" type="button" onClick={toggleManualPlayback}>
-                {manualPlayback ? "Enabled" : "Disabled"}
-              </button>
+              </label>
+              <input
+                id="settings-manual-playback"
+                className="settings-switch-input"
+                name="manual_playback"
+                type="checkbox"
+                checked={manualPlayback}
+                onChange={(event) => setManualPlayback(event.target.checked)}
+              />
+              <span className={`settings-switch${manualPlayback ? " on" : ""}`} aria-hidden="true">
+                <span className="settings-switch-thumb" />
+              </span>
             </div>
 
             <div className="settings-row">
-              <div className="settings-copy">
+              <label className="settings-copy" htmlFor="settings-browser-voice">
                 <strong>Browser speak voice</strong>
-                <span>Used by speak icons that read answers with your device voice.</span>
-              </div>
+                <span>Selected: {selectedBrowserVoiceLabel}</span>
+              </label>
               <select
+                id="settings-browser-voice"
+                name="browser_voice"
                 className="input-field max-w-[260px]"
                 value={browserVoice}
                 onChange={(event) => setBrowserVoice(event.target.value)}
                 disabled={!speechSupported}
+                title="Browser speak voice"
               >
-                {browserVoiceOptions.map((option) => (
+                {effectiveBrowserVoiceOptions.map((option) => (
                   <option key={option.id} value={option.id}>
                     {option.label}
                   </option>
@@ -325,14 +387,17 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
             </div>
 
             <div className="settings-row">
-              <div className="settings-copy">
+              <label className="settings-copy" htmlFor="settings-ai-voice">
                 <strong>AI voice</strong>
-                <span>Used by the server-backed read-aloud buttons in assistant replies.</span>
-              </div>
+                <span>Selected: {selectedTtsVoiceLabel}</span>
+              </label>
               <select
+                id="settings-ai-voice"
+                name="tts_voice"
                 className="input-field max-w-[260px]"
                 value={ttsVoice}
                 onChange={(event) => setTtsVoice(event.target.value)}
+                title="AI voice"
               >
                 {TTS_VOICE_OPTIONS.map((option) => (
                   <option key={option.id} value={option.id}>
@@ -343,7 +408,13 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
             </div>
 
             <div className="settings-action-grid">
-              <button className="settings-action-btn" type="button" onClick={handleStartNewChat}>
+              <button
+                className="settings-action-btn"
+                type="button"
+                onClick={handleStartNewChat}
+                aria-label="Start a new chat"
+                title="Start a new chat"
+              >
                 New chat
               </button>
               <button
@@ -351,10 +422,18 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
                 type="button"
                 onClick={handleExportCurrentChat}
                 disabled={!canExportChat}
+                aria-label="Export current chat"
+                title="Export current chat"
               >
                 Export chat
               </button>
-              <button className="settings-action-btn" type="button" onClick={handleOpenShares}>
+              <button
+                className="settings-action-btn"
+                type="button"
+                onClick={handleOpenShares}
+                aria-label="Open shared chats"
+                title="Open shared chats"
+              >
                 Shared chats
               </button>
             </div>
@@ -373,10 +452,14 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
             </label>
             <input
               id="settings-delete-confirmation"
+              name="delete_confirmation"
               type="text"
               value={deleteConfirmation}
               onChange={(event) => setDeleteConfirmation(event.target.value)}
               placeholder='Type "DELETE"'
+              autoComplete="off"
+              pattern="DELETE"
+              title='Type "DELETE" to confirm account removal.'
               disabled={isDeleting}
             />
 

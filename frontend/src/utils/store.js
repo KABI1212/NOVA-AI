@@ -145,6 +145,11 @@ export const useVoiceStore = create((set) => ({
     setStoredValue(TTS_VOICE_STORAGE_KEY, ttsVoice || DEFAULT_TTS_VOICE);
     set({ ttsVoice: ttsVoice || DEFAULT_TTS_VOICE });
   },
+  setManualPlayback: (manualPlayback) => {
+    const nextManualPlayback = Boolean(manualPlayback);
+    setStoredValue(MANUAL_PLAYBACK_STORAGE_KEY, String(nextManualPlayback));
+    set({ manualPlayback: nextManualPlayback });
+  },
   toggleManualPlayback: () =>
     set((state) => {
       const manualPlayback = !state.manualPlayback;
