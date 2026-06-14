@@ -76,11 +76,13 @@ export const useThemeStore = create((set) => ({
 
 const BROWSER_VOICE_STORAGE_KEY = 'nova_browser_voice';
 const TTS_VOICE_STORAGE_KEY = 'nova_tts_voice';
+const MANUAL_PLAYBACK_STORAGE_KEY = 'nova_manual_playback';
 
 // Voice Store
 export const useVoiceStore = create((set) => ({
   browserVoice: localStorage.getItem(BROWSER_VOICE_STORAGE_KEY) || BROWSER_VOICE_AUTO,
   ttsVoice: localStorage.getItem(TTS_VOICE_STORAGE_KEY) || DEFAULT_TTS_VOICE,
+  manualPlayback: localStorage.getItem(MANUAL_PLAYBACK_STORAGE_KEY) !== 'false',
   setBrowserVoice: (browserVoice) => {
     localStorage.setItem(BROWSER_VOICE_STORAGE_KEY, browserVoice || BROWSER_VOICE_AUTO);
     set({ browserVoice: browserVoice || BROWSER_VOICE_AUTO });
@@ -89,4 +91,10 @@ export const useVoiceStore = create((set) => ({
     localStorage.setItem(TTS_VOICE_STORAGE_KEY, ttsVoice || DEFAULT_TTS_VOICE);
     set({ ttsVoice: ttsVoice || DEFAULT_TTS_VOICE });
   },
+  toggleManualPlayback: () =>
+    set((state) => {
+      const manualPlayback = !state.manualPlayback;
+      localStorage.setItem(MANUAL_PLAYBACK_STORAGE_KEY, String(manualPlayback));
+      return { manualPlayback };
+    }),
 }));

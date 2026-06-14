@@ -165,6 +165,7 @@ function ChatWindow({
   messages,
   isTyping,
   status,
+  username = "there",
   regeneratableMessageId = null,
   onRegenerate,
   onRewriteQuestion,
@@ -203,7 +204,7 @@ function ChatWindow({
           <NovaLogo size={38} showText={false} className="hero-logo" />
         </div>
         <div className="hero-title">
-          Hello, Kabilesh
+          Hello, {username}
         </div>
         <div className="hero-sub">How can I help you today?</div>
         <div className="sts">{status}</div>

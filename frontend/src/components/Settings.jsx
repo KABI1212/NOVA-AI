@@ -21,6 +21,8 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
   const setBrowserVoice = useVoiceStore((state) => state.setBrowserVoice);
   const ttsVoice = useVoiceStore((state) => state.ttsVoice);
   const setTtsVoice = useVoiceStore((state) => state.setTtsVoice);
+  const manualPlayback = useVoiceStore((state) => state.manualPlayback);
+  const toggleManualPlayback = useVoiceStore((state) => state.toggleManualPlayback);
 
   const [formData, setFormData] = useState({
     full_name: user?.full_name || "",
@@ -95,6 +97,11 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
       const nextUser = response?.data?.user;
       if (nextUser) {
         setUser(nextUser);
+        setFormData({
+          full_name: nextUser.full_name || "",
+          username: nextUser.username || "",
+          email: nextUser.email || "",
+        });
       }
       toast.success(response?.data?.message || "Account updated successfully.");
     } catch (error) {
@@ -115,9 +122,11 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
     setIsDeleting(true);
     try {
       const response = await authAPI.deleteMe();
+      setDeleteConfirmation("");
+      toast.success(response?.data?.message || "Account deleted successfully.");
+      onClose?.();
       logout();
       navigate("/signup", { replace: true });
-      toast.success(response?.data?.message || "Account deleted successfully.");
     } catch (error) {
       toast.error(
         error?.response?.data?.detail || "Could not delete your account right now."
@@ -233,6 +242,16 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
                 </button>
               </div>
             </form>
+
+            <div className="settings-row settings-account-action">
+              <div className="settings-copy">
+                <strong>Sign out</strong>
+                <span>End this session and return to the login screen.</span>
+              </div>
+              <button className="settings-chip" type="button" onClick={handleLogout}>
+                Log out
+              </button>
+            </div>
           </section>
 
           <section className="settings-section">
@@ -275,9 +294,15 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
             <div className="settings-row">
               <div className="settings-copy">
                 <strong>Manual playback only</strong>
-                <span>NOVA will now speak only when you press a speak button.</span>
+                <span>
+                  {manualPlayback
+                    ? "NOVA speaks only when you press a speak button."
+                    : "NOVA can start playback automatically when a flow supports it."}
+                </span>
               </div>
-              <span className="settings-badge ok">Enabled</span>
+              <button className="settings-chip" type="button" onClick={toggleManualPlayback}>
+                {manualPlayback ? "Enabled" : "Disabled"}
+              </button>
             </div>
 
             <div className="settings-row">
@@ -331,9 +356,6 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
               </button>
               <button className="settings-action-btn" type="button" onClick={handleOpenShares}>
                 Shared chats
-              </button>
-              <button className="settings-action-btn" type="button" onClick={handleLogout}>
-                Log out
               </button>
             </div>
           </section>

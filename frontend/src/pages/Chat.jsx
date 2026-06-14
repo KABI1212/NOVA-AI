@@ -523,6 +523,7 @@ function Chat() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const logout = useAuthStore((state) => state.logout);
+  const user = useAuthStore((state) => state.user);
   const requestedNav = searchParams.get("nav");
   const requestedPresetId = searchParams.get("preset");
   const initialActiveNav = normalizeChatNav(requestedNav);
@@ -2094,6 +2095,7 @@ function Chat() {
             activeNav={activeNav}
             isTyping={isTyping}
             status={status}
+            username={user?.username || user?.full_name || "there"}
             regeneratableMessageId={regeneratableMessageId}
             onRegenerate={handleRegenerate}
             onRewriteQuestion={handleRewriteQuestion}
