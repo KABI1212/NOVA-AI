@@ -170,6 +170,22 @@ def test_signup_request_rejects_invalid_credentials(username: str, password: str
         )
 
 
+@pytest.mark.parametrize("username", ["ab", "bad username", "x" * 33])
+def test_update_account_request_rejects_invalid_username(username: str) -> None:
+    with pytest.raises(ValueError):
+        auth_module.UpdateAccountRequest(username=username)
+
+
+def test_reset_password_request_rejects_short_password() -> None:
+    with pytest.raises(ValueError):
+        auth_module.ResetPasswordRequest(
+            email="otp.user@example.com",
+            otp="123456",
+            challenge_token="challenge",
+            new_password="short",
+        )
+
+
 def test_signup_can_include_debug_otp_when_explicitly_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

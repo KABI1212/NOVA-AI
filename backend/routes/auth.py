@@ -131,6 +131,13 @@ class ResetPasswordRequest(BaseModel):
     challenge_token: str
     new_password: str
 
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, value: str) -> str:
+        if len(value or "") < 8:
+            raise ValueError("Password must be at least 8 characters.")
+        return value
+
 
 class TokenResponse(BaseModel):
     requires_otp: Literal[False] = False
@@ -170,6 +177,27 @@ class UpdateAccountRequest(BaseModel):
     email: EmailStr | None = None
     username: str | None = None
     full_name: str | None = None
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        username = value.strip()
+        if len(username) < 3:
+            raise ValueError("Username must be at least 3 characters.")
+        if len(username) > 32:
+            raise ValueError("Username must be 32 characters or fewer.")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", username):
+            raise ValueError("Username can only contain letters, numbers, dots, underscores, and hyphens.")
+        return username
+
+    @field_validator("full_name")
+    @classmethod
+    def normalize_full_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return value.strip()
 
 
 class EmailTestResponse(BaseModel):

@@ -1,3 +1,5 @@
+import pytest
+
 from config.settings import Settings
 
 
@@ -34,3 +36,8 @@ def test_openrouter_referer_falls_back_to_first_non_local_cors_origin() -> None:
     )
 
     assert settings.openrouter_referer == "https://nova-ai.vercel.app"
+
+
+def test_production_requires_non_default_secret_key() -> None:
+    with pytest.raises(ValueError, match="SECRET_KEY"):
+        Settings(DEBUG=False, SECRET_KEY="change-me-in-production")

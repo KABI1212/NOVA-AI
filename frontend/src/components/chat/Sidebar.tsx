@@ -274,6 +274,11 @@ export default function Sidebar({
       const nextUser = response?.data?.user;
       if (nextUser) {
         setUser(nextUser);
+        setFormData({
+          full_name: String(nextUser.full_name || ""),
+          username: String(nextUser.username || ""),
+          email: String(nextUser.email || ""),
+        });
       }
       setIsEditOpen(false);
       toast.success(response?.data?.message || "Account updated successfully.");
@@ -293,9 +298,11 @@ export default function Sidebar({
     setIsDeleting(true);
     try {
       const response = await authAPI.deleteMe();
+      setDeleteConfirmation("");
+      setIsDeleteOpen(false);
+      toast.success(response?.data?.message || "Account deleted successfully.");
       logout();
       navigate("/signup", { replace: true });
-      toast.success(response?.data?.message || "Account deleted successfully.");
     } catch (error: any) {
       toast.error(formatApiError(error, "Could not delete your account right now."));
     } finally {

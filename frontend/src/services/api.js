@@ -217,6 +217,8 @@ const api = axios.create({
 const PUBLIC_AUTH_401_PATHS = [
   '/auth/login',
   '/auth/signup',
+  '/auth/signup/otp/verify',
+  '/auth/signup/otp/resend',
   '/auth/login/otp/verify',
   '/auth/login/otp/resend',
   '/auth/password/forgot',
@@ -249,7 +251,7 @@ api.interceptors.request.use(async (config) => {
     }
   }
 
-  const token = localStorage.getItem('token');
+  const token = hasWindow() ? localStorage.getItem('token') : null;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -259,7 +261,7 @@ api.interceptors.request.use(async (config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    const token = localStorage.getItem('token');
+    const token = hasWindow() ? localStorage.getItem('token') : null;
     const requestUrl = String(error?.config?.url || '').trim();
     if (
       error.response?.status === 401 &&
@@ -268,7 +270,9 @@ api.interceptors.response.use(
     ) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
-      window.location.href = '/login';
+      if (hasWindow()) {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }

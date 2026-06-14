@@ -188,6 +188,9 @@ class Settings(BaseSettings):
             if "OPENAI_EXPLAIN_MODEL" not in explicitly_set:
                 self.OPENAI_EXPLAIN_MODEL = legacy_openai_model
 
+        if not self.DEBUG and self.SECRET_KEY == "change-me-in-production":
+            raise ValueError("SECRET_KEY must be configured when DEBUG is disabled.")
+
         return self
 
     @staticmethod

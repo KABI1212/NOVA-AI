@@ -141,7 +141,7 @@ function Login() {
     setAuthError('');
 
     try {
-      const response = await authAPI.verifySignupOtp({
+      const response = await authAPI.verifyLoginOtp({
         email: challenge.email,
         otp,
         challenge_token: challenge.challenge_token,
@@ -168,7 +168,7 @@ function Login() {
     setAuthError('');
 
     try {
-      const response = await authAPI.resendSignupOtp({
+      const response = await authAPI.resendLoginOtp({
         email: challenge.email,
         challenge_token: challenge.challenge_token,
       });

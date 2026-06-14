@@ -325,7 +325,47 @@ const getStoredModelKey = () => {
     return AUTO_MODEL_KEY;
   }
 
-  return window.localStorage.getItem(MODEL_STORAGE_KEY)?.trim() || AUTO_MODEL_KEY;
+  try {
+    return window.localStorage.getItem(MODEL_STORAGE_KEY)?.trim() || AUTO_MODEL_KEY;
+  } catch {
+    return AUTO_MODEL_KEY;
+  }
+};
+
+const getStoredToken = () => {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  try {
+    return window.localStorage.getItem("token") || "";
+  } catch {
+    return "";
+  }
+};
+
+const setStoredValue = (key, value) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Storage can be blocked in private browsing; keep the in-memory flow working.
+  }
+};
+
+const removeStoredValue = (key) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Ignore storage cleanup failures.
+  }
 };
 
 const looksLikeImageRequest = (value) => {
@@ -352,7 +392,12 @@ const getOrCreateSessionId = () => {
     return "anonymous";
   }
 
-  const existing = window.localStorage.getItem(SESSION_STORAGE_KEY)?.trim();
+  let existing = "";
+  try {
+    existing = window.localStorage.getItem(SESSION_STORAGE_KEY)?.trim() || "";
+  } catch {
+    existing = "";
+  }
   if (existing) {
     return existing;
   }
@@ -361,7 +406,7 @@ const getOrCreateSessionId = () => {
     typeof crypto !== "undefined" && crypto.randomUUID
       ? crypto.randomUUID()
       : `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+  setStoredValue(SESSION_STORAGE_KEY, sessionId);
   return sessionId;
 };
 
@@ -369,7 +414,7 @@ const resetSessionId = () => {
   if (typeof window === "undefined") {
     return "anonymous";
   }
-  window.localStorage.removeItem(SESSION_STORAGE_KEY);
+  removeStoredValue(SESSION_STORAGE_KEY);
   return getOrCreateSessionId();
 };
 
@@ -641,7 +686,7 @@ function Chat() {
       return;
     }
 
-    window.localStorage.setItem(MODEL_STORAGE_KEY, selectedModelKey);
+    setStoredValue(MODEL_STORAGE_KEY, selectedModelKey);
   }, [selectedModelKey]);
 
   useEffect(() => {
@@ -649,8 +694,8 @@ function Chat() {
       return;
     }
 
-    window.localStorage.removeItem(PROMPT_IMAGE_STORAGE_KEY);
-    window.localStorage.removeItem(ANSWER_IMAGE_STORAGE_KEY);
+    removeStoredValue(PROMPT_IMAGE_STORAGE_KEY);
+    removeStoredValue(ANSWER_IMAGE_STORAGE_KEY);
   }, []);
 
   useEffect(() => {
@@ -1536,7 +1581,7 @@ function Chat() {
 
         controller = new AbortController();
         timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-        const token = localStorage.getItem("token");
+        const token = getStoredToken();
         const assistantMessageId =
           typeof crypto !== "undefined" && crypto.randomUUID
             ? crypto.randomUUID()

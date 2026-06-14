@@ -2,22 +2,74 @@ import { create } from 'zustand';
 
 import { BROWSER_VOICE_AUTO, DEFAULT_TTS_VOICE } from './voices';
 
+const hasLocalStorage = () => typeof window !== 'undefined' && Boolean(window.localStorage);
+
+const getStoredValue = (key, fallback = null) => {
+  if (!hasLocalStorage()) {
+    return fallback;
+  }
+
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const setStoredValue = (key, value) => {
+  if (!hasLocalStorage()) {
+    return;
+  }
+
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Ignore quota or privacy-mode storage failures; in-memory state still updates.
+  }
+};
+
+const removeStoredValue = (key) => {
+  if (!hasLocalStorage()) {
+    return;
+  }
+
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Ignore storage failures during logout cleanup.
+  }
+};
+
+const parseStoredUser = () => {
+  const rawUser = getStoredValue('user');
+  if (!rawUser) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(rawUser);
+  } catch {
+    removeStoredValue('user');
+    return null;
+  }
+};
+
 // Auth Store
 export const useAuthStore = create((set) => ({
-  user: JSON.parse(localStorage.getItem('user')) || null,
-  token: localStorage.getItem('token') || null,
+  user: parseStoredUser(),
+  token: getStoredValue('token'),
   setAuth: (user, token) => {
-    localStorage.setItem('user', JSON.stringify(user));
-    localStorage.setItem('token', token);
+    setStoredValue('user', JSON.stringify(user));
+    setStoredValue('token', token);
     set({ user, token });
   },
   logout: () => {
-    localStorage.removeItem('user');
-    localStorage.removeItem('token');
+    removeStoredValue('user');
+    removeStoredValue('token');
     set({ user: null, token: null });
   },
   setUser: (user) => {
-    localStorage.setItem('user', JSON.stringify(user));
+    setStoredValue('user', JSON.stringify(user));
     set((state) => ({ ...state, user }));
   },
 }));
@@ -61,14 +113,16 @@ export const useDocumentStore = create((set) => ({
 
 // Theme Store
 export const useThemeStore = create((set) => ({
-  isDark: localStorage.getItem('theme') === 'dark',
+  isDark: getStoredValue('theme') === 'dark',
   toggleTheme: () => set((state) => {
     const newTheme = !state.isDark;
-    localStorage.setItem('theme', newTheme ? 'dark' : 'light');
-    if (newTheme) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
+    setStoredValue('theme', newTheme ? 'dark' : 'light');
+    if (typeof document !== 'undefined') {
+      if (newTheme) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
     }
     return { isDark: newTheme };
   }),
@@ -80,21 +134,21 @@ const MANUAL_PLAYBACK_STORAGE_KEY = 'nova_manual_playback';
 
 // Voice Store
 export const useVoiceStore = create((set) => ({
-  browserVoice: localStorage.getItem(BROWSER_VOICE_STORAGE_KEY) || BROWSER_VOICE_AUTO,
-  ttsVoice: localStorage.getItem(TTS_VOICE_STORAGE_KEY) || DEFAULT_TTS_VOICE,
-  manualPlayback: localStorage.getItem(MANUAL_PLAYBACK_STORAGE_KEY) !== 'false',
+  browserVoice: getStoredValue(BROWSER_VOICE_STORAGE_KEY, BROWSER_VOICE_AUTO) || BROWSER_VOICE_AUTO,
+  ttsVoice: getStoredValue(TTS_VOICE_STORAGE_KEY, DEFAULT_TTS_VOICE) || DEFAULT_TTS_VOICE,
+  manualPlayback: getStoredValue(MANUAL_PLAYBACK_STORAGE_KEY, 'true') !== 'false',
   setBrowserVoice: (browserVoice) => {
-    localStorage.setItem(BROWSER_VOICE_STORAGE_KEY, browserVoice || BROWSER_VOICE_AUTO);
+    setStoredValue(BROWSER_VOICE_STORAGE_KEY, browserVoice || BROWSER_VOICE_AUTO);
     set({ browserVoice: browserVoice || BROWSER_VOICE_AUTO });
   },
   setTtsVoice: (ttsVoice) => {
-    localStorage.setItem(TTS_VOICE_STORAGE_KEY, ttsVoice || DEFAULT_TTS_VOICE);
+    setStoredValue(TTS_VOICE_STORAGE_KEY, ttsVoice || DEFAULT_TTS_VOICE);
     set({ ttsVoice: ttsVoice || DEFAULT_TTS_VOICE });
   },
   toggleManualPlayback: () =>
     set((state) => {
       const manualPlayback = !state.manualPlayback;
-      localStorage.setItem(MANUAL_PLAYBACK_STORAGE_KEY, String(manualPlayback));
+      setStoredValue(MANUAL_PLAYBACK_STORAGE_KEY, String(manualPlayback));
       return { manualPlayback };
     }),
 }));
