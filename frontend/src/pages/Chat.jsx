@@ -1206,10 +1206,14 @@ function Chat() {
             setStatus("");
           });
         }
+        toast.success("Post deleted successfully"); // FIX: post deletion toast sequencing
       } catch (error) {
         if (error?.response?.status === 401 || error?.response?.status === 403) {
           handleUnauthorized();
+          toast.error("Failed to delete post"); // FIX: post deletion toast sequencing
+          return;
         }
+        toast.error("Failed to delete post"); // FIX: post deletion toast sequencing
       }
     },
     [currentConversationId, handleUnauthorized, stopSpeaking]

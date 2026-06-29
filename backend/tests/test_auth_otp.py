@@ -652,7 +652,7 @@ def test_verify_login_otp_rejects_invalid_code(
     asyncio.run(scenario())
 
 
-def test_verify_login_otp_rejects_expired_code_without_clearing_pending_state(
+def test_verify_login_otp_rejects_expired_code_and_clears_pending_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user = _make_user()
@@ -672,11 +672,11 @@ def test_verify_login_otp_rejects_expired_code_without_clearing_pending_state(
                 db=db,
             )
 
-        assert exc_info.value.status_code == 401
-        assert exc_info.value.detail == auth_module.OTP_EXPIRED_MESSAGE
-        assert user.login_otp_code_hash is not None
-        assert user.login_otp_challenge_hash is not None
-        assert user.login_otp_expires_at is not None
+        assert exc_info.value.status_code == 400  # FIX: OTP logic issue
+        assert exc_info.value.detail == "OTP expired. Please request a new one."
+        assert user.login_otp_code_hash is None
+        assert user.login_otp_challenge_hash is None
+        assert user.login_otp_expires_at is None
 
     asyncio.run(scenario())
 

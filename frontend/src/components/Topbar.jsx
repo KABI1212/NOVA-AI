@@ -1,10 +1,34 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
+
+function decodeTokenUserLabel() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  try {
+    const token = window.localStorage.getItem("token") || "";
+    const payload = token.split(".")[1] || "";
+    const normalizedPayload = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const paddedPayload = normalizedPayload.padEnd(Math.ceil(normalizedPayload.length / 4) * 4, "=");
+    const decoded = payload ? JSON.parse(window.atob(paddedPayload)) : {};
+    const storedUser = JSON.parse(window.localStorage.getItem("user") || "{}");
+    return String(decoded.username || decoded.email || storedUser.username || storedUser.email || "").trim();
+  } catch {
+    return "";
+  }
+}
 
 function Topbar({
   onToggleSidebar,
   onProfileClick,
   profileActive = false,
 }) {
+  const [userLabel, setUserLabel] = useState("");
+
+  useEffect(() => {
+    setUserLabel(decodeTokenUserLabel()); // FIX: hardcoded username display
+  }, []);
+
   return (
     <div className="topbar minimal">
       <button className="hbtn" type="button" onClick={onToggleSidebar} aria-label="Toggle sidebar">
@@ -22,11 +46,12 @@ function Topbar({
           <span aria-hidden="true">▼</span>
         </button>
         <button
-          className={`tb-ghost${profileActive ? " active" : ""}`}
+          className={`tb-ghost user-profile${profileActive ? " active" : ""}`}
           type="button"
-          aria-label="Profile"
+          aria-label={userLabel ? `Profile: ${userLabel}` : "Profile"}
           onClick={onProfileClick}
         >
+          {userLabel ? <span className="tb-user-label">{userLabel}</span> : null}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="12" cy="7" r="4" />
             <path d="M5.5 21a6.5 6.5 0 0 1 13 0" />

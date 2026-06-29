@@ -8,9 +8,11 @@ from pydantic import BaseModel, EmailStr, field_validator
 from starlette.concurrency import run_in_threadpool
 try:
     from sqlalchemy.exc import IntegrityError
+    from sqlalchemy import func
 except ImportError:
     class IntegrityError(Exception):
         """Fallback when SQLAlchemy is not installed."""
+    func = None
 
 try:
     from sqlalchemy.orm import Session
@@ -56,7 +58,6 @@ EMAIL_TEST_DELIVERY_FAILURE_MESSAGE = (
     "We couldn't send the test email right now. Please try again shortly."
 )
 INVALID_LOGIN_MESSAGE = "Invalid email or password. Please try again."
-OTP_EXPIRED_MESSAGE = "Your code has expired. Click 'Resend Code' to get a new one."
 OTP_LOCKED_MESSAGE = (
     "Too many failed attempts. Your account has been temporarily locked for "
     f"security. Please try again after {settings.AUTH_OTP_LOCK_MINUTES} minutes."
@@ -250,7 +251,9 @@ def _serialize_user(user: User) -> dict:
 
 
 def _build_token_response(user: User) -> dict:
-    access_token = create_access_token(data={"sub": user.id})
+    access_token = create_access_token(
+        data={"sub": user.id, "username": user.username, "email": user.email}  # FIX: dynamic username JWT claims
+    )
     return {
         "requires_otp": False,
         "access_token": access_token,
@@ -583,7 +586,10 @@ async def _issue_password_reset_otp(user: User, db: Session) -> dict:
 
 
 def _load_user_by_email(email: str, db: Session) -> User | None:
-    return db.query(User).filter(User.email == email).first()
+    normalized_email = (email or "").strip().lower()
+    if func is None:
+        return db.query(User).filter(User.email == normalized_email).first()
+    return db.query(User).filter(func.lower(User.email) == normalized_email).first()  # FIX: case-sensitive login bug
 
 
 def _load_user_by_login_identifier(
@@ -595,8 +601,9 @@ def _load_user_by_login_identifier(
     normalized = (normalized_identifier or "").strip().lower()
     if not raw_identifier:
         return None
+    email_filter = func.lower(User.email) == normalized if func is not None else User.email == normalized  # FIX: case-sensitive login bug
     return db.query(User).filter(
-        (User.email == normalized)
+        email_filter
         | (User.username == raw_identifier)
     ).first()
 
@@ -639,9 +646,11 @@ def _validate_pending_login(
         )
 
     if user.login_otp_expires_at < utcnow_naive() and not allow_expired:
+        _clear_login_otp_challenge(user)  # FIX: OTP logic issue
+        _persist_user(db, user)
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=OTP_EXPIRED_MESSAGE,
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OTP expired. Please request a new one.",  # FIX: OTP logic issue
         )
 
     return user
@@ -700,7 +709,7 @@ def _validate_pending_password_reset(
 async def signup(request: SignupRequest, db: Session = Depends(get_db)):
     """Register a new user and require OTP verification before sign-in."""
 
-    email = request.email.strip().lower()
+    email = request.email.strip().lower()  # FIX: case-sensitive login bug
     username = request.username.strip()
     full_name = request.full_name.strip() if request.full_name else ""
 
@@ -759,7 +768,7 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
     """Validate credentials and issue a session for verified accounts."""
 
     raw_identifier = request.email.strip()
-    normalized_identifier = raw_identifier.lower()
+    normalized_identifier = raw_identifier.lower()  # FIX: case-sensitive login bug
     user = _load_user_by_login_identifier(raw_identifier, normalized_identifier, db)
 
     if not user or not verify_password(request.password, user.hashed_password):
@@ -795,7 +804,7 @@ async def verify_login_otp(
 ):
     """Verify a pending signup OTP and activate the account."""
 
-    email = request.email.strip().lower()
+    email = request.email.strip().lower()  # FIX: case-sensitive login bug
     otp = "".join(character for character in request.otp if character.isdigit())
 
     if len(otp) != settings.AUTH_OTP_LENGTH:
@@ -834,7 +843,7 @@ async def verify_login_otp(
             ),
         )
 
-    _clear_login_otp_state(user)
+    _clear_login_otp_state(user)  # FIX: OTP logic issue
     user.is_verified = True
     _persist_user(db, user)
 

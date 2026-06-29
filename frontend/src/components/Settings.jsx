@@ -6,9 +6,17 @@ import { authAPI } from "../services/api";
 import { useAuthStore, useThemeStore, useVoiceStore } from "../utils/store";
 import {
   BROWSER_VOICE_AUTO,
+  DEFAULT_TTS_VOICE,
   getSpeechVoiceOptions,
   TTS_VOICE_OPTIONS,
 } from "../utils/voices";
+
+const SETTINGS_STORAGE_KEYS = {
+  darkMode: "theme",
+  browserVoice: "nova_browser_voice",
+  ttsVoice: "nova_tts_voice",
+  manualPlayback: "nova_manual_playback",
+};
 
 function Settings({ open = false, onClose, onNewChat, onExportChat, canExportChat = false }) {
   const navigate = useNavigate();
@@ -66,6 +74,31 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
     });
     setDeleteConfirmation("");
   }, [open, user]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const storedManualPlayback = window.localStorage.getItem(SETTINGS_STORAGE_KEYS.manualPlayback);
+    const storedBrowserVoice = window.localStorage.getItem(SETTINGS_STORAGE_KEYS.browserVoice);
+    const storedTtsVoice = window.localStorage.getItem(SETTINGS_STORAGE_KEYS.ttsVoice);
+
+    setManualPlayback(storedManualPlayback === null ? true : storedManualPlayback !== "false");
+    setBrowserVoice(storedBrowserVoice || BROWSER_VOICE_AUTO);
+    setTtsVoice(storedTtsVoice || DEFAULT_TTS_VOICE); // FIX: broken settings toggles
+  }, [setBrowserVoice, setManualPlayback, setTtsVoice]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(SETTINGS_STORAGE_KEYS.darkMode, isDark ? "dark" : "light");
+    window.localStorage.setItem(SETTINGS_STORAGE_KEYS.browserVoice, browserVoice || BROWSER_VOICE_AUTO);
+    window.localStorage.setItem(SETTINGS_STORAGE_KEYS.ttsVoice, ttsVoice || DEFAULT_TTS_VOICE);
+    window.localStorage.setItem(SETTINGS_STORAGE_KEYS.manualPlayback, String(Boolean(manualPlayback))); // FIX: broken settings toggles
+  }, [browserVoice, isDark, manualPlayback, ttsVoice]);
 
   useEffect(() => {
     if (!open || typeof window === "undefined") {

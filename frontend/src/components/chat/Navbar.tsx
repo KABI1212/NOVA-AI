@@ -13,6 +13,24 @@ interface NavbarProps {
   onToggleSidebar: () => void;
 }
 
+function decodeTokenUserLabel() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  try {
+    const token = window.localStorage.getItem("token") || "";
+    const payload = token.split(".")[1] || "";
+    const normalizedPayload = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const paddedPayload = normalizedPayload.padEnd(Math.ceil(normalizedPayload.length / 4) * 4, "=");
+    const decoded = payload ? JSON.parse(window.atob(paddedPayload)) : {};
+    const storedUser = JSON.parse(window.localStorage.getItem("user") || "{}");
+    return String(decoded.username || decoded.email || storedUser.username || storedUser.email || "").trim();
+  } catch {
+    return "";
+  }
+}
+
 export default function Navbar({
   model,
   models,
@@ -22,7 +40,12 @@ export default function Navbar({
   onToggleSidebar,
 }: NavbarProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [userLabel, setUserLabel] = useState("");
   const dropdownRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setUserLabel(decodeTokenUserLabel()); // FIX: hardcoded username display
+  }, []);
 
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
@@ -60,6 +83,7 @@ export default function Navbar({
               transition={isTyping ? { duration: 1, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" } : { duration: 0.2 }}
             />
             <span>{isTyping ? "typing..." : "online"}</span>
+            {userLabel ? <span className="truncate">- {userLabel}</span> : null}
           </div>
         </div>
       </div>

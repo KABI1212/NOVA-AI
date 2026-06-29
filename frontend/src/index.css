@@ -2688,6 +2688,12 @@ pre {
   text-transform: uppercase;
 }
 
+.modal label,
+.settings-modal label,
+.ov label:not(.btn-primary) {
+  color: var(--text);
+} /* FIX: CSS label visibility issue */
+
 .acct-form {
   margin-top: 4px;
 }
@@ -4011,6 +4017,22 @@ select,
 .tb-ghost {
   width: 28px;
   height: 28px;
+}
+
+.tb-ghost.user-profile {
+  width: auto;
+  max-width: 190px;
+  padding: 0 9px;
+  gap: 6px;
+}
+
+.tb-user-label {
+  max-width: 132px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .model-inline {

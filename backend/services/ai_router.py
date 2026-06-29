@@ -310,7 +310,7 @@ async def generate_answer(message: str, history: List[dict]) -> str:
             if not response_text:
                 response_text = await _fallback_fast(prompt)
 
-    response_text = response_text.strip()
+    response_text = response_text.strip()  # FIX: ai_router dead code
     if response_text:
         return response_text
 

@@ -207,7 +207,8 @@ export default function ImageGenerator() {
 
           <div>
             <div className="mb-2 flex items-center justify-between">
-              <label className="text-sm text-gray-400">Prompt</label>
+              {/* FIX: CSS label visibility issue */}
+              <label className="text-sm text-gray-200">Prompt</label>
               <button
                 onClick={optimizePrompt}
                 disabled={!prompt.trim() || optimizing || loading}
@@ -236,7 +237,7 @@ export default function ImageGenerator() {
           </div>
 
           <div>
-            <label className="mb-2 block text-sm text-gray-400">Prompt Target</label>
+            <label className="mb-2 block text-sm text-gray-200">Prompt Target</label>
             <div className="grid grid-cols-2 gap-2">
               {PROMPT_TARGETS.map((option) => (
                 <button
@@ -256,7 +257,7 @@ export default function ImageGenerator() {
           </div>
 
           <div>
-            <label className="mb-2 block text-sm text-gray-400">Generate With</label>
+            <label className="mb-2 block text-sm text-gray-200">Generate With</label>
             <div className="grid gap-2">
               {providerOptions.map((option) => (
                 <button
@@ -300,7 +301,7 @@ export default function ImageGenerator() {
           </div>
 
           <div>
-            <label className="mb-2 block text-sm text-gray-400">Examples</label>
+            <label className="mb-2 block text-sm text-gray-200">Examples</label>
             <div className="flex flex-col gap-1.5">
               {EXAMPLE_PROMPTS.map((item) => (
                 <button
@@ -315,7 +316,7 @@ export default function ImageGenerator() {
           </div>
 
           <div>
-            <label className="mb-2 block text-sm text-gray-400">Size</label>
+            <label className="mb-2 block text-sm text-gray-200">Size</label>
             <div className="grid grid-cols-3 gap-2">
               {SIZES.map((option) => (
                 <button
@@ -335,7 +336,7 @@ export default function ImageGenerator() {
           </div>
 
           <div>
-            <label className="mb-2 block text-sm text-gray-400">Style</label>
+            <label className="mb-2 block text-sm text-gray-200">Style</label>
             <div className="grid grid-cols-2 gap-2">
               {STYLES.map((option) => (
                 <button
@@ -355,7 +356,7 @@ export default function ImageGenerator() {
           </div>
 
           <div>
-            <label className="mb-2 block text-sm text-gray-400">Quality</label>
+            <label className="mb-2 block text-sm text-gray-200">Quality</label>
             <div className="grid grid-cols-2 gap-2">
               {QUALITIES.map((option) => (
                 <button
