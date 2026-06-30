@@ -1,33 +1,17 @@
 import React, { useEffect, useState } from "react";
-
-function decodeTokenUserLabel() {
-  if (typeof window === "undefined") {
-    return "";
-  }
-
-  try {
-    const token = window.localStorage.getItem("token") || "";
-    const payload = token.split(".")[1] || "";
-    const normalizedPayload = payload.replace(/-/g, "+").replace(/_/g, "/");
-    const paddedPayload = normalizedPayload.padEnd(Math.ceil(normalizedPayload.length / 4) * 4, "=");
-    const decoded = payload ? JSON.parse(window.atob(paddedPayload)) : {};
-    const storedUser = JSON.parse(window.localStorage.getItem("user") || "{}");
-    return String(decoded.username || decoded.email || storedUser.username || storedUser.email || "").trim();
-  } catch {
-    return "";
-  }
-}
+import { useAuthStore } from "../utils/store";
 
 function Topbar({
   onToggleSidebar,
   onProfileClick,
   profileActive = false,
 }) {
+  const user = useAuthStore((state) => state.user);
   const [userLabel, setUserLabel] = useState("");
 
   useEffect(() => {
-    setUserLabel(decodeTokenUserLabel()); // FIX: hardcoded username display
-  }, []);
+    setUserLabel(String(user?.username || user?.email || "").trim());
+  }, [user]);
 
   return (
     <div className="topbar minimal">

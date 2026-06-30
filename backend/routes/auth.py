@@ -221,6 +221,30 @@ class LogoutRequest(BaseModel):
     all_devices: bool = False
 
 
+class AuthSessionSummary(BaseModel):
+    id: int
+    user_id: int
+    user_agent: str
+    ip_address: str
+    created_at: datetime
+    updated_at: datetime
+    last_used_at: datetime | None
+    expires_at: datetime | None
+    revoked_at: datetime | None
+    revoked_reason: str
+    rotated_from_session_id: int | None
+    status: Literal["active", "expired", "revoked"]
+    is_current: bool = False
+
+
+class AuthSessionListResponse(BaseModel):
+    sessions: list[AuthSessionSummary]
+
+
+class RevokeSessionResponse(BaseModel):
+    message: str
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -398,6 +422,127 @@ def _validate_refresh_session(
     if not verify_secret_value(csrf_header, auth_session.csrf_token_hash):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid CSRF token.")
     return auth_session
+
+
+def _revoke_active_user_sessions(
+    *,
+    db: Session,
+    user_id: Any,
+    reason: str,
+) -> int:
+    now = utcnow_naive()
+    sessions = db.query(AuthSession).filter(AuthSession.user_id == user_id).all()
+    revoked_count = 0
+    for session in sessions:
+        if session.revoked_at is not None:
+            continue
+        session.revoked_at = now
+        session.revoked_reason = reason
+        db.add(session)
+        revoked_count += 1
+    if revoked_count:
+        db.commit()
+    return revoked_count
+
+
+def _cleanup_expired_auth_sessions(*, db: Session, user_id: int) -> int:
+    now = utcnow_naive()
+    sessions = db.query(AuthSession).filter(AuthSession.user_id == user_id).all()
+    expired_count = 0
+    for session in sessions:
+        if session.revoked_at is not None:
+            continue
+        if session.expires_at is None or session.expires_at > now:
+            continue
+        session.revoked_at = now
+        session.revoked_reason = "expired"
+        db.add(session)
+        expired_count += 1
+    if expired_count:
+        db.commit()
+    return expired_count
+
+
+def _serialize_auth_session(
+    session: AuthSession,
+    *,
+    current_session_id: int | None = None,
+) -> dict[str, Any]:
+    now = utcnow_naive()
+    if session.revoked_reason == "expired":
+        status_label: Literal["active", "expired", "revoked"] = "expired"
+    elif session.revoked_at is not None:
+        status_label = "revoked"
+    elif session.expires_at is not None and session.expires_at <= now:
+        status_label = "expired"
+    else:
+        status_label = "active"
+
+    return {
+        "id": session.id,
+        "user_id": session.user_id,
+        "user_agent": session.user_agent,
+        "ip_address": session.ip_address,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "last_used_at": session.last_used_at,
+        "expires_at": session.expires_at,
+        "revoked_at": session.revoked_at,
+        "revoked_reason": session.revoked_reason,
+        "rotated_from_session_id": session.rotated_from_session_id,
+        "status": status_label,
+        "is_current": bool(current_session_id is not None and session.id == current_session_id),
+    }
+
+
+def _handle_refresh_token_reuse(
+    *,
+    auth_session: AuthSession,
+    db: Session,
+    request: Request,
+    response: Response,
+) -> None:
+    user = db.query(User).filter(User.id == auth_session.user_id).first()
+    revoked_count = _revoke_active_user_sessions(
+        db=db,
+        user_id=auth_session.user_id,
+        reason="refresh_token_reuse",
+    )
+    _clear_session_cookies(response)
+    _audit_auth_event(
+        "refresh_token_reuse_detected",
+        user=user,
+        session=auth_session,
+        request=request,
+        reason=f"revoked_active_sessions={revoked_count}",
+    )
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Refresh token reuse detected. Please sign in again.",
+    )
+
+
+def _revoke_single_session(
+    *,
+    db: Session,
+    user_id: int,
+    session_id: int,
+    reason: str,
+) -> AuthSession:
+    session = db.query(AuthSession).filter(
+        AuthSession.user_id == user_id,
+        AuthSession.id == session_id,
+    ).first()
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
+
+    if session.revoked_at is None:
+        session.revoked_at = utcnow_naive()
+        session.revoked_reason = reason
+        db.add(session)
+        db.commit()
+
+    return session
 
 
 def _rotate_refresh_session(
@@ -1198,8 +1343,21 @@ async def refresh_session(
     )
     refresh_token = request.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME)
     csrf_token = request.cookies.get(settings.CSRF_COOKIE_NAME)
+    loaded_session = _load_refresh_session(refresh_token, db)
+    if (
+        loaded_session is not None
+        and loaded_session.revoked_at is not None
+        and loaded_session.revoked_reason == "rotated"
+    ):
+        _handle_refresh_token_reuse(
+            auth_session=loaded_session,
+            db=db,
+            request=request,
+            response=response,
+        )
+
     auth_session = _validate_refresh_session(
-        auth_session=_load_refresh_session(refresh_token, db),
+        auth_session=loaded_session,
         csrf_token=csrf_token,
         csrf_header=x_csrf_token,
         db=db,
@@ -1270,6 +1428,55 @@ async def logout_session(
 
     _clear_session_cookies(response)
     return {"message": "Logged out successfully."}
+
+
+@router.get("/sessions", response_model=AuthSessionListResponse)
+async def list_sessions(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List the current user's sessions for device management."""
+
+    _cleanup_expired_auth_sessions(db=db, user_id=current_user.id)
+    current_session = _load_refresh_session(request.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME), db)
+    sessions = (
+        db.query(AuthSession)
+        .filter(AuthSession.user_id == current_user.id)
+        .order_by(AuthSession.updated_at.desc())
+        .all()
+    )
+    return {
+        "sessions": [
+            _serialize_auth_session(session, current_session_id=getattr(current_session, "id", None))
+            for session in sessions
+        ]
+    }
+
+
+@router.delete("/sessions/{session_id}", response_model=RevokeSessionResponse)
+async def revoke_session(
+    session_id: int,
+    request: Request,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Revoke a single session belonging to the authenticated user."""
+
+    current_refresh_session = _load_refresh_session(request.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME), db)
+    session = _revoke_single_session(
+        db=db,
+        user_id=current_user.id,
+        session_id=session_id,
+        reason="revoked_by_user",
+    )
+
+    if current_refresh_session is not None and current_refresh_session.id == session.id:
+        _clear_session_cookies(response)
+
+    _audit_auth_event("session_revoked", user=current_user, session=session, request=request, reason="user_requested")
+    return {"message": "Session revoked successfully."}
 
 
 @router.post("/email-test", response_model=EmailTestResponse)

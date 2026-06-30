@@ -2445,6 +2445,31 @@ pre {
   border-color: rgba(126, 200, 248, 0.32);
 }
 
+.settings-session-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.settings-session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--border2);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.settings-empty {
+  padding: 12px;
+  border: 0.5px dashed var(--border2);
+  border-radius: 12px;
+  color: var(--text2);
+  font-size: 11px;
+}
+
 .settings-badge {
   border: 0.5px solid var(--border2);
   background: #1b1b18;

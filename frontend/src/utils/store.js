@@ -57,20 +57,17 @@ const parseStoredUser = () => {
 // Auth Store
 export const useAuthStore = create((set) => ({
   user: parseStoredUser(),
-  token: getStoredValue('token'),
+  token: null,
   setAuth: (user, token) => {
     setStoredValue('user', JSON.stringify(user));
-    setStoredValue('token', token);
     set({ user, token });
   },
   logout: () => {
     removeStoredValue('user');
-    removeStoredValue('token');
     set({ user: null, token: null });
   },
   clearAuth: () => {
     removeStoredValue('user');
-    removeStoredValue('token');
     set({ user: null, token: null });
   },
   setUser: (user) => {

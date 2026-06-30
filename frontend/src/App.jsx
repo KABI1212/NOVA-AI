@@ -57,8 +57,6 @@ function DefaultRoute({ isCheckingSession }) {
 
 function App() {
   const isDark = useThemeStore((state) => state.isDark);
-  const token = useAuthStore((state) => state.token);
-  const setUser = useAuthStore((state) => state.setUser);
   const clearAuth = useAuthStore((state) => state.clearAuth);
   const [isCheckingSession, setIsCheckingSession] = useState(true);
 
@@ -69,36 +67,8 @@ function App() {
   useEffect(() => {
     let isActive = true;
 
-    if (!token) {
-      setIsCheckingSession(true);
-      authAPI.refresh()
-        .catch(() => {
-          if (isActive) {
-            clearAuth();
-          }
-        })
-        .finally(() => {
-          if (isActive) {
-            setIsCheckingSession(false);
-          }
-        });
-      return () => {
-        isActive = false;
-      };
-    }
-
     setIsCheckingSession(true);
-    authAPI.me()
-      .then((response) => {
-        if (!isActive) {
-          return;
-        }
-
-        const user = response.data?.user;
-        if (user) {
-          setUser(user);
-        }
-      })
+    authAPI.refresh()
       .catch(() => {
         if (isActive) {
           clearAuth();
@@ -113,7 +83,7 @@ function App() {
     return () => {
       isActive = false;
     };
-  }, [clearAuth, setUser, token]);
+  }, [clearAuth]);
 
   return (
     <>

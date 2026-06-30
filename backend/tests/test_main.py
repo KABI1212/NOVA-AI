@@ -2,6 +2,8 @@ import asyncio
 import re
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 import main as main_module
 
@@ -69,3 +71,35 @@ def test_default_cors_origin_regex_supports_vercel_and_render_hosts() -> None:
     assert pattern is not None
     assert re.match(pattern, "https://nova-ai.vercel.app")
     assert re.match(pattern, "https://nova-ai-backend.onrender.com")
+
+
+def test_security_headers_are_added(monkeypatch) -> None:
+    monkeypatch.setattr(main_module.settings, "DEBUG", True)
+    app = FastAPI()
+    app.add_middleware(main_module.SecurityHeadersMiddleware)
+
+    @app.get("/ping")
+    async def ping():
+        return {"ok": True}
+
+    response = TestClient(app).get("/ping")
+
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+    assert response.headers["Permissions-Policy"] == "camera=(), microphone=(), geolocation=()"
+    assert "Strict-Transport-Security" not in response.headers
+
+
+def test_security_headers_include_hsts_in_production(monkeypatch) -> None:
+    monkeypatch.setattr(main_module.settings, "DEBUG", False)
+    app = FastAPI()
+    app.add_middleware(main_module.SecurityHeadersMiddleware)
+
+    @app.get("/ping")
+    async def ping():
+        return {"ok": True}
+
+    response = TestClient(app).get("/ping")
+
+    assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"

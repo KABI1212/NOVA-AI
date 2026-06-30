@@ -333,15 +333,7 @@ const getStoredModelKey = () => {
 };
 
 const getStoredToken = () => {
-  if (typeof window === "undefined") {
-    return "";
-  }
-
-  try {
-    return window.localStorage.getItem("token") || "";
-  } catch {
-    return "";
-  }
+  return useAuthStore.getState().token || "";
 };
 
 const setStoredValue = (key, value) => {

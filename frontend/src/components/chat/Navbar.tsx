@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ChevronDown, Menu } from "lucide-react";
 import { motion } from "framer-motion";
+import { useAuthStore } from "../../utils/store";
 
 import BrandLogo from "./BrandLogo";
 
@@ -11,24 +12,6 @@ interface NavbarProps {
   isTyping: boolean;
   onModelChange: (model: string) => void;
   onToggleSidebar: () => void;
-}
-
-function decodeTokenUserLabel() {
-  if (typeof window === "undefined") {
-    return "";
-  }
-
-  try {
-    const token = window.localStorage.getItem("token") || "";
-    const payload = token.split(".")[1] || "";
-    const normalizedPayload = payload.replace(/-/g, "+").replace(/_/g, "/");
-    const paddedPayload = normalizedPayload.padEnd(Math.ceil(normalizedPayload.length / 4) * 4, "=");
-    const decoded = payload ? JSON.parse(window.atob(paddedPayload)) : {};
-    const storedUser = JSON.parse(window.localStorage.getItem("user") || "{}");
-    return String(decoded.username || decoded.email || storedUser.username || storedUser.email || "").trim();
-  } catch {
-    return "";
-  }
 }
 
 export default function Navbar({
@@ -42,10 +25,11 @@ export default function Navbar({
   const [isOpen, setIsOpen] = useState(false);
   const [userLabel, setUserLabel] = useState("");
   const dropdownRef = useRef<HTMLDivElement | null>(null);
+  const user = useAuthStore((state) => state.user);
 
   useEffect(() => {
-    setUserLabel(decodeTokenUserLabel()); // FIX: hardcoded username display
-  }, []);
+    setUserLabel(String(user?.username || user?.email || "").trim());
+  }, [user]);
 
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {

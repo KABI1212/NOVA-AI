@@ -43,6 +43,9 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
   ]);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+  const [sessionItems, setSessionItems] = useState([]);
+  const [revokingSessionId, setRevokingSessionId] = useState(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
 
   const effectiveBrowserVoiceOptions =
@@ -74,6 +77,36 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
     });
     setDeleteConfirmation("");
   }, [open, user]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let isActive = true;
+    setIsLoadingSessions(true);
+    authAPI.listSessions()
+      .then((response) => {
+        if (!isActive) {
+          return;
+        }
+        setSessionItems(Array.isArray(response.data?.sessions) ? response.data.sessions : []);
+      })
+      .catch(() => {
+        if (isActive) {
+          setSessionItems([]);
+        }
+      })
+      .finally(() => {
+        if (isActive) {
+          setIsLoadingSessions(false);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [open]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -202,6 +235,30 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
   const handleOpenShares = () => {
     onClose?.();
     navigate("/my-shares");
+  };
+
+  const handleRevokeSession = async (session) => {
+    if (!session?.id) {
+      return;
+    }
+
+    setRevokingSessionId(session.id);
+    try {
+      await authAPI.revokeSession(session.id);
+      toast.success("Session revoked.");
+      if (session.is_current) {
+        logout();
+        navigate("/login", { replace: true });
+        return;
+      }
+
+      const response = await authAPI.listSessions();
+      setSessionItems(Array.isArray(response.data?.sessions) ? response.data.sessions : []);
+    } catch (error) {
+      toast.error(error?.response?.data?.detail || "Could not revoke that session.");
+    } finally {
+      setRevokingSessionId(null);
+    }
   };
 
   const handleStartNewChat = () => {
@@ -474,6 +531,58 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
               >
                 Shared chats
               </button>
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <div className="settings-section-head">
+              <div>
+                <h4>Sessions</h4>
+                <span>Review active devices and revoke individual sessions when needed.</span>
+              </div>
+            </div>
+
+            <div className="settings-session-list">
+              {isLoadingSessions ? (
+                <div className="settings-empty">Loading sessions...</div>
+              ) : sessionItems.length ? (
+                sessionItems.map((session) => {
+                  const isCurrent = Boolean(session.is_current);
+                  const isActive = session.status === "active";
+                  const label =
+                    session.status === "expired"
+                      ? "Expired"
+                      : session.status === "revoked"
+                        ? "Revoked"
+                        : "Active";
+
+                  return (
+                    <div key={session.id} className="settings-session-row">
+                      <div className="settings-copy">
+                        <strong>
+                          {session.user_agent || "Unknown device"}
+                          {isCurrent ? " (current)" : ""}
+                        </strong>
+                        <span>
+                          {session.ip_address || "Unknown IP"} · {label}
+                        </span>
+                      </div>
+                      <button
+                        className="settings-chip"
+                        type="button"
+                        onClick={() => handleRevokeSession(session)}
+                        disabled={!isActive || revokingSessionId === session.id}
+                        aria-label={isActive ? "Revoke this session" : "Session already closed"}
+                        title={isActive ? "Revoke this session" : "Session already closed"}
+                      >
+                        {revokingSessionId === session.id ? "Revoking..." : "Revoke"}
+                      </button>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="settings-empty">No active sessions found.</div>
+              )}
             </div>
           </section>
 

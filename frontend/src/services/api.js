@@ -277,7 +277,7 @@ api.interceptors.request.use(async (config) => {
     }
   }
 
-  const token = hasWindow() ? localStorage.getItem('token') : null;
+  const token = useAuthStore.getState().token;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -364,6 +364,8 @@ export const authAPI = {
   me: () => api.get('/auth/me'),
   updateMe: (data) => api.put('/auth/me', data),
   deleteMe: () => api.delete('/auth/me'),
+  listSessions: () => api.get('/auth/sessions'),
+  revokeSession: (sessionId) => api.delete(`/auth/sessions/${sessionId}`),
 };
 
 export const chatAPI = {
