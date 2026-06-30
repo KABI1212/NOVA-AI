@@ -68,6 +68,11 @@ export const useAuthStore = create((set) => ({
     removeStoredValue('token');
     set({ user: null, token: null });
   },
+  clearAuth: () => {
+    removeStoredValue('user');
+    removeStoredValue('token');
+    set({ user: null, token: null });
+  },
   setUser: (user) => {
     setStoredValue('user', JSON.stringify(user));
     set((state) => ({ ...state, user }));

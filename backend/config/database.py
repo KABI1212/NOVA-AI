@@ -111,6 +111,11 @@ def _ensure_indexes(database: Database) -> None:
     database["users"].create_index("email", unique=True)
     database["users"].create_index("username", unique=True)
 
+    database["auth_sessions"].create_index("id", unique=True)
+    database["auth_sessions"].create_index("refresh_token_hash", unique=True)
+    database["auth_sessions"].create_index([("user_id", 1), ("revoked_at", 1)])
+    database["auth_sessions"].create_index("expires_at")
+
     database["conversations"].create_index("id", unique=True)
     database["conversations"].create_index([("user_id", 1), ("updated_at", -1)])
     database["conversations"].create_index("share_id", unique=True, sparse=True)

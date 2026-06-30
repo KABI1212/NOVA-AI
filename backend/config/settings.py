@@ -31,7 +31,15 @@ class Settings(BaseSettings):
 
     SECRET_KEY: str = "change-me-in-production"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 60
+    REFRESH_TOKEN_COOKIE_NAME: str = "nova_refresh_token"
+    CSRF_COOKIE_NAME: str = "nova_csrf_token"
+    AUTH_COOKIE_SECURE: bool | None = None
+    AUTH_COOKIE_SAMESITE: str = "lax"
+    AUTH_LOGIN_RATE_LIMIT_REQUESTS: int = 8
+    AUTH_REFRESH_RATE_LIMIT_REQUESTS: int = 30
+    AUTH_RATE_LIMIT_WINDOW_SECONDS: int = 60
     AUTH_OTP_EXPIRE_MINUTES: int = 5
     AUTH_OTP_LENGTH: int = 6
     AUTH_OTP_MAX_ATTEMPTS: int = 3

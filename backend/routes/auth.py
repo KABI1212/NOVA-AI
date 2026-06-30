@@ -3,7 +3,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, field_validator
 from starlette.concurrency import run_in_threadpool
 try:
@@ -22,6 +22,7 @@ except ImportError:
 from config.database import get_db
 from config.settings import settings
 from models.conversation import Conversation
+from models.auth_session import AuthSession
 from models.chat_session import ChatSession
 from models.document import Document
 from models.file_record import FileRecord
@@ -32,9 +33,12 @@ from services.email_service import EmailDeliveryError, email_service
 from services.retriever import retriever_service
 from services.storage import storage_service
 from utils.auth import (
+    access_token_expires_at,
     create_access_token,
+    generate_csrf_token,
     generate_login_challenge_token,
     generate_numeric_otp,
+    generate_refresh_token,
     get_password_hash,
     hash_secret_value,
     utcnow_naive,
@@ -42,6 +46,7 @@ from utils.auth import (
     verify_secret_value,
 )
 from utils.dependencies import get_current_user
+from services.rate_limit_service import rate_limit_service
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 logger = logging.getLogger(__name__)
@@ -144,6 +149,7 @@ class TokenResponse(BaseModel):
     requires_otp: Literal[False] = False
     access_token: str
     token_type: str
+    expires_at: datetime
     user: dict
 
 
@@ -207,6 +213,14 @@ class EmailTestResponse(BaseModel):
     message: str
 
 
+class LogoutResponse(BaseModel):
+    message: str
+
+
+class LogoutRequest(BaseModel):
+    all_devices: bool = False
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -250,7 +264,165 @@ def _serialize_user(user: User) -> dict:
     }
 
 
+def _client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if real_ip:
+        return real_ip
+    return request.client.host if request.client else "unknown"
+
+
+def _cookie_secure() -> bool:
+    if settings.AUTH_COOKIE_SECURE is not None:
+        return bool(settings.AUTH_COOKIE_SECURE)
+    return not settings.DEBUG
+
+
+def _cookie_samesite() -> str:
+    value = str(settings.AUTH_COOKIE_SAMESITE or "lax").lower()
+    return value if value in {"lax", "strict", "none"} else "lax"
+
+
+def _set_session_cookies(response: Response, refresh_token: str, csrf_token: str, expires_at: datetime) -> None:
+    max_age = max(1, int((expires_at - utcnow_naive()).total_seconds()))
+    response.set_cookie(
+        settings.REFRESH_TOKEN_COOKIE_NAME,
+        refresh_token,
+        max_age=max_age,
+        expires=max_age,
+        httponly=True,
+        secure=_cookie_secure(),
+        samesite=_cookie_samesite(),
+        path="/api/auth",
+    )
+    response.set_cookie(
+        settings.CSRF_COOKIE_NAME,
+        csrf_token,
+        max_age=max_age,
+        expires=max_age,
+        httponly=False,
+        secure=_cookie_secure(),
+        samesite=_cookie_samesite(),
+        path="/",
+    )
+
+
+def _clear_session_cookies(response: Response) -> None:
+    response.delete_cookie(settings.REFRESH_TOKEN_COOKIE_NAME, path="/api/auth")
+    response.delete_cookie(settings.CSRF_COOKIE_NAME, path="/")
+
+
+def _audit_auth_event(event: str, *, user: User | None = None, session: AuthSession | None = None, request: Request | None = None, reason: str = "") -> None:
+    logger.info(
+        "auth_audit event=%s user_id=%s session_id=%s ip=%s reason=%s",
+        event,
+        getattr(user, "id", None),
+        getattr(session, "id", None),
+        _client_ip(request) if request else "",
+        reason,
+    )
+
+
+async def _enforce_auth_rate_limit(scope: str, request: Request, *, limit: int) -> None:
+    if not settings.RATE_LIMIT_ENABLED:
+        return
+    identifier = _client_ip(request)
+    result = await rate_limit_service.check_limit(
+        scope,
+        f"ip:{identifier}",
+        limit=limit,
+        window_seconds=settings.AUTH_RATE_LIMIT_WINDOW_SECONDS,
+    )
+    if result.current <= result.limit:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=f"Too many authentication requests. Try again in {result.retry_after} seconds.",
+        headers={"Retry-After": str(result.retry_after)},
+    )
+
+
+def _create_auth_session(user: User, db: Session, request: Request, response: Response) -> AuthSession:
+    refresh_token = generate_refresh_token()
+    csrf_token = generate_csrf_token()
+    now = utcnow_naive()
+    expires_at = now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    auth_session = AuthSession(
+        user_id=user.id,
+        refresh_token_hash=hash_secret_value(refresh_token),
+        csrf_token_hash=hash_secret_value(csrf_token),
+        user_agent=request.headers.get("user-agent", "")[:512],
+        ip_address=_client_ip(request),
+        created_at=now,
+        updated_at=now,
+        last_used_at=now,
+        expires_at=expires_at,
+    )
+    db.add(auth_session)
+    db.commit()
+    db.refresh(auth_session)
+    _set_session_cookies(response, refresh_token, csrf_token, expires_at)
+    _audit_auth_event("session_created", user=user, session=auth_session, request=request)
+    return auth_session
+
+
+def _load_refresh_session(refresh_token: str | None, db: Session) -> AuthSession | None:
+    if not refresh_token:
+        return None
+    return db.query(AuthSession).filter(
+        AuthSession.refresh_token_hash == hash_secret_value(refresh_token)
+    ).first()
+
+
+def _validate_refresh_session(
+    *,
+    auth_session: AuthSession | None,
+    csrf_token: str | None,
+    csrf_header: str | None,
+    db: Session,
+) -> AuthSession:
+    if auth_session is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token.")
+    if auth_session.revoked_at is not None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token has been revoked.")
+    if auth_session.expires_at is None or auth_session.expires_at <= utcnow_naive():
+        auth_session.revoked_at = utcnow_naive()
+        auth_session.revoked_reason = "expired"
+        db.add(auth_session)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token has expired.")
+    if not csrf_header or not csrf_token or csrf_header != csrf_token:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid CSRF token.")
+    if not verify_secret_value(csrf_header, auth_session.csrf_token_hash):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid CSRF token.")
+    return auth_session
+
+
+def _rotate_refresh_session(
+    *,
+    auth_session: AuthSession,
+    user: User,
+    db: Session,
+    request: Request,
+    response: Response,
+) -> AuthSession:
+    now = utcnow_naive()
+    auth_session.revoked_at = now
+    auth_session.revoked_reason = "rotated"
+    db.add(auth_session)
+    new_session = _create_auth_session(user, db, request, response)
+    new_session.rotated_from_session_id = auth_session.id
+    db.add(new_session)
+    db.commit()
+    db.refresh(new_session)
+    _audit_auth_event("session_rotated", user=user, session=new_session, request=request)
+    return new_session
+
+
 def _build_token_response(user: User) -> dict:
+    expires_at = access_token_expires_at()
     access_token = create_access_token(
         data={"sub": user.id, "username": user.username, "email": user.email}  # FIX: dynamic username JWT claims
     )
@@ -258,6 +430,7 @@ def _build_token_response(user: User) -> dict:
         "requires_otp": False,
         "access_token": access_token,
         "token_type": "bearer",
+        "expires_at": expires_at,
         "user": _serialize_user(user),
     }
 
@@ -706,7 +879,12 @@ def _validate_pending_password_reset(
     response_model=TokenResponse | LoginChallengeResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def signup(request: SignupRequest, db: Session = Depends(get_db)):
+async def signup(
+    request: SignupRequest,
+    response: Response = None,
+    http_request: Request = None,
+    db: Session = Depends(get_db),
+):
     """Register a new user and require OTP verification before sign-in."""
 
     email = request.email.strip().lower()  # FIX: case-sensitive login bug
@@ -764,8 +942,16 @@ async def signup(request: SignupRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse | LoginChallengeResponse)
-async def login(request: LoginRequest, db: Session = Depends(get_db)):
+async def login(
+    request: LoginRequest,
+    response: Response = None,
+    http_request: Request = None,
+    db: Session = Depends(get_db),
+):
     """Validate credentials and issue a session for verified accounts."""
+
+    if http_request is not None:
+        await _enforce_auth_rate_limit("auth:login", http_request, limit=settings.AUTH_LOGIN_RATE_LIMIT_REQUESTS)
 
     raw_identifier = request.email.strip()
     normalized_identifier = raw_identifier.lower()  # FIX: case-sensitive login bug
@@ -793,6 +979,8 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         _clear_login_otp_state(user)
         _persist_user(db, user)
 
+    if http_request is not None and response is not None:
+        _create_auth_session(user, db, http_request, response)
     return _build_token_response(user)
 
 
@@ -800,6 +988,8 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
 @router.post("/login/otp/verify", response_model=TokenResponse)
 async def verify_login_otp(
     request: LoginOtpVerifyRequest,
+    response: Response = None,
+    http_request: Request = None,
     db: Session = Depends(get_db),
 ):
     """Verify a pending signup OTP and activate the account."""
@@ -846,6 +1036,8 @@ async def verify_login_otp(
     _clear_login_otp_state(user)  # FIX: OTP logic issue
     user.is_verified = True
     _persist_user(db, user)
+    if http_request is not None and response is not None:
+        _create_auth_session(user, db, http_request, response)
 
     return _build_token_response(user)
 
@@ -990,6 +1182,96 @@ async def reset_password(
     return {"message": "Password reset successful. Please sign in with your new password."}
 
 
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_session(
+    request: Request,
+    response: Response,
+    x_csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+    db: Session = Depends(get_db),
+):
+    """Rotate a valid refresh token and issue a new short-lived access token."""
+
+    await _enforce_auth_rate_limit(
+        "auth:refresh",
+        request,
+        limit=settings.AUTH_REFRESH_RATE_LIMIT_REQUESTS,
+    )
+    refresh_token = request.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME)
+    csrf_token = request.cookies.get(settings.CSRF_COOKIE_NAME)
+    auth_session = _validate_refresh_session(
+        auth_session=_load_refresh_session(refresh_token, db),
+        csrf_token=csrf_token,
+        csrf_header=x_csrf_token,
+        db=db,
+    )
+    user = db.query(User).filter(User.id == auth_session.user_id).first()
+    if user is None or not user.is_active:
+        auth_session.revoked_at = utcnow_naive()
+        auth_session.revoked_reason = "user_unavailable"
+        db.add(auth_session)
+        db.commit()
+        _clear_session_cookies(response)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session user is unavailable.")
+
+    _rotate_refresh_session(
+        auth_session=auth_session,
+        user=user,
+        db=db,
+        request=request,
+        response=response,
+    )
+    return _build_token_response(user)
+
+
+@router.post("/logout", response_model=LogoutResponse)
+async def logout_session(
+    request: Request,
+    response: Response,
+    payload: LogoutRequest | None = None,
+    x_csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+    db: Session = Depends(get_db),
+):
+    """Revoke the current device refresh token and clear auth cookies."""
+
+    refresh_token = request.cookies.get(settings.REFRESH_TOKEN_COOKIE_NAME)
+    csrf_token = request.cookies.get(settings.CSRF_COOKIE_NAME)
+    auth_session = _load_refresh_session(refresh_token, db)
+    if auth_session is None:
+        _clear_session_cookies(response)
+        return {"message": "Logged out successfully."}
+    if auth_session.revoked_at is not None:
+        _clear_session_cookies(response)
+        return {"message": "Logged out successfully."}
+
+    _validate_refresh_session(
+        auth_session=auth_session,
+        csrf_token=csrf_token,
+        csrf_header=x_csrf_token,
+        db=db,
+    )
+    user = db.query(User).filter(User.id == auth_session.user_id).first()
+
+    now = utcnow_naive()
+    if payload and payload.all_devices:
+        sessions = db.query(AuthSession).filter(AuthSession.user_id == auth_session.user_id).all()
+        for session in sessions:
+            if session.revoked_at is None:
+                session.revoked_at = now
+                session.revoked_reason = "logout_all_devices"
+                db.add(session)
+        db.commit()
+        _audit_auth_event("logout_all_devices", user=user, session=auth_session, request=request)
+    elif auth_session.revoked_at is None:
+        auth_session.revoked_at = now
+        auth_session.revoked_reason = "logout"
+        db.add(auth_session)
+        db.commit()
+        _audit_auth_event("logout", user=user, session=auth_session, request=request)
+
+    _clear_session_cookies(response)
+    return {"message": "Logged out successfully."}
+
+
 @router.post("/email-test", response_model=EmailTestResponse)
 async def send_email_test(current_user: User = Depends(get_current_user)):
     """Send a test email to the current user's registered email address."""
@@ -1105,6 +1387,7 @@ async def update_current_account(
 
 @router.delete("/me")
 async def delete_current_account(
+    response: Response,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -1119,6 +1402,7 @@ async def delete_current_account(
     learning_progress = db.query(LearningProgress).filter(
         LearningProgress.user_id == current_user.id
     ).all()
+    auth_sessions = db.query(AuthSession).filter(AuthSession.user_id == current_user.id).all()
 
     for document in documents:
         try:
@@ -1154,8 +1438,14 @@ async def delete_current_account(
     for item in learning_progress:
         db.delete(item)
 
+    for auth_session in auth_sessions:
+        auth_session.revoked_at = utcnow_naive()
+        auth_session.revoked_reason = "account_deleted"
+        db.add(auth_session)
+
     db.delete(current_user)
     db.commit()
+    _clear_session_cookies(response)
 
     return {
         "message": "Account deleted successfully",

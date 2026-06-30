@@ -1,7 +1,9 @@
 import axios from 'axios';
+import { useAuthStore } from '../utils/store';
 
 const STATUS_REQUEST_TIMEOUT_MS = 1500;
 const RAW_API_URL = String(import.meta.env.VITE_API_URL || '').trim();
+const CSRF_COOKIE_NAME = String(import.meta.env.VITE_CSRF_COOKIE_NAME || 'nova_csrf_token').trim();
 
 const normalizeBaseUrl = (value = '') => String(value || '').trim().replace(/\/$/, '');
 
@@ -62,6 +64,18 @@ let preferredApiStatus = null;
 let resolveApiBaseUrlPromise = null;
 
 const hasWindow = () => typeof window !== 'undefined';
+
+const getCookieValue = (name) => {
+  if (!hasWindow()) {
+    return '';
+  }
+  const prefix = `${name}=`;
+  return document.cookie
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix))
+    ?.slice(prefix.length) || '';
+};
 
 const safeSetTimeout = (callback, timeout) =>
   hasWindow() ? window.setTimeout(callback, timeout) : setTimeout(callback, timeout);
@@ -209,10 +223,20 @@ if (hasWindow() && API_BASE_CANDIDATES.length > 1) {
 }
 
 const api = axios.create({
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
 });
+
+const refreshClient = axios.create({
+  withCredentials: true,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+let refreshPromise = null;
 
 const PUBLIC_AUTH_401_PATHS = [
   '/auth/login',
@@ -223,6 +247,8 @@ const PUBLIC_AUTH_401_PATHS = [
   '/auth/login/otp/resend',
   '/auth/password/forgot',
   '/auth/password/reset',
+  '/auth/refresh',
+  '/auth/logout',
 ];
 
 const shouldHandle401AsExpiredSession = (requestUrl = '') => {
@@ -255,23 +281,68 @@ api.interceptors.request.use(async (config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  if (String(config.url || '').includes('/auth/refresh') || String(config.url || '').includes('/auth/logout')) {
+    const csrfToken = getCookieValue(CSRF_COOKIE_NAME);
+    if (csrfToken) {
+      config.headers['X-CSRF-Token'] = decodeURIComponent(csrfToken);
+    }
+  }
   return config;
 });
 
+refreshClient.interceptors.request.use(async (config) => {
+  const resolvedBaseUrl = await resolveApiBaseUrl();
+  const originalUrl = String(config.url || '').trim();
+  if (originalUrl && !/^https?:\/\//i.test(originalUrl)) {
+    config.url = buildApiEndpoint(originalUrl, resolvedBaseUrl);
+  }
+  const csrfToken = getCookieValue(CSRF_COOKIE_NAME);
+  if (csrfToken) {
+    config.headers['X-CSRF-Token'] = decodeURIComponent(csrfToken);
+  }
+  return config;
+});
+
+export const refreshAuthSession = async () => {
+  if (!refreshPromise) {
+    refreshPromise = refreshClient
+      .post('/auth/refresh')
+      .then((response) => {
+        const { user, access_token } = response.data || {};
+        if (!access_token) {
+          throw new Error('Refresh response did not include an access token.');
+        }
+        useAuthStore.getState().setAuth(user || null, access_token);
+        return access_token;
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+};
+
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    const token = hasWindow() ? localStorage.getItem('token') : null;
+  async (error) => {
     const requestUrl = String(error?.config?.url || '').trim();
+    const originalRequest = error?.config || {};
     if (
       error.response?.status === 401 &&
-      token &&
-      shouldHandle401AsExpiredSession(requestUrl)
+      shouldHandle401AsExpiredSession(requestUrl) &&
+      !originalRequest._retry
     ) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      if (hasWindow()) {
-        window.location.href = '/login';
+      originalRequest._retry = true;
+      try {
+        const nextToken = await refreshAuthSession();
+        originalRequest.headers = originalRequest.headers || {};
+        originalRequest.headers.Authorization = `Bearer ${nextToken}`;
+        return api(originalRequest);
+      } catch {
+        useAuthStore.getState().clearAuth();
+        if (hasWindow()) {
+          window.location.href = '/login';
+        }
       }
     }
     return Promise.reject(error);
@@ -285,6 +356,8 @@ export const authAPI = {
   resendSignupOtp: (data) => api.post('/auth/signup/otp/resend', data),
   verifyLoginOtp: (data) => api.post('/auth/login/otp/verify', data),
   resendLoginOtp: (data) => api.post('/auth/login/otp/resend', data),
+  refresh: () => refreshAuthSession(),
+  logout: () => api.post('/auth/logout'),
   forgotPassword: (data) => api.post('/auth/password/forgot', data),
   resetPassword: (data) => api.post('/auth/password/reset', data),
   sendTestEmail: () => api.post('/auth/email-test'),

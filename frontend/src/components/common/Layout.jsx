@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import NovaLogo from "./NovaLogo";
+import { authAPI } from "../../services/api";
 import { useAuthStore, useChatStore, useThemeStore } from "../../utils/store";
 
 const sidebarButtonBase =
@@ -81,7 +82,12 @@ function Layout({ children }) {
     menuItems.find((item) => item.path === location.pathname) ||
     menuItems.find((item) => item.mode === mode);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await authAPI.logout();
+    } catch {
+      // Local cleanup still runs if the network is unavailable.
+    }
     logout();
     navigate("/login");
   };

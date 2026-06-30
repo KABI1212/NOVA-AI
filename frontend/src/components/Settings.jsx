@@ -188,8 +188,13 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     onClose?.();
+    try {
+      await authAPI.logout();
+    } catch {
+      // Local cleanup still runs if the network is unavailable.
+    }
     logout();
     navigate("/login", { replace: true });
   };

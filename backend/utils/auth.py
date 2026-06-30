@@ -44,6 +44,16 @@ def generate_login_challenge_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def generate_refresh_token() -> str:
+    """Generate a high-entropy opaque refresh token."""
+    return secrets.token_urlsafe(64)
+
+
+def generate_csrf_token() -> str:
+    """Generate a non-HttpOnly CSRF token paired with the refresh cookie."""
+    return secrets.token_urlsafe(32)
+
+
 def hash_secret_value(value: str) -> str:
     """Create a deterministic secret-key-based hash for short-lived secrets."""
     payload = f"{settings.SECRET_KEY}:{value}".encode("utf-8")
@@ -72,6 +82,15 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
     return encoded_jwt
+
+
+def access_token_expires_at(expires_delta: Optional[timedelta] = None) -> datetime:
+    """Return the access token expiry timestamp using the configured lifetime."""
+    return utcnow_naive() + (
+        expires_delta
+        if expires_delta
+        else timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
 
 
 def decode_access_token(token: str) -> Optional[dict]:

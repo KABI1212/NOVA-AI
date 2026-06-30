@@ -248,8 +248,13 @@ export default function Sidebar({
     return Boolean(item.route) && location.pathname === item.route;
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     setIsMenuOpen(false);
+    try {
+      await authAPI.logout();
+    } catch {
+      // Local cleanup still runs if the network is unavailable.
+    }
     logout();
     navigate("/login", { replace: true });
   };

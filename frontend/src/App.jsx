@@ -59,8 +59,8 @@ function App() {
   const isDark = useThemeStore((state) => state.isDark);
   const token = useAuthStore((state) => state.token);
   const setUser = useAuthStore((state) => state.setUser);
-  const logout = useAuthStore((state) => state.logout);
-  const [isCheckingSession, setIsCheckingSession] = useState(Boolean(token));
+  const clearAuth = useAuthStore((state) => state.clearAuth);
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
@@ -70,7 +70,18 @@ function App() {
     let isActive = true;
 
     if (!token) {
-      setIsCheckingSession(false);
+      setIsCheckingSession(true);
+      authAPI.refresh()
+        .catch(() => {
+          if (isActive) {
+            clearAuth();
+          }
+        })
+        .finally(() => {
+          if (isActive) {
+            setIsCheckingSession(false);
+          }
+        });
       return () => {
         isActive = false;
       };
@@ -90,7 +101,7 @@ function App() {
       })
       .catch(() => {
         if (isActive) {
-          logout();
+          clearAuth();
         }
       })
       .finally(() => {
@@ -102,7 +113,7 @@ function App() {
     return () => {
       isActive = false;
     };
-  }, [logout, setUser, token]);
+  }, [clearAuth, setUser, token]);
 
   return (
     <>

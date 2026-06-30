@@ -1,4 +1,5 @@
 from .user import User
+from .auth_session import AuthSession
 from .conversation import Conversation
 from .chat import ChatMessage
 from .chat_session import ChatSession
@@ -9,6 +10,7 @@ from .learning import LearningProgress
 
 __all__ = [
     "User",
+    "AuthSession",
     "Conversation",
     "ChatMessage",
     "ChatSession",
