@@ -308,3 +308,38 @@ def test_revoke_session_clears_current_cookies() -> None:
         )
 
     asyncio.run(scenario())
+
+
+def test_refresh_session_updates_last_used_timestamp() -> None:
+    user = User(
+        id=1,
+        email="session.user@example.com",
+        username="session-user",
+        hashed_password=auth_module.get_password_hash("Sup3rSecret!"),
+        is_active=True,
+        is_verified=True,
+    )
+    refresh_token = "refresh-token"
+    csrf_token = "csrf-token"
+    session = AuthSession(
+        id=1,
+        user_id=user.id,
+        refresh_token_hash=auth_module.hash_secret_value(refresh_token),
+        csrf_token_hash=auth_module.hash_secret_value(csrf_token),
+        expires_at=auth_module.utcnow_naive() + timedelta(days=1),
+    )
+    db = _FakeSession([user], [session])
+
+    async def scenario() -> None:
+        response = Response()
+        await auth_module.refresh_session(
+            request=_make_request(refresh_token, csrf_token),
+            response=response,
+            x_csrf_token=csrf_token,
+            db=db,
+        )
+
+        assert session.last_used_at is not None
+        assert session.updated_at is not None
+
+    asyncio.run(scenario())

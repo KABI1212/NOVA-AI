@@ -18,6 +18,24 @@ const SETTINGS_STORAGE_KEYS = {
   manualPlayback: "nova_manual_playback",
 };
 
+const SESSION_TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
+function formatSessionTime(value) {
+  if (!value) {
+    return "Unknown";
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "Unknown";
+  }
+
+  return SESSION_TIME_FORMAT.format(parsed);
+}
+
 function Settings({ open = false, onClose, onNewChat, onExportChat, canExportChat = false }) {
   const navigate = useNavigate();
   const user = useAuthStore((state) => state.user);
@@ -564,7 +582,13 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
                           {isCurrent ? " (current)" : ""}
                         </strong>
                         <span>
-                          {session.ip_address || "Unknown IP"} · {label}
+                          {session.ip_address || "Unknown IP"} - {label}
+                        </span>
+                        <span>
+                          Created {formatSessionTime(session.created_at)} - Last seen {formatSessionTime(session.last_used_at)}
+                        </span>
+                        <span>
+                          Expires {formatSessionTime(session.expires_at)}
                         </span>
                       </div>
                       <button

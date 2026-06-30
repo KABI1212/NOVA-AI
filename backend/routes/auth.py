@@ -495,6 +495,14 @@ def _serialize_auth_session(
     }
 
 
+def _touch_auth_session(session: AuthSession, db: Session) -> None:
+    now = utcnow_naive()
+    session.last_used_at = now
+    session.updated_at = now
+    db.add(session)
+    db.commit()
+
+
 def _handle_refresh_token_reuse(
     *,
     auth_session: AuthSession,
@@ -1371,6 +1379,7 @@ async def refresh_session(
         _clear_session_cookies(response)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session user is unavailable.")
 
+    _touch_auth_session(auth_session, db)
     _rotate_refresh_session(
         auth_session=auth_session,
         user=user,
@@ -1408,6 +1417,7 @@ async def logout_session(
         db=db,
     )
     user = db.query(User).filter(User.id == auth_session.user_id).first()
+    _touch_auth_session(auth_session, db)
 
     now = utcnow_naive()
     if payload and payload.all_devices:
