@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -9,6 +10,12 @@ from fastapi import HTTPException, Response
 
 import routes.auth as auth_module
 from models.auth_session import AuthSession
+from models.chat import ChatMessage
+from models.chat_session import ChatSession
+from models.conversation import Conversation
+from models.document import Document
+from models.file_record import FileRecord
+from models.learning import LearningProgress
 from models.user import User
 
 
@@ -70,6 +77,18 @@ class _FakeSession:
             return _FakeQuery(self.users)
         if model is AuthSession:
             return _FakeQuery(self.sessions)
+        if model is Conversation:
+            return _FakeQuery(getattr(self, "conversations", []))
+        if model is ChatSession:
+            return _FakeQuery(getattr(self, "chat_sessions", []))
+        if model is Document:
+            return _FakeQuery(getattr(self, "documents", []))
+        if model is FileRecord:
+            return _FakeQuery(getattr(self, "files", []))
+        if model is LearningProgress:
+            return _FakeQuery(getattr(self, "learning_progress", []))
+        if model is ChatMessage:
+            return _FakeQuery(getattr(self, "messages", []))
         return _FakeQuery([])
 
     def add(self, obj) -> None:
@@ -81,6 +100,36 @@ class _FakeSession:
                 self.next_session_id += 1
             if obj not in self.sessions:
                 self.sessions.append(obj)
+        if isinstance(obj, Conversation):
+            conversations = getattr(self, "conversations", [])
+            if obj not in conversations:
+                conversations.append(obj)
+            self.conversations = conversations
+        if isinstance(obj, ChatSession):
+            chat_sessions = getattr(self, "chat_sessions", [])
+            if obj not in chat_sessions:
+                chat_sessions.append(obj)
+            self.chat_sessions = chat_sessions
+        if isinstance(obj, Document):
+            documents = getattr(self, "documents", [])
+            if obj not in documents:
+                documents.append(obj)
+            self.documents = documents
+        if isinstance(obj, FileRecord):
+            files = getattr(self, "files", [])
+            if obj not in files:
+                files.append(obj)
+            self.files = files
+        if isinstance(obj, LearningProgress):
+            learning_progress = getattr(self, "learning_progress", [])
+            if obj not in learning_progress:
+                learning_progress.append(obj)
+            self.learning_progress = learning_progress
+        if isinstance(obj, ChatMessage):
+            messages = getattr(self, "messages", [])
+            if obj not in messages:
+                messages.append(obj)
+            self.messages = messages
 
     def commit(self) -> None:
         return None
@@ -306,6 +355,92 @@ def test_revoke_session_clears_current_cookies() -> None:
             and b"Max-Age=0" in header
             for header in set_cookie_headers
         )
+
+    asyncio.run(scenario())
+
+
+def test_export_account_data_returns_downloadable_json() -> None:
+    user = User(
+        id=1,
+        email="session.user@example.com",
+        username="session-user",
+        hashed_password=auth_module.get_password_hash("Sup3rSecret!"),
+        is_active=True,
+        is_verified=True,
+    )
+    conversation = Conversation(
+        id="conv-1",
+        user_id=user.id,
+        title="Exported chat",
+        model="gpt-4o",
+    )
+    document = Document(
+        id=1,
+        user_id=user.id,
+        filename="notes.pdf",
+        file_type="pdf",
+        file_size=2048,
+        text_content="Hello export",
+        summary="Summary text",
+        is_processed=True,
+    )
+    file_record = FileRecord(
+        id="file-1",
+        user_id=user.id,
+        filename="upload.txt",
+        original_name="upload.txt",
+        mime_type="text/plain",
+        extension=".txt",
+        size=123,
+        storage_path="/private/storage/upload.txt",
+        extracted_text="File text",
+        metadata={"source": "upload"},
+        chunk_count=1,
+        status="ready",
+        preview_text="Preview",
+    )
+    learning = LearningProgress(
+        id=1,
+        user_id=user.id,
+        topic="AI",
+        roadmap={"steps": ["one"]},
+        completed_items=["one"],
+        current_level="intermediate",
+        notes="Keep learning",
+    )
+    chat_session = ChatSession(
+        id="session-1",
+        user_id=user.id,
+        conversation_id=conversation.id,
+        file_ids=["file-1"],
+    )
+    auth_session = AuthSession(
+        id=1,
+        user_id=user.id,
+        refresh_token_hash=auth_module.hash_secret_value("refresh-token"),
+        csrf_token_hash=auth_module.hash_secret_value("csrf-token"),
+        expires_at=auth_module.utcnow_naive() + timedelta(days=1),
+    )
+    db = _FakeSession([user], [auth_session])
+    db.conversations = [conversation]
+    db.documents = [document]
+    db.files = [file_record]
+    db.learning_progress = [learning]
+    db.chat_sessions = [chat_session]
+    db.messages = []
+
+    async def scenario() -> None:
+        response = await auth_module.export_account_data(current_user=user, db=db)
+
+        assert response.status_code == 200
+        assert "attachment" in response.headers["content-disposition"].lower()
+        payload = json.loads(response.body.decode("utf-8"))
+        assert payload["user"]["email"] == user.email
+        assert payload["counts"]["conversations"] == 1
+        assert payload["counts"]["documents"] == 1
+        assert payload["counts"]["files"] == 1
+        assert payload["conversations"][0]["messages"] == []
+        assert "storage_path" not in payload["files"][0]
 
     asyncio.run(scenario())
 

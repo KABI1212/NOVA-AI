@@ -364,6 +364,7 @@ export const authAPI = {
   me: () => api.get('/auth/me'),
   updateMe: (data) => api.put('/auth/me', data),
   deleteMe: () => api.delete('/auth/me'),
+  exportAccount: () => api.get('/auth/export', { responseType: 'blob' }),
   listSessions: () => api.get('/auth/sessions'),
   revokeSession: (sessionId) => api.delete(`/auth/sessions/${sessionId}`),
 };

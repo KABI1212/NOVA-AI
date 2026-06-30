@@ -61,6 +61,7 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
   ]);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [sessionItems, setSessionItems] = useState([]);
   const [revokingSessionId, setRevokingSessionId] = useState(null);
@@ -255,6 +256,27 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
     navigate("/my-shares");
   };
 
+  const handleExportAccount = async () => {
+    setIsExporting(true);
+    try {
+      const response = await authAPI.exportAccount();
+      const blob = response.data;
+      const exportUrl = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = exportUrl;
+      anchor.download = `nova-ai-account-export-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(exportUrl);
+      toast.success("Account export downloaded.");
+    } catch (error) {
+      toast.error(error?.response?.data?.detail || "Could not export your account data right now.");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const handleRevokeSession = async (session) => {
     if (!session?.id) {
       return;
@@ -408,6 +430,23 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
                 title="Log out"
               >
                 Log out
+              </button>
+            </div>
+
+            <div className="settings-row">
+              <div className="settings-copy">
+                <strong>Download data</strong>
+                <span>Export your chats, uploads, learning progress, and session history.</span>
+              </div>
+              <button
+                className="settings-chip"
+                type="button"
+                onClick={handleExportAccount}
+                disabled={isExporting}
+                aria-label="Download account export"
+                title="Download account export"
+              >
+                {isExporting ? "Exporting..." : "Download"}
               </button>
             </div>
           </section>

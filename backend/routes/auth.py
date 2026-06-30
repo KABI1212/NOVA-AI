@@ -1,9 +1,11 @@
 import logging
 import re
+from fastapi.encoders import jsonable_encoder
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, field_validator
 from starlette.concurrency import run_in_threadpool
 try:
@@ -28,6 +30,7 @@ from models.document import Document
 from models.file_record import FileRecord
 from models.learning import LearningProgress
 from models.user import User
+from services.conversation_store import serialize_conversation_messages
 from services.document_service import document_service
 from services.email_service import EmailDeliveryError, email_service
 from services.retriever import retriever_service
@@ -285,6 +288,74 @@ def _serialize_user(user: User) -> dict:
         "email": user.email,
         "username": user.username,
         "full_name": user.full_name,
+    }
+
+
+def _serialize_conversation_export(db: Session, conversation: Conversation) -> dict[str, Any]:
+    return {
+        "id": conversation.id,
+        "title": conversation.title,
+        "model": conversation.model,
+        "is_shared": conversation.is_shared,
+        "share_id": conversation.share_id,
+        "share_title": conversation.share_title,
+        "shared_at": conversation.shared_at,
+        "view_count": conversation.view_count,
+        "context_summary": conversation.context_summary,
+        "context_summary_message_count": conversation.context_summary_message_count,
+        "context_summary_updated_at": conversation.context_summary_updated_at,
+        "created_at": conversation.created_at,
+        "updated_at": conversation.updated_at,
+        "messages": serialize_conversation_messages(db, conversation),
+    }
+
+
+def _serialize_document_export(document: Document) -> dict[str, Any]:
+    return {
+        "id": document.id,
+        "filename": document.filename,
+        "file_type": document.file_type,
+        "file_size": document.file_size,
+        "text_content": document.text_content,
+        "summary": document.summary,
+        "is_processed": document.is_processed,
+        "created_at": document.created_at,
+        "updated_at": document.updated_at,
+    }
+
+
+def _serialize_file_export(file_record: FileRecord) -> dict[str, Any]:
+    return {
+        "id": file_record.id,
+        "filename": file_record.filename,
+        "original_name": file_record.original_name,
+        "mime_type": file_record.mime_type,
+        "extension": file_record.extension,
+        "size": file_record.size,
+        "conversation_id": file_record.conversation_id,
+        "session_id": file_record.session_id,
+        "extracted_text": file_record.extracted_text,
+        "metadata": file_record.metadata if isinstance(file_record.metadata, dict) else None,
+        "chunk_count": file_record.chunk_count,
+        "status": file_record.status,
+        "preview_text": file_record.preview_text,
+        "error": file_record.error,
+        "created_at": file_record.created_at,
+        "updated_at": file_record.updated_at,
+    }
+
+
+def _serialize_learning_export(learning: LearningProgress) -> dict[str, Any]:
+    return {
+        "id": learning.id,
+        "topic": learning.topic,
+        "roadmap": learning.roadmap if isinstance(learning.roadmap, dict) else {},
+        "completed_items": learning.completed_items if isinstance(learning.completed_items, list) else [],
+        "current_level": learning.current_level,
+        "notes": learning.notes,
+        "is_active": learning.is_active,
+        "created_at": learning.created_at,
+        "updated_at": learning.updated_at,
     }
 
 
@@ -1487,6 +1558,102 @@ async def revoke_session(
 
     _audit_auth_event("session_revoked", user=current_user, session=session, request=request, reason="user_requested")
     return {"message": "Session revoked successfully."}
+
+
+@router.get("/export")
+async def export_account_data(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Export the current user's account data as a JSON download."""
+
+    conversations = (
+        db.query(Conversation)
+        .filter(Conversation.user_id == current_user.id)
+        .order_by(Conversation.updated_at.desc())
+        .all()
+    )
+    documents = (
+        db.query(Document)
+        .filter(Document.user_id == current_user.id)
+        .order_by(Document.created_at.desc())
+        .all()
+    )
+    files = (
+        db.query(FileRecord)
+        .filter(FileRecord.user_id == current_user.id)
+        .order_by(FileRecord.created_at.desc())
+        .all()
+    )
+    learning_items = (
+        db.query(LearningProgress)
+        .filter(LearningProgress.user_id == current_user.id)
+        .order_by(LearningProgress.updated_at.desc())
+        .all()
+    )
+    chat_sessions = (
+        db.query(ChatSession)
+        .filter(ChatSession.user_id == current_user.id)
+        .order_by(ChatSession.updated_at.desc())
+        .all()
+    )
+    auth_sessions = (
+        db.query(AuthSession)
+        .filter(AuthSession.user_id == current_user.id)
+        .order_by(AuthSession.updated_at.desc())
+        .all()
+    )
+
+    payload = {
+        "exported_at": utcnow_naive(),
+        "app": {
+            "name": settings.APP_NAME,
+            "version": settings.APP_VERSION,
+        },
+        "user": _serialize_user(current_user),
+        "sessions": [
+            _serialize_auth_session(session, current_session_id=None) for session in auth_sessions
+        ],
+        "chat_sessions": [
+            {
+                "id": session.id,
+                "conversation_id": session.conversation_id,
+                "file_ids": list(session.file_ids or []),
+                "last_active_at": session.last_active_at,
+                "created_at": session.created_at,
+                "updated_at": session.updated_at,
+            }
+            for session in chat_sessions
+        ],
+        "conversations": [
+            _serialize_conversation_export(db, conversation) for conversation in conversations
+        ],
+        "documents": [_serialize_document_export(document) for document in documents],
+        "files": [_serialize_file_export(file_record) for file_record in files],
+        "learning_progress": [
+            _serialize_learning_export(learning) for learning in learning_items
+        ],
+        "counts": {
+            "sessions": len(auth_sessions),
+            "chat_sessions": len(chat_sessions),
+            "conversations": len(conversations),
+            "documents": len(documents),
+            "files": len(files),
+            "learning_progress": len(learning_items),
+        },
+    }
+
+    filename = (
+        f"nova-ai-account-export-{(current_user.email or 'user').replace('@', '_at_')}-"
+        f"{utcnow_naive().strftime('%Y%m%d-%H%M%S')}.json"
+    )
+    return JSONResponse(
+        content=jsonable_encoder(payload),
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.post("/email-test", response_model=EmailTestResponse)
