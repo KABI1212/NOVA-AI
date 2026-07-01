@@ -24,6 +24,7 @@ except ImportError:
 from config.database import get_db
 from config.settings import settings
 from models.conversation import Conversation
+from models.auth_audit import AuthAuditEvent
 from models.auth_session import AuthSession
 from models.chat_session import ChatSession
 from models.document import Document
@@ -240,8 +241,23 @@ class AuthSessionSummary(BaseModel):
     is_current: bool = False
 
 
+class AuthAuditEventSummary(BaseModel):
+    id: int
+    user_id: int
+    session_id: int | None
+    event: str
+    ip_address: str
+    user_agent: str
+    reason: str
+    created_at: datetime
+
+
 class AuthSessionListResponse(BaseModel):
     sessions: list[AuthSessionSummary]
+
+
+class AuthAuditEventListResponse(BaseModel):
+    events: list[AuthAuditEventSummary]
 
 
 class RevokeSessionResponse(BaseModel):
@@ -409,7 +425,28 @@ def _clear_session_cookies(response: Response) -> None:
     response.delete_cookie(settings.CSRF_COOKIE_NAME, path="/")
 
 
-def _audit_auth_event(event: str, *, user: User | None = None, session: AuthSession | None = None, request: Request | None = None, reason: str = "") -> None:
+def _serialize_auth_audit_event(event: AuthAuditEvent) -> dict[str, Any]:
+    return {
+        "id": event.id,
+        "user_id": event.user_id,
+        "session_id": event.session_id,
+        "event": event.event,
+        "ip_address": event.ip_address,
+        "user_agent": event.user_agent,
+        "reason": event.reason,
+        "created_at": event.created_at,
+    }
+
+
+def _audit_auth_event(
+    event: str,
+    *,
+    user: User | None = None,
+    session: AuthSession | None = None,
+    request: Request | None = None,
+    reason: str = "",
+    db: Session | None = None,
+) -> None:
     logger.info(
         "auth_audit event=%s user_id=%s session_id=%s ip=%s reason=%s",
         event,
@@ -418,6 +455,23 @@ def _audit_auth_event(event: str, *, user: User | None = None, session: AuthSess
         _client_ip(request) if request else "",
         reason,
     )
+    if db is None:
+        return
+
+    try:
+        audit_event = AuthAuditEvent(
+            user_id=getattr(user, "id", None),
+            session_id=getattr(session, "id", None),
+            event=event,
+            ip_address=_client_ip(request) if request else "",
+            user_agent=(request.headers.get("user-agent", "")[:512] if request else ""),
+            reason=reason,
+            created_at=utcnow_naive(),
+        )
+        db.add(audit_event)
+        db.commit()
+    except Exception as exc:  # pragma: no cover - audit persistence should never block auth flow
+        logger.warning("auth_audit persistence_failed event=%s error=%s", event, exc)
 
 
 async def _enforce_auth_rate_limit(scope: str, request: Request, *, limit: int) -> None:
@@ -459,7 +513,7 @@ def _create_auth_session(user: User, db: Session, request: Request, response: Re
     db.commit()
     db.refresh(auth_session)
     _set_session_cookies(response, refresh_token, csrf_token, expires_at)
-    _audit_auth_event("session_created", user=user, session=auth_session, request=request)
+    _audit_auth_event("session_created", user=user, session=auth_session, request=request, db=db)
     return auth_session
 
 
@@ -594,6 +648,7 @@ def _handle_refresh_token_reuse(
         session=auth_session,
         request=request,
         reason=f"revoked_active_sessions={revoked_count}",
+        db=db,
     )
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -641,7 +696,7 @@ def _rotate_refresh_session(
     db.add(new_session)
     db.commit()
     db.refresh(new_session)
-    _audit_auth_event("session_rotated", user=user, session=new_session, request=request)
+    _audit_auth_event("session_rotated", user=user, session=new_session, request=request, db=db)
     return new_session
 
 
@@ -1499,13 +1554,13 @@ async def logout_session(
                 session.revoked_reason = "logout_all_devices"
                 db.add(session)
         db.commit()
-        _audit_auth_event("logout_all_devices", user=user, session=auth_session, request=request)
+        _audit_auth_event("logout_all_devices", user=user, session=auth_session, request=request, db=db)
     elif auth_session.revoked_at is None:
         auth_session.revoked_at = now
         auth_session.revoked_reason = "logout"
         db.add(auth_session)
         db.commit()
-        _audit_auth_event("logout", user=user, session=auth_session, request=request)
+        _audit_auth_event("logout", user=user, session=auth_session, request=request, db=db)
 
     _clear_session_cookies(response)
     return {"message": "Logged out successfully."}
@@ -1556,8 +1611,37 @@ async def revoke_session(
     if current_refresh_session is not None and current_refresh_session.id == session.id:
         _clear_session_cookies(response)
 
-    _audit_auth_event("session_revoked", user=current_user, session=session, request=request, reason="user_requested")
+    _audit_auth_event(
+        "session_revoked",
+        user=current_user,
+        session=session,
+        request=request,
+        reason="user_requested",
+        db=db,
+    )
     return {"message": "Session revoked successfully."}
+
+
+@router.get("/audit", response_model=AuthAuditEventListResponse)
+async def list_auth_audit_events(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    limit: int = 20,
+):
+    """Return the most recent authentication events for the current user."""
+
+    safe_limit = max(1, min(int(limit or 20), 100))
+    events = (
+        db.query(AuthAuditEvent)
+        .filter(AuthAuditEvent.user_id == current_user.id)
+        .order_by(AuthAuditEvent.created_at.desc())
+        .all()
+    )
+    return {
+        "events": [
+            _serialize_auth_audit_event(event) for event in events[:safe_limit]
+        ]
+    }
 
 
 @router.get("/export")

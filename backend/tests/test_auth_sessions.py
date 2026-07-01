@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException, Response
 
 import routes.auth as auth_module
+from models.auth_audit import AuthAuditEvent
 from models.auth_session import AuthSession
 from models.chat import ChatMessage
 from models.chat_session import ChatSession
@@ -77,6 +78,8 @@ class _FakeSession:
             return _FakeQuery(self.users)
         if model is AuthSession:
             return _FakeQuery(self.sessions)
+        if model is AuthAuditEvent:
+            return _FakeQuery(getattr(self, "audit_events", []))
         if model is Conversation:
             return _FakeQuery(getattr(self, "conversations", []))
         if model is ChatSession:
@@ -100,6 +103,11 @@ class _FakeSession:
                 self.next_session_id += 1
             if obj not in self.sessions:
                 self.sessions.append(obj)
+        if isinstance(obj, AuthAuditEvent):
+            audit_events = getattr(self, "audit_events", [])
+            if obj not in audit_events:
+                audit_events.append(obj)
+            self.audit_events = audit_events
         if isinstance(obj, Conversation):
             conversations = getattr(self, "conversations", [])
             if obj not in conversations:
@@ -310,6 +318,45 @@ def test_list_sessions_marks_current_and_expires_stale_sessions() -> None:
         assert current["status"] == "active"
         assert stale["status"] == "expired"
         assert stale["revoked_reason"] == "expired"
+
+    asyncio.run(scenario())
+
+
+def test_list_auth_audit_events_returns_recent_activity() -> None:
+    user = User(
+        id=1,
+        email="session.user@example.com",
+        username="session-user",
+        hashed_password=auth_module.get_password_hash("Sup3rSecret!"),
+        is_active=True,
+        is_verified=True,
+    )
+    first_event = AuthAuditEvent(
+        id=1,
+        user_id=user.id,
+        event="logout",
+        ip_address="127.0.0.1",
+        user_agent="pytest",
+        reason="manual",
+        created_at=auth_module.utcnow_naive(),
+    )
+    second_event = AuthAuditEvent(
+        id=2,
+        user_id=user.id,
+        event="session_created",
+        ip_address="127.0.0.1",
+        user_agent="pytest",
+        reason="",
+        created_at=auth_module.utcnow_naive(),
+    )
+    db = _FakeSession([user], [])
+    db.audit_events = [first_event, second_event]
+
+    async def scenario() -> None:
+        payload = await auth_module.list_auth_audit_events(current_user=user, db=db, limit=1)
+
+        assert len(payload["events"]) == 1
+        assert payload["events"][0]["event"] in {"logout", "session_created"}
 
     asyncio.run(scenario())
 

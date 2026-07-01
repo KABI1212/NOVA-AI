@@ -23,6 +23,15 @@ const SESSION_TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
   timeStyle: "short",
 });
 
+const AUTH_EVENT_LABELS = {
+  session_created: "Session created",
+  session_rotated: "Session rotated",
+  session_revoked: "Session revoked",
+  logout: "Logged out",
+  logout_all_devices: "Logged out everywhere",
+  refresh_token_reuse_detected: "Reuse detected",
+};
+
 function formatSessionTime(value) {
   if (!value) {
     return "Unknown";
@@ -34,6 +43,14 @@ function formatSessionTime(value) {
   }
 
   return SESSION_TIME_FORMAT.format(parsed);
+}
+
+function formatAuthEventLabel(event) {
+  if (!event) {
+    return "Activity";
+  }
+
+  return AUTH_EVENT_LABELS[event] || event.replace(/_/g, " ");
 }
 
 function Settings({ open = false, onClose, onNewChat, onExportChat, canExportChat = false }) {
@@ -64,6 +81,8 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
   const [isExporting, setIsExporting] = useState(false);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [sessionItems, setSessionItems] = useState([]);
+  const [isLoadingAudit, setIsLoadingAudit] = useState(false);
+  const [auditItems, setAuditItems] = useState([]);
   const [revokingSessionId, setRevokingSessionId] = useState(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
 
@@ -119,6 +138,36 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
       .finally(() => {
         if (isActive) {
           setIsLoadingSessions(false);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let isActive = true;
+    setIsLoadingAudit(true);
+    authAPI.listAuthEvents({ limit: 8 })
+      .then((response) => {
+        if (!isActive) {
+          return;
+        }
+        setAuditItems(Array.isArray(response.data?.events) ? response.data.events : []);
+      })
+      .catch(() => {
+        if (isActive) {
+          setAuditItems([]);
+        }
+      })
+      .finally(() => {
+        if (isActive) {
+          setIsLoadingAudit(false);
         }
       });
 
@@ -645,6 +694,39 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
                 })
               ) : (
                 <div className="settings-empty">No active sessions found.</div>
+              )}
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <div className="settings-section-head">
+              <div>
+                <h4>Security activity</h4>
+                <span>Recent sign-ins, logouts, and session changes are kept for your review.</span>
+              </div>
+            </div>
+
+            <div className="settings-session-list">
+              {isLoadingAudit ? (
+                <div className="settings-empty">Loading activity...</div>
+              ) : auditItems.length ? (
+                auditItems.map((item) => (
+                  <div key={item.id} className="settings-session-row">
+                    <div className="settings-copy">
+                      <strong>{formatAuthEventLabel(item.event)}</strong>
+                      <span>
+                        {item.ip_address || "Unknown IP"} - {formatSessionTime(item.created_at)}
+                      </span>
+                      <span>
+                        {item.user_agent || "Unknown device"}
+                        {item.reason ? ` - ${item.reason}` : ""}
+                      </span>
+                    </div>
+                    <span className="settings-badge">{item.event || "event"}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="settings-empty">No recent security activity found.</div>
               )}
             </div>
           </section>
