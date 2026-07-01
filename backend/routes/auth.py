@@ -10,16 +10,18 @@ from pydantic import BaseModel, EmailStr, field_validator
 from starlette.concurrency import run_in_threadpool
 try:
     from sqlalchemy.exc import IntegrityError
-    from sqlalchemy import func
 except ImportError:
     class IntegrityError(Exception):
         """Fallback when SQLAlchemy is not installed."""
-    func = None
 
 try:
     from sqlalchemy.orm import Session
 except ImportError:
     Session = Any
+
+# In-memory case-insensitive email lookup helper
+def _normalize_email(email: str) -> str:
+    return (email or "").strip().lower()
 
 from config.database import get_db
 from config.settings import settings
@@ -1037,11 +1039,18 @@ async def _issue_password_reset_otp(user: User, db: Session) -> dict:
     return response
 
 
+def _find_users_by_email(db: MongoSession, email: str) -> list[User]:
+    """Find users by email using case-insensitive search via MongoSession."""
+    collection = db.collection_for(User)
+    # MongoDB stores email as-is; search both lowercased and original
+    normalized = (email or "").strip().lower()
+    payloads = list(collection.find({"email": {"$regex": f"^{re.escape(normalized)}$", "$options": "i"}}))
+    return [User.from_mongo(p, db) for p in payloads]
+
+
 def _load_user_by_email(email: str, db: Session) -> User | None:
-    normalized_email = (email or "").strip().lower()
-    if func is None:
-        return db.query(User).filter(User.email == normalized_email).first()
-    return db.query(User).filter(func.lower(User.email) == normalized_email).first()  # FIX: case-sensitive login bug
+    users = _find_users_by_email(db, email)
+    return users[0] if users else None
 
 
 def _load_user_by_login_identifier(
@@ -1053,11 +1062,17 @@ def _load_user_by_login_identifier(
     normalized = (normalized_identifier or "").strip().lower()
     if not raw_identifier:
         return None
-    email_filter = func.lower(User.email) == normalized if func is not None else User.email == normalized  # FIX: case-sensitive login bug
-    return db.query(User).filter(
-        email_filter
-        | (User.username == raw_identifier)
-    ).first()
+    # Search by email (case-insensitive) or username (exact)
+    collection = db.collection_for(User)
+    payload = collection.find_one({
+        "$or": [
+            {"email": {"$regex": f"^{re.escape(normalized)}$", "$options": "i"}},
+            {"username": raw_identifier}
+        ]
+    })
+    if payload is None:
+        return None
+    return User.from_mongo(payload, db)
 
 
 def _validate_pending_login(

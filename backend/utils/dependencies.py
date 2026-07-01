@@ -2,12 +2,8 @@ from typing import Any, Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-try:
-    from sqlalchemy.orm import Session
-except ImportError:
-    Session = Any
 
-from config.database import get_db, get_db_optional
+from config.database import MongoSession, get_db, get_db_optional
 from models.user import User
 from .auth import decode_access_token
 
@@ -23,9 +19,18 @@ def _unauthorized(detail: str = "Invalid authentication credentials") -> HTTPExc
     )
 
 
+def _find_user_by_id(db: MongoSession, user_id: int) -> User | None:
+    """Find a user by id using the MongoSession query interface."""
+    collection = db.collection_for(User)
+    payload = collection.find_one({"id": user_id})
+    if payload is None:
+        return None
+    return User.from_mongo(payload, db)
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db),
+    db: MongoSession = Depends(get_db),
 ) -> User:
     """Get the current authenticated user."""
     payload = decode_access_token(credentials.credentials)
@@ -41,7 +46,7 @@ async def get_current_user(
     except (TypeError, ValueError) as exc:
         raise _unauthorized() from exc
 
-    user = db.query(User).filter(User.id == user_id).first()
+    user = _find_user_by_id(db, user_id)
     if user is None:
         raise _unauthorized("User not found")
 
@@ -56,7 +61,7 @@ async def get_current_user(
 
 async def get_current_user_optional(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
-    db: Optional[Session] = Depends(get_db_optional),
+    db: Optional[MongoSession] = Depends(get_db_optional),
 ) -> Optional[User]:
     """Get the current authenticated user if provided, otherwise return None."""
     if credentials is None:
@@ -78,7 +83,7 @@ async def get_current_user_optional(
     except (TypeError, ValueError) as exc:
         raise _unauthorized() from exc
 
-    user = db.query(User).filter(User.id == user_id).first()
+    user = _find_user_by_id(db, user_id)
     if user is None:
         raise _unauthorized("User not found")
 
