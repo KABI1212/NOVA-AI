@@ -12,27 +12,73 @@ import { stopSpeechPlayback } from '../utils/speech';
 const TABS = [
   {
     id: 'compose',
+    toolId: 'multi_ai_compose',
     label: 'Multi-AI Compose',
     icon: Sparkles,
     description: 'Blend multiple model outputs into one final answer.',
   },
   {
     id: 'agent',
+    toolId: 'live_research_agent',
     label: 'Live Research Agent',
     icon: Globe2,
     description: 'Use the web-backed agent flow with source collection.',
   },
 ];
 
+const TOOL_ICON_MAP = {
+  multi_ai_compose: Sparkles,
+  live_research_agent: Globe2,
+};
+
+const FALLBACK_TOOL_BY_TAB = Object.fromEntries(TABS.map((tab) => [tab.id, tab.toolId]));
+
 function OrchestratorStudio() {
   const [activeTab, setActiveTab] = useState('compose');
   const [question, setQuestion] = useState('');
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [tools, setTools] = useState([]);
 
   useEffect(() => () => {
     stopSpeechPlayback();
   }, []);
+
+  useEffect(() => {
+    let isActive = true;
+    orchestratorAPI.tools()
+      .then((response) => {
+        if (!isActive) {
+          return;
+        }
+        const registryTools = Array.isArray(response.data?.tools) ? response.data.tools : [];
+        setTools(registryTools);
+        if (registryTools.length) {
+          setActiveTab((current) =>
+            registryTools.some((tool) => tool.id === current) ? current : registryTools[0].id
+          );
+        }
+      })
+      .catch(() => {
+        if (isActive) {
+          setTools([]);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  const tabs = tools.length
+    ? tools.map((tool) => ({
+        id: tool.id,
+        toolId: tool.id,
+        label: tool.name || tool.id,
+        icon: TOOL_ICON_MAP[tool.id] || Bot,
+        description: tool.description || 'Run a registered NOVA AI tool.',
+      }))
+    : TABS;
 
   const handleSubmit = async () => {
     const trimmed = question.trim();
@@ -43,8 +89,10 @@ function OrchestratorStudio() {
     setResult(null);
 
     try {
-      const response =
-        activeTab === 'agent'
+      const activeToolId = tabs.find((tab) => tab.id === activeTab)?.toolId || FALLBACK_TOOL_BY_TAB[activeTab];
+      const response = activeToolId
+        ? await orchestratorAPI.runTool(activeToolId, { question: trimmed })
+        : activeTab === 'agent'
           ? await orchestratorAPI.agent({ question: trimmed })
           : await orchestratorAPI.compose({ question: trimmed });
 
@@ -66,7 +114,7 @@ function OrchestratorStudio() {
           news: Array.isArray(data.news) ? data.news : [],
         },
       });
-      toast.success(activeTab === 'agent' ? 'Agent answer ready.' : 'Orchestrated answer ready.');
+      toast.success(data.tool?.name ? `${data.tool.name} ready.` : 'Workflow ready.');
     } catch (error) {
       const detail = formatApiError(error, 'Could not run this workflow right now.');
       setResult({ role: 'assistant', content: detail });
@@ -94,7 +142,7 @@ function OrchestratorStudio() {
             </div>
 
             <div className="grid grid-cols-2 gap-3 mb-4">
-              {TABS.map((tab) => {
+              {tabs.map((tab) => {
                 const Icon = tab.icon;
                 const isActive = activeTab === tab.id;
 
@@ -122,7 +170,7 @@ function OrchestratorStudio() {
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
               placeholder={
-                activeTab === 'agent'
+                activeTab === 'agent' || activeTab === 'live_research_agent'
                   ? 'Ask for a web-backed answer with source collection...'
                   : 'Ask for a combined answer across multiple AI systems...'
               }

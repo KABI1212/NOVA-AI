@@ -448,6 +448,8 @@ export const explainAPI = {
 export const orchestratorAPI = {
   compose: (data) => api.post('/orchestrator/compose', data, { timeout: 120000 }),
   agent: (data) => api.post('/orchestrator/agent', data, { timeout: 120000 }),
+  tools: () => api.get('/orchestrator/tools'),
+  runTool: (toolId, input) => api.post(`/orchestrator/tools/${toolId}/run`, { input }, { timeout: 120000 }),
 };
 
 export const imageAPI = {
