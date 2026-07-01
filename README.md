@@ -2,6 +2,9 @@
 
 NOVA AI is a full-stack AI workspace with chat, image generation, document analysis, code help, search, sharing, learning tools, and email-OTP-protected login.
 
+🔗 **Repository:** [github.com/KABI1212/NOVA-AI](https://github.com/KABI1212/NOVA-AI)
+🚀 **Live Demo:** [nova-ai-virid-three.vercel.app](https://nova-ai-virid-three.vercel.app/)
+
 ## Features
 
 - Multi-provider chat with OpenAI, Gemini, Anthropic, DeepSeek, Groq, OpenRouter, and Ollama support
@@ -14,10 +17,11 @@ NOVA AI is a full-stack AI workspace with chat, image generation, document analy
 
 ## Stack
 
-- Backend: FastAPI, MongoDB, Redis, httpx, provider SDKs
-- Frontend: React 18, Vite, Zustand, react-markdown
-- Auth: JWT + bcrypt + email OTP verification
-- Retrieval: lexical fallback by default, optional embedding-assisted retrieval when OpenAI embeddings are configured
+- **Backend:** FastAPI, MongoDB, Redis, httpx, provider SDKs
+- **Frontend:** React 18, Vite, Zustand, react-markdown
+- **Auth:** JWT + bcrypt + email OTP verification
+- **Retrieval:** lexical fallback by default, optional embedding-assisted retrieval when OpenAI embeddings are configured
+- **Deployment:** Vercel (frontend), see `/backend` for API deployment configuration
 
 ## Local Setup
 
@@ -29,7 +33,14 @@ NOVA AI is a full-stack AI workspace with chat, image generation, document analy
 - Redis 7+ recommended
 - At least one AI provider key
 
-### 1. Start MongoDB and Redis
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/KABI1212/NOVA-AI.git
+cd NOVA-AI
+```
+
+### 2. Start MongoDB and Redis
 
 ```bash
 docker compose up mongo redis -d
@@ -37,7 +48,7 @@ docker compose up mongo redis -d
 
 If you already run MongoDB and Redis locally, you can keep using those instead.
 
-### 2. Backend
+### 3. Backend
 
 ```bash
 cd backend
@@ -84,7 +95,7 @@ Or from the repo root, let the launcher pick the first working backend environme
 
 Backend URL: `http://localhost:8000`
 
-### 3. Frontend
+### 4. Frontend
 
 ```bash
 cd frontend
@@ -200,3 +211,8 @@ Notes:
 
 - I want to test inbox delivery directly
   Sign in, open `/docs`, and call `POST /api/auth/email-test` with your bearer token. It sends a test message to your account email.
+
+## Links
+
+- **Live App:** https://nova-ai-virid-three.vercel.app/
+- **Source Code:** https://github.com/KABI1212/NOVA-AI
