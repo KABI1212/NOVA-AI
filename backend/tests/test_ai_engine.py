@@ -37,6 +37,20 @@ def test_build_messages_adds_clarity_and_presentation_instructions_for_chat_mode
     )
 
 
+def test_build_messages_includes_custom_system_prompt() -> None:
+    messages = build_messages(
+        [{"role": "user", "content": "Plan my study session."}],
+        "chat",
+        custom_system_prompt="Use short sections and end with one concrete next step.",
+    )
+
+    system_messages = [
+        message["content"] for message in messages if message.get("role") == "system"
+    ]
+
+    assert "Use short sections and end with one concrete next step." in system_messages
+
+
 def test_build_messages_skips_clarity_instruction_for_image_mode() -> None:
     messages = build_messages(
         [{"role": "user", "content": "Create an image of a secure network"}],

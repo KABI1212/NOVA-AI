@@ -133,6 +133,7 @@ export const useThemeStore = create((set) => ({
 const BROWSER_VOICE_STORAGE_KEY = 'nova_browser_voice';
 const TTS_VOICE_STORAGE_KEY = 'nova_tts_voice';
 const MANUAL_PLAYBACK_STORAGE_KEY = 'nova_manual_playback';
+const CUSTOM_SYSTEM_PROMPT_STORAGE_KEY = 'nova_custom_system_prompt';
 
 // Voice Store
 export const useVoiceStore = create((set) => ({
@@ -157,5 +158,15 @@ export const useVoiceStore = create((set) => ({
       const manualPlayback = !state.manualPlayback;
       setStoredValue(MANUAL_PLAYBACK_STORAGE_KEY, String(manualPlayback));
       return { manualPlayback };
-    }),
+  }),
+}));
+
+// Prompt Store
+export const usePromptStore = create((set) => ({
+  customSystemPrompt: getStoredValue(CUSTOM_SYSTEM_PROMPT_STORAGE_KEY, '') || '',
+  setCustomSystemPrompt: (customSystemPrompt) => {
+    const nextPrompt = String(customSystemPrompt || '').trim();
+    setStoredValue(CUSTOM_SYSTEM_PROMPT_STORAGE_KEY, nextPrompt);
+    set({ customSystemPrompt: nextPrompt });
+  },
 }));

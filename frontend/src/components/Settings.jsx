@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 
 import { authAPI } from "../services/api";
-import { useAuthStore, useThemeStore, useVoiceStore } from "../utils/store";
+import { useAuthStore, usePromptStore, useThemeStore, useVoiceStore } from "../utils/store";
 import {
   BROWSER_VOICE_AUTO,
   DEFAULT_TTS_VOICE,
@@ -66,6 +66,8 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
   const setTtsVoice = useVoiceStore((state) => state.setTtsVoice);
   const manualPlayback = useVoiceStore((state) => state.manualPlayback);
   const setManualPlayback = useVoiceStore((state) => state.setManualPlayback);
+  const customSystemPrompt = usePromptStore((state) => state.customSystemPrompt);
+  const setCustomSystemPrompt = usePromptStore((state) => state.setCustomSystemPrompt);
 
   const [formData, setFormData] = useState({
     full_name: user?.full_name || "",
@@ -636,6 +638,45 @@ function Settings({ open = false, onClose, onNewChat, onExportChat, canExportCha
                 title="Open shared chats"
               >
                 Shared chats
+              </button>
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <div className="settings-section-head">
+              <div>
+                <h4>Assistant behavior</h4>
+                <span>Saved instructions are applied to new chat replies on this device.</span>
+              </div>
+            </div>
+
+            <label className="modal-label" htmlFor="settings-custom-system-prompt">
+              Custom instruction
+            </label>
+            <textarea
+              id="settings-custom-system-prompt"
+              name="custom_system_prompt"
+              className="input-field"
+              value={customSystemPrompt}
+              onChange={(event) => setCustomSystemPrompt(event.target.value)}
+              placeholder="Example: Use concise explanations and include practical next steps."
+              maxLength={2000}
+              rows={4}
+            />
+            <div className="settings-row">
+              <div className="settings-copy">
+                <strong>{customSystemPrompt ? "Instruction enabled" : "Instruction off"}</strong>
+                <span>{customSystemPrompt.length}/2000 characters saved locally.</span>
+              </div>
+              <button
+                className="settings-chip"
+                type="button"
+                onClick={() => setCustomSystemPrompt("")}
+                disabled={!customSystemPrompt}
+                aria-label="Clear custom instruction"
+                title="Clear custom instruction"
+              >
+                Clear
               </button>
             </div>
           </section>

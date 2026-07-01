@@ -56,6 +56,7 @@ class FileChatRequest(BaseModel):
     session_id: str | None = None
     provider: str | None = None
     model: str | None = None
+    custom_system_prompt: str | None = None
     file_ids: list[str] | None = None
     stream: bool = True
 
@@ -67,6 +68,10 @@ def _conversation_title(message: str) -> str:
     if not cleaned:
         return "New Chat"
     return cleaned[:57] + "..." if len(cleaned) > 60 else cleaned
+
+
+def _normalize_custom_system_prompt(value: str | None) -> str:
+    return str(value or "").strip()[:2000]
 
 
 def _create_conversation(db: Session, *, user_id: int, title: str) -> Conversation:
@@ -479,6 +484,9 @@ async def chat_with_files(
     history = history[:-1] if history and history[-1]["role"] == "user" and history[-1]["content"] == message_text else history
 
     messages = [{"role": "system", "content": FILE_FIRST_SYSTEM_PROMPT}]
+    custom_system_prompt = _normalize_custom_system_prompt(request_body.custom_system_prompt)
+    if custom_system_prompt:
+        messages.append({"role": "system", "content": custom_system_prompt})
     if file_context:
         messages.append({"role": "system", "content": f"Uploaded file context:\n{file_context}"})
     messages.extend(history)

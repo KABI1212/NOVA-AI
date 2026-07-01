@@ -420,10 +420,15 @@ def build_messages(
     history: List[Dict[str, str]],
     mode: str,
     instruction_message: str | None = None,
+    custom_system_prompt: str | None = None,
 ) -> List[Dict[str, str]]:
     """Inject system prompt for the selected mode."""
     system_prompt = get_mode_prompt(mode)
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
+
+    custom_prompt = str(custom_system_prompt or "").strip()
+    if custom_prompt:
+        messages.append({"role": "system", "content": custom_prompt})
 
     latest_user_message = str(instruction_message or "").strip() or _latest_user_message(history)
     messages.extend(

@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from contextvars import ContextVar
 import json
 import logging
 import os
@@ -47,6 +48,7 @@ from utils.rate_limit import enforce_chat_rate_limit, enforce_image_rate_limit
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 MAX_HISTORY_MESSAGES = 12
 logger = logging.getLogger(__name__)
+_CUSTOM_SYSTEM_PROMPT_CONTEXT: ContextVar[str | None] = ContextVar("custom_system_prompt", default=None)
 FALLBACK_MESSAGE = LOCAL_FALLBACK_MESSAGE
 SETUP_RETRY_MESSAGE = "That option isn't ready just yet. Want me to try again?"
 ANSWER_SOURCE_AI = "ai"
@@ -217,6 +219,7 @@ class ChatRequest(BaseModel):
     mode: str = "chat"
     provider: Optional[str] = None
     model: Optional[str] = None
+    custom_system_prompt: Optional[str] = None
     document_id: Optional[int] = None
     image_b64: Optional[str] = None
     image_mime_type: Optional[str] = None
@@ -233,6 +236,7 @@ class RegenerateRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     previous_answer: Optional[str] = None
+    custom_system_prompt: Optional[str] = None
     document_id: Optional[int] = None
     generate_answer_image: Optional[bool] = None
     stream: bool = True
@@ -1709,6 +1713,17 @@ def _resolve_provider_and_model(
     return explicit_provider, explicit_model
 
 
+def _normalize_custom_system_prompt(value: Optional[str]) -> Optional[str]:
+    prompt = str(value or "").strip()
+    if not prompt:
+        return None
+    return prompt[:2000]
+
+
+def _current_custom_system_prompt() -> Optional[str]:
+    return _normalize_custom_system_prompt(_CUSTOM_SYSTEM_PROMPT_CONTEXT.get())
+
+
 def _build_ai_messages(
     history: List[dict],
     user_message: str,
@@ -1716,11 +1731,14 @@ def _build_ai_messages(
     doc_context: Optional[str] = None,
     extra_instruction: Optional[str] = None,
     instruction_message: Optional[str] = None,
+    custom_system_prompt: Optional[str] = None,
 ) -> List[dict]:
+    custom_system_prompt = _normalize_custom_system_prompt(custom_system_prompt) or _current_custom_system_prompt()
     ai_messages = build_messages(
         [*history, {"role": "user", "content": user_message}],
         mode,
         instruction_message=instruction_message,
+        custom_system_prompt=custom_system_prompt,
     )
     insert_index = 1
     ai_messages.insert(insert_index, {"role": "system", "content": CHATGPT_STYLE_COMPLETION_INSTRUCTION})
@@ -1770,7 +1788,9 @@ async def _rescue_stream_failure_answer_bundle(
     extra_instruction: Optional[str] = None,
     force_search: bool = False,
     max_tokens: Optional[int] = None,
+    custom_system_prompt: Optional[str] = None,
 ) -> tuple[str, List[dict], str]:
+    custom_system_prompt = _normalize_custom_system_prompt(custom_system_prompt) or _current_custom_system_prompt()
     try:
         return await _best_effort_answer_bundle(
             history,
@@ -1781,6 +1801,7 @@ async def _rescue_stream_failure_answer_bundle(
             extra_instruction=extra_instruction,
             force_search=force_search,
             max_tokens=max_tokens,
+            custom_system_prompt=custom_system_prompt,
         )
     except Exception as exc:
         logger.warning(
@@ -1986,7 +2007,9 @@ async def _retry_stale_answer_with_fresh_sources_bundle(
     doc_context: Optional[str] = None,
     extra_instruction: Optional[str] = None,
     max_tokens: Optional[int] = None,
+    custom_system_prompt: Optional[str] = None,
 ) -> tuple[Optional[str], List[dict]]:
+    custom_system_prompt = _normalize_custom_system_prompt(custom_system_prompt) or _current_custom_system_prompt()
     if not _should_allow_automatic_web_fallback(mode):
         return None, []
 
@@ -2004,6 +2027,7 @@ async def _retry_stale_answer_with_fresh_sources_bundle(
         doc_context=doc_context,
         extra_instruction=_merge_extra_instructions(extra_instruction, _FRESHNESS_RETRY_INSTRUCTION),
         instruction_message=user_message,
+        custom_system_prompt=custom_system_prompt,
     )
 
     try:
@@ -2280,7 +2304,9 @@ async def _best_effort_answer(
     extra_instruction: Optional[str] = None,
     force_search: bool = False,
     max_tokens: Optional[int] = None,
+    custom_system_prompt: Optional[str] = None,
 ) -> str:
+    custom_system_prompt = _normalize_custom_system_prompt(custom_system_prompt) or _current_custom_system_prompt()
     answer, _, _ = await _best_effort_answer_bundle(
         history,
         user_message,
@@ -2291,6 +2317,7 @@ async def _best_effort_answer(
         extra_instruction=extra_instruction,
         force_search=force_search,
         max_tokens=max_tokens,
+        custom_system_prompt=custom_system_prompt,
     )
     return answer
 
@@ -2305,7 +2332,9 @@ async def _best_effort_answer_bundle(
     extra_instruction: Optional[str] = None,
     force_search: bool = False,
     max_tokens: Optional[int] = None,
+    custom_system_prompt: Optional[str] = None,
 ) -> tuple[str, List[dict], str]:
+    custom_system_prompt = _normalize_custom_system_prompt(custom_system_prompt) or _current_custom_system_prompt()
     allow_automatic_web_fallback = _should_allow_automatic_web_fallback(mode)
 
     if mode == "documents":
@@ -2330,6 +2359,7 @@ async def _best_effort_answer_bundle(
             doc_context=doc_context,
             extra_instruction=extra_instruction,
             instruction_message=user_message,
+            custom_system_prompt=custom_system_prompt,
         )
         primary_answer = await _collect_ai_response(
             primary_messages,
@@ -2359,6 +2389,7 @@ async def _best_effort_answer_bundle(
                 doc_context=doc_context,
                 extra_instruction=extra_instruction,
                 max_tokens=resolved_max_tokens,
+                custom_system_prompt=custom_system_prompt,
             )
             if refreshed_answer:
                 return (
@@ -2393,6 +2424,7 @@ async def _best_effort_answer_bundle(
                     doc_context=doc_context,
                     extra_instruction=extra_instruction,
                     instruction_message=user_message,
+                    custom_system_prompt=custom_system_prompt,
                 )
                 retry_answer = await _collect_ai_response(
                     retry_messages,
@@ -2502,7 +2534,9 @@ async def _rescue_stale_compatible_provider_answer_bundle(
     mode: str,
     max_tokens: Optional[int],
     extra_instruction: Optional[str] = None,
+    custom_system_prompt: Optional[str] = None,
 ) -> tuple[str, List[dict]]:
+    custom_system_prompt = _normalize_custom_system_prompt(custom_system_prompt) or _current_custom_system_prompt()
     if not _looks_like_stale_cutoff_answer(draft_answer):
         return draft_answer, []
     if not _should_allow_automatic_web_fallback(mode):
@@ -2517,6 +2551,7 @@ async def _rescue_stale_compatible_provider_answer_bundle(
         extra_instruction=_merge_extra_instructions(extra_instruction, _FRESHNESS_RETRY_INSTRUCTION),
         force_search=True,
         max_tokens=max_tokens,
+        custom_system_prompt=custom_system_prompt,
     )
     if rescued_answer and not _looks_like_stale_cutoff_answer(rescued_answer):
         return rescued_answer, rescued_sources
@@ -2733,6 +2768,8 @@ async def chat(
     fallback_message = FALLBACK_MESSAGE
     generate_prompt_image = bool(request.generate_prompt_image)
     message_text = _normalize_user_message(request.message)
+    custom_system_prompt = _normalize_custom_system_prompt(request.custom_system_prompt)
+    _CUSTOM_SYSTEM_PROMPT_CONTEXT.set(custom_system_prompt)
     image_bytes = _decode_image_b64(request.image_b64)
     has_uploaded_image = bool(image_bytes)
     uploaded_image_preview = _image_data_url(request.image_b64, request.image_mime_type)
@@ -2831,6 +2868,7 @@ async def chat(
             enhanced_message,
             mode,
             instruction_message=message_text,
+            custom_system_prompt=custom_system_prompt,
         )
         provider, model = _resolve_provider_and_model(mode, request.provider, request.model)
         response_max_tokens = _response_max_tokens(message_text, mode)
@@ -2994,6 +3032,7 @@ async def chat(
                     None,
                     None,
                     force_search=force_search,
+                    custom_system_prompt=custom_system_prompt,
                 )
                 prompt_images = await _await_image_task(prompt_image_task)
                 answer_images = []
@@ -3029,6 +3068,7 @@ async def chat(
                 provider,
                 model,
                 force_search=force_search,
+                custom_system_prompt=custom_system_prompt,
             )
             prompt_images = await _await_image_task(prompt_image_task)
             answer_images = []
@@ -3061,7 +3101,12 @@ async def chat(
             return payload
 
         response_max_tokens = _response_max_tokens(message_text, mode)
-        ai_messages = _build_ai_messages([], message_text, mode)
+        ai_messages = _build_ai_messages(
+            [],
+            message_text,
+            mode,
+            custom_system_prompt=custom_system_prompt,
+        )
 
         if request.stream:
             async def generate_public():
@@ -4037,6 +4082,7 @@ async def regenerate(
     mode = (request.mode or "chat").lower()
     provider_key = (request.provider or "").strip().lower()
     fallback_message = FALLBACK_MESSAGE
+    _CUSTOM_SYSTEM_PROMPT_CONTEXT.set(_normalize_custom_system_prompt(request.custom_system_prompt))
 
     conversation = db.query(Conversation).filter(
         Conversation.id == request.conversation_id,

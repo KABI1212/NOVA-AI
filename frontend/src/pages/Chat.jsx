@@ -15,7 +15,7 @@ import FilePreviewModal from "../components/uploads/FilePreviewModal";
 import UploadedFilesPanel from "../components/uploads/UploadedFilesPanel";
 import { chatAPI, fetchApi, filesAPI, imageAPI } from "../services/api";
 import { speakText, speechSupported as browserSpeechSupported, stopSpeechPlayback } from "../utils/speech";
-import { useAuthStore } from "../utils/store";
+import { useAuthStore, usePromptStore } from "../utils/store";
 const REQUEST_TIMEOUT_MS = 1800000;
 const REQUEST_TIMEOUT_MINUTES = Math.round(REQUEST_TIMEOUT_MS / 60000);
 const STREAM_RENDER_INTERVAL_MS = 32;
@@ -561,6 +561,7 @@ function Chat() {
   const [searchParams, setSearchParams] = useSearchParams();
   const logout = useAuthStore((state) => state.logout);
   const user = useAuthStore((state) => state.user);
+  const customSystemPrompt = usePromptStore((state) => state.customSystemPrompt);
   const requestedNav = searchParams.get("nav");
   const requestedPresetId = searchParams.get("preset");
   const initialActiveNav = normalizeChatNav(requestedNav);
@@ -1598,6 +1599,7 @@ function Chat() {
                   edit_from_message_id: editFromMessageId,
                   session_id: getOrCreateSessionId(),
                   file_ids: activeFileIds,
+                  custom_system_prompt: customSystemPrompt,
                   ...selectedProvider,
                 }
               : {
@@ -1606,6 +1608,7 @@ function Chat() {
                   mode: requestMode,
                   conversation_id: currentConversationId,
                   edit_from_message_id: editFromMessageId,
+                  custom_system_prompt: customSystemPrompt,
                   ...selectedProvider,
                   generate_prompt_image: effectiveGeneratePromptImage,
                   generate_answer_image: effectiveGenerateAnswerImage,
@@ -1889,6 +1892,7 @@ function Chat() {
     },
     [
       currentConversationId,
+      customSystemPrompt,
       editingMessageId,
       handleUnauthorized,
       activeNav,
@@ -1966,6 +1970,7 @@ function Chat() {
               session_id: getOrCreateSessionId(),
               file_ids: readyFileIds,
               stream: false,
+              custom_system_prompt: customSystemPrompt,
               ...(selectedModelOption?.provider && selectedModelOption?.model
                 ? {
                     provider: selectedModelOption.provider,
@@ -1978,6 +1983,7 @@ function Chat() {
               mode: requestMode,
               stream: false,
               previous_answer: targetMessage?.content || "",
+              custom_system_prompt: customSystemPrompt,
               ...(selectedModelOption?.provider && selectedModelOption?.model
                 ? {
                     provider: selectedModelOption.provider,
@@ -2057,6 +2063,7 @@ function Chat() {
     },
     [
       currentConversationId,
+      customSystemPrompt,
       handleUnauthorized,
       imageGenerationAvailable,
       isConversationLoading,
