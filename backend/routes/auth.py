@@ -23,7 +23,7 @@ except ImportError:
 def _normalize_email(email: str) -> str:
     return (email or "").strip().lower()
 
-from config.database import get_db
+from config.database import MongoSession, get_db
 from config.settings import settings
 from models.conversation import Conversation
 from models.auth_audit import AuthAuditEvent
