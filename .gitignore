@@ -60,3 +60,5 @@ alembic/versions/*.pyc
 .cache/
 tmp/
 temp/
+.tmp/
+.tmp_test_artifacts/
