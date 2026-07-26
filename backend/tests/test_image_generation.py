@@ -747,3 +747,143 @@ def test_resolve_regenerated_text_keeps_previous_useful_answer_on_fallback() -> 
     )
 
     assert result == "Binary search runs in logarithmic time on sorted input."
+
+
+def test_openrouter_missing_api_key_skips_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "")
+    monkeypatch.setattr(settings, "OPENROUTER_API_KEY", "")
+
+    async def scenario() -> None:
+        images = await ai_service_module._generate_image_with_openrouter("A fantasy landscape")
+        assert images == []
+
+    asyncio.run(scenario())
+
+
+def test_gemini_quota_exhaustion_logs_and_disables_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "GOOGLE_API_KEY", "google-key")
+
+    async def fake_request(*args, **kwargs):
+        raise RuntimeError("RESOURCE_EXHAUSTED: quota exceeded")
+
+    monkeypatch.setattr(ai_service_module, "_request_google_image_generation", fake_request)
+
+    async def scenario() -> None:
+        with pytest.raises(RuntimeError) as exc_info:
+            await ai_service_module._generate_image_with_google("A glowing cube")
+        assert "RESOURCE_EXHAUSTED" in str(exc_info.value)
+        assert ai_service_module._image_provider_temporarily_disabled("google") is True
+
+    asyncio.run(scenario())
+
+
+def test_kie_insufficient_credits_logs_and_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "KIE_API_KEY", "kie-key")
+
+    class FakeResponse:
+        status_code = 402
+
+        def json(self):
+            return {"code": 402, "msg": "KIE image generation failed: Credits insufficient"}
+
+        @property
+        def text(self):
+            return "Credits insufficient"
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(ai_service_module.httpx, "AsyncClient", FakeClient)
+
+    async def scenario() -> None:
+        with pytest.raises(RuntimeError) as exc_info:
+            await ai_service_module._generate_image_with_kie("Cyberpunk city")
+        assert "Credits insufficient" in str(exc_info.value)
+        assert ai_service_module._image_provider_temporarily_disabled("kie") is True
+
+    asyncio.run(scenario())
+
+
+def test_openai_unknown_parameter_style_retries_without_style(monkeypatch: pytest.MonkeyPatch) -> None:
+    import openai
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-fake")
+    calls = []
+
+    class FakeItem:
+        b64_json = "data:image/png;base64,retried-image"
+
+    class FakeData:
+        data = [FakeItem()]
+
+    class FakeImages:
+        async def generate(self, **kwargs):
+            calls.append(kwargs)
+            if "style" in kwargs or "response_format" in kwargs:
+                raise RuntimeError("Unknown parameter: 'style'.")
+            return FakeData()
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            self.images = FakeImages()
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", FakeAsyncOpenAI)
+
+    async def scenario() -> None:
+        images = await ai_service_module._generate_image_with_openai("An astronaut riding a horse")
+        assert images == ["data:image/png;base64,retried-image"]
+        assert len(calls) == 2
+        assert "style" not in calls[1]
+
+    asyncio.run(scenario())
+
+
+def test_all_providers_failing_returns_structured_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "openai-key")
+    monkeypatch.setattr(settings, "GOOGLE_API_KEY", "google-key")
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "")
+
+    async def fake_google(*args, **kwargs):
+        raise RuntimeError("RESOURCE_EXHAUSTED: quota exceeded")
+
+    async def fake_openai(*args, **kwargs):
+        raise RuntimeError("billing_hard_limit_reached")
+
+    monkeypatch.setattr(ai_service_module, "_generate_image_with_google", fake_google)
+    monkeypatch.setattr(ai_service_module, "_generate_image_with_openai", fake_openai)
+
+    async def scenario() -> None:
+        result = await ai_service.generate_image_result("Futuristic train", provider="auto")
+        assert result["success"] is False
+        assert result["message"] == "All image providers failed."
+        assert "google" in result["provider_errors"]
+        assert "openai" in result["provider_errors"]
+        assert result["provider_errors"]["google"] == "quota exhausted"
+        assert result["provider_errors"]["openai"] == "billing hard limit reached"
+
+    asyncio.run(scenario())
+
+
+def test_environment_key_validation_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    main_module = importlib.import_module("main")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    monkeypatch.setenv("GOOGLE_API_KEY", "")
+    monkeypatch.setattr(settings, "OPENROUTER_API_KEY", "")
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "")
+    monkeypatch.setattr(settings, "GOOGLE_API_KEY", "")
+
+    status = main_module.validate_api_environment()
+    assert status["OPENAI_API_KEY"] is True
+    assert status["OPENROUTER_API_KEY"] is False
+    assert status["GEMINI_API_KEY"] is False

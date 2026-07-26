@@ -141,10 +141,30 @@ def _should_serve_dev_frontend() -> bool:
     return settings.DEBUG and not os.getenv("RENDER")
 
 
+def validate_api_environment() -> dict[str, bool]:
+    """Validate AI API keys at startup and log clear warnings for missing variables."""
+    keys_status = {
+        "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY") or getattr(settings, "OPENAI_API_KEY", "")),
+        "OPENROUTER_API_KEY": bool(os.getenv("OPENROUTER_API_KEY") or getattr(settings, "OPENROUTER_API_KEY", "")),
+        "GEMINI_API_KEY": bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or getattr(settings, "GEMINI_API_KEY", "") or getattr(settings, "GOOGLE_API_KEY", "")),
+    }
+    missing_keys = [key for key, present in keys_status.items() if not present]
+    if missing_keys:
+        logger.warning(
+            "Startup Environment Warning: Missing AI API key environment variables: %s. "
+            "Some image or AI providers will be skipped or fall back to alternatives.",
+            ", ".join(missing_keys),
+        )
+    else:
+        logger.info("Environment API key validation passed: All key variables present.")
+    return keys_status
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _configure_warnings()
     _configure_logging()
+    validate_api_environment()
     logger.info("%s v%s starting", settings.APP_NAME, settings.APP_VERSION)
     db_ready = init_db()
     if db_ready:

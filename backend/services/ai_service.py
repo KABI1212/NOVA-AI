@@ -384,6 +384,7 @@ def _should_temporarily_disable_image_provider(provider: str, exc: Exception) ->
         "billing_hard_limit_reached",
         "billing hard limit",
         "insufficient credits",
+        "credits insufficient",
         "not enough credits",
         "requires more credits",
         "resource_exhausted",
@@ -477,11 +478,25 @@ def _deepseek_api_key() -> str:
 
 
 def _openrouter_api_key() -> str:
-    return getattr(settings, "OPENROUTER_API_KEY", "") or ""
+    key = os.getenv("OPENROUTER_API_KEY") or getattr(settings, "OPENROUTER_API_KEY", "") or ""
+    return str(key).strip()
 
 
 def _kie_api_key() -> str:
-    return getattr(settings, "KIE_API_KEY", "") or ""
+    key = os.getenv("KIE_API_KEY") or getattr(settings, "KIE_API_KEY", "") or ""
+    return str(key).strip()
+
+
+def _openrouter_request_headers(api_key: str) -> Dict[str, str]:
+    cleaned_key = str(api_key or "").strip()
+    if not cleaned_key:
+        raise ValueError("Missing OPENROUTER_API_KEY")
+    return {
+        "Authorization": f"Bearer {cleaned_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": getattr(settings, "openrouter_referer", "http://localhost:3000"),
+        "X-Title": getattr(settings, "openrouter_app_name", getattr(settings, "APP_NAME", "NOVA AI")),
+    }
 
 
 def is_quick_answer_request(mode: Optional[str] = None, message: Optional[str] = None) -> bool:
@@ -573,15 +588,6 @@ def _configured_provider_model(provider: str) -> Optional[str]:
     }
     configured = str(mapping.get(provider, "") or "").strip()
     return configured or None
-
-
-def _openrouter_request_headers(api_key: str) -> Dict[str, str]:
-    return {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": getattr(settings, "openrouter_referer", "http://localhost:3000"),
-        "X-Title": getattr(settings, "openrouter_app_name", getattr(settings, "APP_NAME", "NOVA AI")),
-    }
 
 
 def _provider_chain_for_use_case(use_case: Optional[str]) -> List[str]:
@@ -917,6 +923,20 @@ def _build_image_provider_failure(provider_errors: List[tuple[str, Exception]]) 
     return RuntimeError(f"All image providers failed. {'; '.join(details)}")
 
 
+def _get_image_provider_model_name(provider: str) -> str:
+    if provider == "google":
+        models = _google_image_models()
+        return models[0] if models else "imagen-3"
+    if provider == "kie":
+        return "gpt4o-image"
+    if provider == "openrouter":
+        models = _openrouter_image_models()
+        return models[0] if models else "google/gemini-2.5-flash-image"
+    if provider == "openai":
+        return getattr(settings, "OPENAI_IMAGE_MODEL", "dall-e-3") or "dall-e-3"
+    return "unknown"
+
+
 def _inline_data_to_data_url(inline_data) -> Optional[str]:
     if inline_data is None:
         return None
@@ -1210,8 +1230,12 @@ async def _generate_image_with_openai(
         response = await client.images.generate(**request_args)
     except Exception as exc:
         err_str = str(exc)
-        if "response_format" in err_str or "unknown_parameter" in err_str.lower():
+        lowered = err_str.lower()
+        if "unknown parameter" in lowered or "unknown_parameter" in lowered or "response_format" in lowered or "style" in lowered or "quality" in lowered or "unsupported" in lowered:
+            logger.warning("OpenAI API rejected image generation parameter (%s); retrying with sanitized arguments", exc)
             request_args.pop("response_format", None)
+            request_args.pop("style", None)
+            request_args.pop("quality", None)
             response = await client.images.generate(**request_args)
         else:
             raise exc
@@ -1260,6 +1284,10 @@ async def _generate_image_with_google(
                     return images[:requested_images]
             except Exception as exc:
                 last_error = exc
+                err_msg = str(exc).lower()
+                if "resource_exhausted" in err_msg or "quota" in err_msg or "429" in err_msg:
+                    logger.warning("Gemini image generation failed due to quota exhaustion: %s", exc)
+                    _temporarily_disable_image_provider("google", exc)
 
     if last_error is not None:
         raise last_error
@@ -1274,6 +1302,7 @@ async def _generate_image_with_openrouter(
 ) -> List[str]:
     api_key = _openrouter_api_key()
     if not api_key:
+        logger.warning("OpenRouter API key missing or unconfigured; skipping provider")
         return []
 
     requested_images = max(1, min(int(n or 1), 4))
@@ -1405,7 +1434,14 @@ async def _generate_image_with_kie(
             payload = {"msg": response.text}
 
         if response.status_code >= 400 or payload.get("code") != 200:
-            raise RuntimeError(f"KIE image generation failed: {payload.get('msg') or response.text}")
+            msg_text = str(payload.get("msg") or response.text)
+            err_msg = f"KIE image generation failed: {msg_text}"
+            exc = RuntimeError(err_msg)
+            lowered = err_msg.lower()
+            if "insufficient" in lowered or "credit" in lowered or "balance" in lowered or response.status_code == 402:
+                logger.warning("KIE image generation failed due to insufficient credits: %s", exc)
+                _temporarily_disable_image_provider("kie", exc)
+            raise exc
 
         task_id = str((payload.get("data") or {}).get("taskId") or "").strip()
         if not task_id:
@@ -2629,11 +2665,14 @@ class AIService:
         cleaned_prompt = _clean_image_prompt(prompt)
         if not cleaned_prompt:
             return {
+                "success": False,
                 "prompt": "",
                 "revised_prompt": "",
                 "provider": None,
                 "provider_label": None,
                 "images": [],
+                "provider_errors": {},
+                "message": "Prompt cannot be empty.",
             }
 
         candidate_providers = _resolve_image_provider_chain(provider)
@@ -2660,23 +2699,34 @@ class AIService:
         if not resolved_provider:
             logger.info("Image generation skipped because no available image provider is ready")
             return {
+                "success": False,
                 "prompt": cleaned_prompt,
                 "revised_prompt": revised_prompt or cleaned_prompt,
                 "provider": None,
                 "provider_label": None,
                 "images": [],
+                "provider_errors": {},
+                "message": "No available image provider is configured or ready.",
             }
 
         last_error: Optional[Exception] = None
         provider_errors: List[tuple[str, Exception]] = []
 
-        for candidate_provider in candidate_providers:
+        for idx, candidate_provider in enumerate(candidate_providers):
             generation_prompt = _image_generation_prompt_for_provider(
                 revised_prompt or cleaned_prompt,
                 provider=candidate_provider,
                 size=size,
                 quality=quality,
                 style=style,
+            )
+            model_name = _get_image_provider_model_name(candidate_provider)
+            start_time = time.monotonic()
+            logger.info(
+                "Attempting image generation provider=%s model=%s prompt=%s",
+                candidate_provider,
+                model_name,
+                generation_prompt[:180],
             )
             try:
                 if candidate_provider == "google":
@@ -2705,8 +2755,17 @@ class AIService:
                     )
 
                 images = sanitize_image_assets(images, limit=n)
+                duration_s = round(time.monotonic() - start_time, 3)
                 if images:
+                    logger.info(
+                        "Image generation succeeded provider=%s model=%s duration_s=%.3f image_count=%d",
+                        candidate_provider,
+                        model_name,
+                        duration_s,
+                        len(images),
+                    )
                     return {
+                        "success": True,
                         "prompt": cleaned_prompt,
                         "revised_prompt": revised_prompt or cleaned_prompt,
                         "provider": candidate_provider,
@@ -2715,30 +2774,47 @@ class AIService:
                     }
 
                 logger.warning(
-                    "Image API returned no image data provider=%s prompt=%s",
+                    "Image API returned no image data provider=%s model=%s duration_s=%.3f prompt=%s",
                     candidate_provider,
+                    model_name,
+                    duration_s,
                     generation_prompt[:180],
                 )
             except Exception as exc:
+                duration_s = round(time.monotonic() - start_time, 3)
                 last_error = exc
                 provider_errors.append((candidate_provider, exc))
                 _temporarily_disable_image_provider(candidate_provider, exc)
+                fallback_next = candidate_providers[idx + 1] if idx + 1 < len(candidate_providers) else "none"
                 logger.warning(
-                    "Image API failed provider=%s prompt=%s error=%s",
+                    "Image API failed provider=%s model=%s duration_s=%.3f error=%s fallback_next=%s prompt=%s",
                     candidate_provider,
-                    generation_prompt[:180],
+                    model_name,
+                    duration_s,
                     exc,
+                    fallback_next,
+                    generation_prompt[:180],
                 )
 
+        structured_errors = {
+            provider: _summarize_image_provider_error(exc)
+            for provider, exc in provider_errors
+        }
+
         if raise_on_error and last_error is not None:
-            raise _build_image_provider_failure(provider_errors) from last_error
+            failure_exc = _build_image_provider_failure(provider_errors)
+            failure_exc.provider_errors = structured_errors
+            raise failure_exc from last_error
 
         return {
+            "success": False,
             "prompt": cleaned_prompt,
             "revised_prompt": revised_prompt or cleaned_prompt,
             "provider": resolved_provider,
             "provider_label": _IMAGE_PROVIDER_LABELS.get(resolved_provider, resolved_provider.title()) if resolved_provider else None,
             "images": [],
+            "provider_errors": structured_errors,
+            "message": "All image providers failed.",
         }
 
     async def analyze_image(

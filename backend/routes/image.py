@@ -110,9 +110,15 @@ async def _fetch_proxy_image(url: str) -> tuple[bytes, str]:
 def _raise_image_http_error(exc: Exception) -> None:
     error_msg = str(exc or "").strip()
     lowered = error_msg.lower()
+    provider_errors = getattr(exc, "provider_errors", None)
 
     if lowered.startswith("all image providers failed."):
-        raise HTTPException(status_code=503, detail=error_msg)
+        detail_val = (
+            {"message": error_msg, "provider_errors": provider_errors}
+            if provider_errors
+            else error_msg
+        )
+        raise HTTPException(status_code=503, detail=detail_val)
     if "user not found" in lowered or "model not found" in lowered or "no such user" in lowered:
         raise HTTPException(
             status_code=503,
