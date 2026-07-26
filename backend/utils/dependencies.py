@@ -1,3 +1,4 @@
+
 from typing import Any, Optional
 
 from fastapi import Depends, HTTPException, status
@@ -21,11 +22,13 @@ def _unauthorized(detail: str = "Invalid authentication credentials") -> HTTPExc
 
 def _find_user_by_id(db: MongoSession, user_id: int) -> User | None:
     """Find a user by id using the MongoSession query interface."""
-    collection = db.collection_for(User)
-    payload = collection.find_one({"id": user_id})
-    if payload is None:
-        return None
-    return User.from_mongo(payload, db)
+    if hasattr(db, "collection_for"):
+        collection = db.collection_for(User)
+        payload = collection.find_one({"id": user_id})
+        if payload is None:
+            return None
+        return User.from_mongo(payload, db)
+    return db.query(User).filter(User.id == user_id).first()
 
 
 async def get_current_user(

@@ -1041,11 +1041,15 @@ async def _issue_password_reset_otp(user: User, db: Session) -> dict:
 
 def _find_users_by_email(db: MongoSession, email: str) -> list[User]:
     """Find users by email using case-insensitive search via MongoSession."""
-    collection = db.collection_for(User)
-    # MongoDB stores email as-is; search both lowercased and original
     normalized = (email or "").strip().lower()
-    payloads = list(collection.find({"email": {"$regex": f"^{re.escape(normalized)}$", "$options": "i"}}))
-    return [User.from_mongo(p, db) for p in payloads]
+    if not normalized:
+        return []
+    if hasattr(db, "collection_for"):
+        collection = db.collection_for(User)
+        payloads = list(collection.find({"email": {"$regex": f"^{re.escape(normalized)}$", "$options": "i"}}))
+        return [User.from_mongo(p, db) for p in payloads]
+    all_users = db.query(User).all()
+    return [u for u in all_users if getattr(u, "email", "").strip().lower() == normalized]
 
 
 def _load_user_by_email(email: str, db: Session) -> User | None:
@@ -1063,16 +1067,22 @@ def _load_user_by_login_identifier(
     if not raw_identifier:
         return None
     # Search by email (case-insensitive) or username (exact)
-    collection = db.collection_for(User)
-    payload = collection.find_one({
-        "$or": [
-            {"email": {"$regex": f"^{re.escape(normalized)}$", "$options": "i"}},
-            {"username": raw_identifier}
-        ]
-    })
-    if payload is None:
-        return None
-    return User.from_mongo(payload, db)
+    if hasattr(db, "collection_for"):
+        collection = db.collection_for(User)
+        payload = collection.find_one({
+            "$or": [
+                {"email": {"$regex": f"^{re.escape(normalized)}$", "$options": "i"}},
+                {"username": raw_identifier}
+            ]
+        })
+        if payload is None:
+            return None
+        return User.from_mongo(payload, db)
+    all_users = db.query(User).all()
+    for u in all_users:
+        if getattr(u, "email", "").strip().lower() == normalized or getattr(u, "username", "") == raw_identifier:
+            return u
+    return None
 
 
 def _validate_pending_login(

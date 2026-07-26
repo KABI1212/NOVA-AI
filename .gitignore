@@ -62,3 +62,8 @@ tmp/
 temp/
 .tmp/
 .tmp_test_artifacts/
+desktop.ini
+cmdtorun
+NOVA-AI-main/
+backend/venv*/
+frontend/node_modules/

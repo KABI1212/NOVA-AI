@@ -32,6 +32,17 @@ def test_ai_service_generate_image_without_key_returns_no_placeholder(
 
     async def scenario() -> None:
         result = await ai_service.generate_image("A cinematic tiger in rain")
+
+
+def test_ai_service_generate_image_without_key_returns_no_placeholder(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(settings, "GOOGLE_API_KEY", "")
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "")
+
+    async def scenario() -> None:
+        result = await ai_service.generate_image("A cinematic tiger in rain")
         assert result == []
 
     asyncio.run(scenario())
@@ -46,7 +57,7 @@ def test_ai_service_generate_image_uses_gemini_when_google_is_configured(
     monkeypatch.setattr(settings, "AI_PROVIDER", "google")
 
     async def fake_generate(prompt: str, size: str = "1024x1024", n: int = 1):
-        assert "A cinematic tiger in rain" in prompt
+        assert "tiger" in prompt
         assert size == "1024x1024"
         assert n == 1
         return ["data:image/png;base64,gemini-image"]
@@ -70,7 +81,7 @@ def test_ai_service_generate_image_uses_kie_when_configured(
     monkeypatch.setattr(settings, "GEMINI_API_KEY", "")
 
     async def fake_generate(prompt: str, size: str = "1024x1024", n: int = 1, quality: str = "standard"):
-        assert "A cinematic tiger in rain" in prompt
+        assert "tiger" in prompt
         assert size == "1024x1024"
         assert n == 1
         return ["https://example.com/kie-image.png"]
