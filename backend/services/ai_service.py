@@ -1194,7 +1194,7 @@ async def _generate_image_with_openai(
 
     client = AsyncOpenAI(api_key=openai_key, timeout=_image_request_timeout_seconds())
     model_name = getattr(settings, "OPENAI_IMAGE_MODEL", "dall-e-3")
-    request_args = {
+    request_args: Dict[str, Any] = {
         "model": model_name,
         "prompt": cleaned_prompt,
         "size": size,
@@ -1205,14 +1205,26 @@ async def _generate_image_with_openai(
         request_args["quality"] = quality or getattr(settings, "OPENAI_IMAGE_QUALITY", "hd") or "hd"
         if style in {"vivid", "natural"}:
             request_args["style"] = style
-    response = await client.images.generate(**request_args)
-    return [
-        item.b64_json
-        if str(item.b64_json or "").startswith("data:")
-        else f"data:image/png;base64,{item.b64_json}"
-        for item in response.data
-        if getattr(item, "b64_json", None)
-    ]
+
+    try:
+        response = await client.images.generate(**request_args)
+    except Exception as exc:
+        err_str = str(exc)
+        if "response_format" in err_str or "unknown_parameter" in err_str.lower():
+            request_args.pop("response_format", None)
+            response = await client.images.generate(**request_args)
+        else:
+            raise exc
+
+    images: List[str] = []
+    for item in getattr(response, "data", []) or []:
+        b64 = getattr(item, "b64_json", None)
+        url = getattr(item, "url", None)
+        if b64:
+            images.append(b64 if str(b64).startswith("data:") else f"data:image/png;base64,{b64}")
+        elif url:
+            images.append(str(url).strip())
+    return images
 
 
 async def _generate_image_with_google(
