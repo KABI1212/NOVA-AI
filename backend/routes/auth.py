@@ -1,7 +1,7 @@
 import logging
 import re
 from fastapi.encoders import jsonable_encoder
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
@@ -404,7 +404,7 @@ def _set_session_cookies(response: Response, refresh_token: str, csrf_token: str
         settings.REFRESH_TOKEN_COOKIE_NAME,
         refresh_token,
         max_age=max_age,
-        expires=max_age,
+        expires=expires_at.replace(tzinfo=timezone.utc),
         httponly=True,
         secure=_cookie_secure(),
         samesite=_cookie_samesite(),
@@ -414,7 +414,7 @@ def _set_session_cookies(response: Response, refresh_token: str, csrf_token: str
         settings.CSRF_COOKIE_NAME,
         csrf_token,
         max_age=max_age,
-        expires=max_age,
+        expires=expires_at.replace(tzinfo=timezone.utc),
         httponly=False,
         secure=_cookie_secure(),
         samesite=_cookie_samesite(),

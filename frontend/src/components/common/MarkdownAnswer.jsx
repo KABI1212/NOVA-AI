@@ -255,7 +255,8 @@ function MarkdownCodeBlock({ children, fullContent = "", ...props }) {
 function MarkdownAnswer({ content = "", className = "", streaming = false }) {
   const deferredContent = useDeferredValue(content);
   const normalizedContent = streaming ? normalizeStreamingMarkdown(deferredContent) : content;
-  const renderContent = normalizeHeadingSeparators(normalizedContent);
+  const unescapedContent = normalizedContent.replace(/\\([$])/g, '$1');
+  const renderContent = normalizeHeadingSeparators(unescapedContent);
   const rootClassName = `nova-markdown${className ? ` ${className}` : ""}`;
   const Heading = ({ level, className: headingClassName, children }) => {
     const Tag = `h${level}`;

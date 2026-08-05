@@ -1,3 +1,4 @@
+import bcrypt
 import hashlib
 import hmac
 import secrets
@@ -20,6 +21,11 @@ pwd_context = CryptContext(schemes=_SCHEMES, deprecated="auto")
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against a hash"""
+    if hashed_password and hashed_password.startswith(("$2a$", "$2b$", "$2y$")):
+        try:
+            return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
+        except Exception:
+            return False
     return pwd_context.verify(plain_password, hashed_password)
 
 
