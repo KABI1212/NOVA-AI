@@ -1163,10 +1163,43 @@ def _looks_like_image_request(message: str) -> bool:
     return word_count >= 8 and comma_count >= 2 and len(detail_matches) >= 2
 
 
+def _looks_like_math_request(message: str) -> bool:
+    normalized = message.lower().strip()
+    
+    # Standard math terms
+    math_words = {
+        "factorial", "combinatorics", "permutation", "trigonometry", 
+        "calculus", "quadratic", "pythagorean", "logarithm", "algebraic", 
+        "derivative", "integral", "matrix multiplication", "matrices"
+    }
+    if any(word in normalized for word in math_words):
+        return True
+        
+    # Phrases implying math word problems
+    math_phrases = [
+        "find the value of", "find the number of groups", "how many groups of", 
+        "how many different groups", "how many ways can", "probability that", 
+        "what is the sum of", "solve the equation", "calculate the value"
+    ]
+    if any(phrase in normalized for phrase in math_phrases):
+        return True
+        
+    # Standard math pattern (numbers with operators)
+    if any(op in normalized for op in ["+", "-", "*", "/", "=", "^"]):
+        if any(char.isdigit() for char in normalized):
+            if not (len(normalized.split()) > 10 and normalized.count("-") == 1 and not any(op in normalized for op in ["+", "*", "/", "=", "^"])):
+                return True
+                
+    return False
+
+
 def _resolve_effective_mode(requested_mode: Optional[str], message: str) -> str:
     normalized_mode = (requested_mode or "chat").lower()
-    if normalized_mode == "chat" and _looks_like_image_request(message):
-        return "image"
+    if normalized_mode == "chat":
+        if _looks_like_image_request(message):
+            return "image"
+        if _looks_like_math_request(message):
+            return "math"
     return normalized_mode
 
 
