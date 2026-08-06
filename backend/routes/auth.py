@@ -166,7 +166,7 @@ class LoginChallengeResponse(BaseModel):
     masked_email: str
     otp_expires_at: datetime
     resend_available_at: datetime
-    delivery_mode: Literal["email"]
+    delivery_mode: Literal["email", "console"]
     resend_attempts_remaining: int
     otp_attempts_remaining: int
     message: str
@@ -177,7 +177,7 @@ class PasswordResetChallengeResponse(BaseModel):
     challenge_token: str | None = None
     email: EmailStr | None = None
     otp_expires_at: datetime | None = None
-    delivery_mode: Literal["email"] | None = None
+    delivery_mode: Literal["email", "console"] | None = None
     message: str
     dev_otp_code: str | None = None
 
@@ -215,7 +215,7 @@ class UpdateAccountRequest(BaseModel):
 
 class EmailTestResponse(BaseModel):
     email: EmailStr
-    delivery_mode: Literal["email"]
+    delivery_mode: Literal["email", "console"]
     message: str
 
 

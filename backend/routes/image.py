@@ -71,7 +71,7 @@ async def _fetch_proxy_image(url: str) -> tuple[bytes, str]:
 
     async with httpx.AsyncClient(
         timeout=_IMAGE_PROXY_TIMEOUT_SECONDS,
-        follow_redirects=False,
+        follow_redirects=False,   # Security: do not follow redirects
     ) as http:
         async with http.stream("GET", validated_url) as res:
             if 300 <= res.status_code < 400:
@@ -395,11 +395,18 @@ async def image_variations(
     try:
         if not request.image_b64:
             raise HTTPException(status_code=400, detail="Missing image data.")
-        await enforce_image_rate_limit(http_request, current_user)
+        # Validate base64 input
+        try:
+            image_bytes = base64.b64decode(request.image_b64)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid base64 image data.")
+
+        await enforce_image_rate_limit(http_request, current_user, cost=1)
+
         prompt = (request.prompt or "").strip() or "Create a polished new image inspired by this upload."
         if len(prompt) > 4000:
             raise HTTPException(status_code=400, detail="Prompt too long. Max 4000 chars.")
-        image_bytes = base64.b64decode(request.image_b64)
+
         images = await ai_service.edit_image(
             prompt,
             image_bytes,

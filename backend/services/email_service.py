@@ -12,7 +12,7 @@ from config.settings import settings
 
 
 logger = logging.getLogger(__name__)
-SUPPORTED_EMAIL_PROVIDERS = {"sendgrid", "smtp"}
+SUPPORTED_EMAIL_PROVIDERS = {"sendgrid", "smtp", "console"}
 
 
 class EmailDeliveryError(RuntimeError):
@@ -30,6 +30,9 @@ class EmailService:
 
         if (settings.SMTP_HOST or "").strip() and self._configured_from_address():
             return "smtp"
+
+        if settings.DEBUG:
+            return "console"
 
         return ""
 
@@ -58,6 +61,14 @@ class EmailService:
                 "provider": "smtp",
                 "delivery_mode": "email" if ready else "unconfigured",
                 "ready": ready,
+            }
+
+        if provider == "console":
+            return {
+                "configured_provider": (settings.EMAIL_PROVIDER or "").strip().lower() or None,
+                "provider": "console",
+                "delivery_mode": "console",
+                "ready": True,
             }
 
         return {
@@ -167,10 +178,19 @@ class EmailService:
             )
             return "email"
 
+        if provider == "console":
+            self._send_via_console(
+                recipient_email=recipient_email,
+                subject=subject,
+                text_body=text_body,
+                html_body=html_body,
+            )
+            return "console"
+
         configured_provider = (settings.EMAIL_PROVIDER or "").strip().lower()
         if configured_provider and configured_provider not in SUPPORTED_EMAIL_PROVIDERS:
             raise EmailDeliveryError(
-                f"Unknown EMAIL_PROVIDER '{configured_provider}'. Use 'smtp' or 'sendgrid'."
+                f"Unknown EMAIL_PROVIDER '{configured_provider}'. Use 'smtp', 'sendgrid', or 'console'."
             )
 
         raise EmailDeliveryError(self._configuration_error_message())
@@ -614,6 +634,22 @@ class EmailService:
             raise EmailDeliveryError("SMTP could not deliver the verification email.") from exc
         except OSError as exc:
             raise EmailDeliveryError("SMTP connection failed while sending the verification email.") from exc
+
+    def _send_via_console(
+        self,
+        *,
+        recipient_email: str,
+        subject: str,
+        text_body: str,
+        html_body: str,
+    ) -> None:
+        logger.info(
+            "\n" + "="*60 +
+            f"\n[CONSOLE EMAIL] Sending email to: {recipient_email}"
+            f"\nSubject: {subject}"
+            f"\nBody:\n{text_body}"
+            "\n" + "="*60
+        )
 
     def _from_address(self) -> str:
         from_address = self._configured_from_address()

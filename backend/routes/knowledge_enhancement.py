@@ -1,21 +1,28 @@
 """
-Knowledge Enhancement Routes - New API endpoints for knowledge features.
+Knowledge Enhancement Routes - Enhanced API endpoints.
 
-These routes expose the knowledge enhancement capabilities:
-- /api/knowledge/enhance - Enhance an AI response with knowledge
-- /api/knowledge/search - Search for knowledge only
-- /api/knowledge/providers - Get provider status
-- /api/knowledge/query-route - Analyze how a query will be routed
+This module provides a comprehensive set of endpoints for knowledge enhancement,
+including query routing, multi‑provider fusion, source visibility, and health monitoring.
 
-These are OPTIONAL endpoints that don't break existing functionality.
-All existing routes continue to work unchanged.
+Endpoints:
+- POST /enhance               – Enhance an AI response with knowledge
+- POST /search                – Search for knowledge only
+- GET  /providers             – List all available providers
+- GET  /providers/status      – Get provider health status
+- POST /query-route           – Analyze query routing
+- GET  /enabled               – Check if enhancement is enabled
+- POST /enable                – Enable/disable enhancement
+- GET  /settings              – Get current settings
+- GET  /health                – Detailed health check
+- GET  /documentation         – Feature documentation
 """
 
 import logging
-from typing import Optional
+import time
+from typing import List, Optional, Dict, Any
 
-from fastapi import APIRouter, Body, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Body, HTTPException, Query, Response
+from pydantic import BaseModel, Field, validator
 
 from services.knowledge_enhancement_integration import (
     get_integration,
@@ -33,207 +40,285 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/knowledge", tags=["Knowledge Enhancement"])
 
+# ==============================
+# Request/Response Models
+# ==============================
 
-# Request/Response models
 class EnhanceRequest(BaseModel):
-    """Request to enhance an AI response."""
-    
-    query: str
-    ai_response: str
-    include_sources: bool = False
-    visibility_level: Optional[str] = None
+    """Request to enhance an AI response with knowledge."""
+    query: str = Field(..., min_length=1, max_length=5000, description="User query")
+    ai_response: str = Field(..., min_length=1, description="AI response to enhance")
+    include_sources: bool = Field(False, description="Include source citations in response")
+    visibility_level: Optional[str] = Field(None, description="Override default source visibility")
+    providers: Optional[List[str]] = Field(None, description="Specific providers to use (all if None)")
+    exclude_providers: Optional[List[str]] = Field(None, description="Providers to exclude")
+    fusion_strategy: Optional[str] = Field(None, description="Fusion strategy: 'dedupe', 'priority', 'conflict_resolve'")
+
+    @validator('visibility_level', pre=True, always=True)
+    def validate_visibility(cls, v):
+        if v is not None:
+            allowed = [level.value for level in SourceVisibilityLevel]
+            if v not in allowed:
+                raise ValueError(f"visibility_level must be one of {allowed}")
+        return v
 
 
 class SearchRequest(BaseModel):
-    """Request to search for knowledge."""
-    
-    query: str
-    include_all_sources: bool = False
+    """Request to search for knowledge only."""
+    query: str = Field(..., min_length=1, max_length=5000, description="Search query")
+    include_all_sources: bool = Field(False, description="Include every source, even low‑relevance")
+    providers: Optional[List[str]] = Field(None, description="Specific providers to use")
+    exclude_providers: Optional[List[str]] = Field(None, description="Providers to exclude")
+    limit: int = Field(20, ge=1, le=100, description="Max results per provider")
+    offset: int = Field(0, ge=0, description="Pagination offset")
 
 
 class QueryRouteRequest(BaseModel):
     """Request to analyze query routing."""
-    
-    query: str
+    query: str = Field(..., min_length=1, max_length=5000)
 
 
+class ProviderFilter(BaseModel):
+    providers: Optional[List[str]] = None
+    exclude_providers: Optional[List[str]] = None
+
+
+# ==============================
+# Helper Functions
+# ==============================
+
+def _apply_provider_filters(kwargs: Dict[str, Any], request: BaseModel) -> Dict[str, Any]:
+    """Extract provider filters from request and add to kwargs."""
+    if hasattr(request, 'providers'):
+        if request.providers:
+            kwargs['providers'] = request.providers
+    if hasattr(request, 'exclude_providers'):
+        if request.exclude_providers:
+            kwargs['exclude_providers'] = request.exclude_providers
+    return kwargs
+
+
+def _add_cache_headers(response: Response, max_age: int = 60):
+    """Add cache-control header to response."""
+    response.headers["Cache-Control"] = f"public, max-age={max_age}"
+
+
+# ==============================
 # Endpoints
+# ==============================
 
 @router.post("/enhance")
-async def enhance_response(request: EnhanceRequest):
+async def enhance_response(request: EnhanceRequest, response: Response):
     """
-    Enhance an AI response with knowledge from providers.
-    
-    This endpoint takes a user query and AI response, then:
-    1. Routes the query to appropriate knowledge providers
-    2. Gathers knowledge from those providers
-    3. Fuses the information intelligently
-    4. Returns the enhanced response with optional source citations
-    
-    Args:
-        request: EnhanceRequest with query and response
-        
-    Returns:
-        Enhanced response with metadata
+    Enhance an AI response with knowledge from selected providers.
+
+    This endpoint:
+    - Routes the query to appropriate knowledge providers
+    - Gathers knowledge from those providers (filtered by provider lists)
+    - Fuses the information using the chosen strategy
+    - Returns the enhanced response with optional source citations
     """
+    start = time.perf_counter()
+    logger.info(f"Enhance request: query={request.query[:50]}...")
+
     try:
-        result = await enhance_chat_response(
-            query=request.query,
-            ai_response=request.ai_response,
-            include_sources=request.include_sources,
-        )
+        # Build kwargs
+        kwargs = {
+            "query": request.query,
+            "ai_response": request.ai_response,
+            "include_sources": request.include_sources,
+        }
+        if request.visibility_level is not None:
+            kwargs["visibility_level"] = request.visibility_level
+        if request.fusion_strategy:
+            kwargs["fusion_strategy"] = request.fusion_strategy
+        kwargs = _apply_provider_filters(kwargs, request)
+
+        result = await enhance_chat_response(**kwargs)
+
+        duration = time.perf_counter() - start
+        logger.info(f"Enhance completed in {duration:.2f}s, sources={len(result.get('sources', []))}")
+        _add_cache_headers(response, max_age=30)
         return result
-    
+
+    except ValueError as e:
+        logger.warning(f"Enhance validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Response enhancement error: {e}")
+        logger.error(f"Enhance error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Enhancement failed: {str(e)}")
 
 
 @router.post("/search")
-async def search_knowledge(request: SearchRequest):
+async def search_knowledge(request: SearchRequest, response: Response):
     """
     Search for knowledge from providers without AI augmentation.
-    
-    This endpoint gathers information from knowledge providers
-    based on the query, useful for:
-    - Pure information retrieval
-    - Research and fact-finding
-    - Building context before AI generation
-    
-    Args:
-        request: SearchRequest with query
-        
-    Returns:
-        Knowledge dictionary with sources and facts
+
+    Useful for pure information retrieval, research, or building context.
+    Supports pagination and provider filtering.
     """
+    start = time.perf_counter()
+    logger.info(f"Search request: query={request.query[:50]}...")
+
     try:
-        result = await get_knowledge_only(
-            query=request.query,
-            include_all_sources=request.include_all_sources,
-        )
+        kwargs = {
+            "query": request.query,
+            "include_all_sources": request.include_all_sources,
+            "limit": request.limit,
+            "offset": request.offset,
+        }
+        kwargs = _apply_provider_filters(kwargs, request)
+
+        result = await get_knowledge_only(**kwargs)
+
+        duration = time.perf_counter() - start
+        logger.info(f"Search completed in {duration:.2f}s, results={len(result.get('facts', []))}")
+        _add_cache_headers(response, max_age=60)
         return result
-    
+
+    except ValueError as e:
+        logger.warning(f"Search validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Knowledge search error: {e}")
+        logger.error(f"Search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
-@router.get("/providers/status")
-async def get_providers_status():
+@router.get("/providers")
+async def list_providers(response: Response):
     """
-    Get status of all registered knowledge providers.
-    
-    Returns:
-        Provider status information including:
-        - Total provider count
-        - Healthy provider count
-        - Individual provider status
+    Get detailed information about all registered knowledge providers.
     """
     try:
         registry = get_provider_registry()
-        all_providers = registry.get_all_providers()
-        healthy_providers = registry.get_healthy_providers()
-        
+        providers = registry.get_all_providers()
+        provider_details = []
+        for provider in providers:
+            provider_details.append({
+                "id": provider.id,
+                "name": provider.name,
+                "description": provider.description,
+                "capabilities": provider.capabilities,
+                "health": await provider.health_check(),
+                "is_healthy": await provider.is_healthy(),
+                "priority": getattr(provider, "priority", 0),
+            })
+        _add_cache_headers(response, max_age=120)
         return {
-            "total": len(all_providers),
-            "healthy": len(healthy_providers),
-            "providers": registry.get_status(),
+            "total": len(provider_details),
+            "providers": provider_details,
         }
-    
+    except Exception as e:
+        logger.error(f"Provider list error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/providers/status")
+async def get_providers_status(response: Response):
+    """
+    Get health status of all registered providers.
+    """
+    try:
+        registry = get_provider_registry()
+        status = registry.get_status()
+        _add_cache_headers(response, max_age=30)
+        return {
+            "total": len(status),
+            "healthy": sum(1 for s in status.values() if s.get("healthy", False)),
+            "providers": status,
+        }
     except Exception as e:
         logger.error(f"Provider status error: {e}")
         raise HTTPException(status_code=500, detail=f"Status check failed: {str(e)}")
 
 
 @router.post("/query-route")
-async def analyze_query_route(request: QueryRouteRequest):
+async def analyze_query_route(request: QueryRouteRequest, response: Response):
     """
     Analyze how a query will be routed to knowledge providers.
-    
-    This endpoint shows:
+
+    Returns:
     - Query classification
     - Recommended providers
     - Confidence score
     - AI provider strategy
     - Keywords detected
-    
-    Useful for understanding the routing logic.
-    
-    Args:
-        request: QueryRouteRequest with query
-        
-    Returns:
-        Query routing analysis
     """
     try:
         result = await route_query(request.query)
+        _add_cache_headers(response, max_age=300)  # cache longer as routing is deterministic
         return result
-    
     except Exception as e:
         logger.error(f"Query routing error: {e}")
         raise HTTPException(status_code=500, detail=f"Routing analysis failed: {str(e)}")
 
 
 @router.get("/enabled")
-async def is_knowledge_enhancement_enabled():
-    """Check if knowledge enhancement is enabled."""
+async def is_knowledge_enhancement_enabled(response: Response):
+    """Check if knowledge enhancement is enabled globally."""
     integration = get_integration()
-    return {
-        "enabled": integration.is_enabled(),
-    }
+    _add_cache_headers(response, max_age=10)
+    return {"enabled": integration.is_enabled()}
 
 
 @router.post("/enable")
-async def enable_knowledge_enhancement(enabled: bool = Body(...)):
-    """Enable or disable knowledge enhancement."""
+async def enable_knowledge_enhancement(enabled: bool = Body(..., description="Enable or disable")):
+    """Enable or disable knowledge enhancement globally."""
     integration = get_integration()
     integration.set_enabled(enabled)
-    return {
-        "enabled": integration.is_enabled(),
-    }
+    logger.info(f"Knowledge enhancement {'enabled' if enabled else 'disabled'} by API request")
+    return {"enabled": integration.is_enabled()}
 
 
 @router.get("/settings")
-async def get_knowledge_settings():
-    """Get knowledge enhancement settings."""
+async def get_knowledge_settings(response: Response):
+    """Get current knowledge enhancement settings."""
     try:
         integration = get_integration()
         visibility_controller = get_visibility_controller()
-        
+        _add_cache_headers(response, max_age=60)
         return {
             "enabled": integration.is_enabled(),
             "default_visibility_level": visibility_controller.default_level.value,
-            "similarity_threshold": 0.85,  # From fusion engine
+            "similarity_threshold": 0.85,
             "max_parallel_providers": 3,
+            "fusion_strategies": ["dedupe", "priority", "conflict_resolve"],
+            "default_fusion_strategy": "dedupe",
         }
-    
     except Exception as e:
         logger.error(f"Settings retrieval error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get settings: {str(e)}")
 
 
 @router.get("/health")
-async def knowledge_health_check():
+async def knowledge_health_check(response: Response):
     """
-    Perform health check on knowledge systems.
-    
+    Detailed health check of all knowledge systems.
+
     Returns:
-        Health status of all knowledge components
+    - Overall status
+    - Per‑provider health with latency and success rate
+    - Component statuses
     """
     try:
         registry = get_provider_registry()
         health_results = await registry.health_check_all()
-        
-        healthy_count = sum(1 for v in health_results.values() if v)
+        healthy_count = sum(1 for v in health_results.values() if v.get("healthy", False))
         total_count = len(health_results)
-        
+
+        # Calculate average latency and success rate if available
+        latencies = [v.get("latency_ms", 0) for v in health_results.values() if "latency_ms" in v]
+        avg_latency = sum(latencies) / len(latencies) if latencies else None
+
+        status = "healthy" if healthy_count > 0 else "degraded"
+        _add_cache_headers(response, max_age=10)
         return {
-            "status": "healthy" if healthy_count > 0 else "degraded",
+            "status": status,
             "providers_healthy": healthy_count,
             "providers_total": total_count,
+            "average_latency_ms": avg_latency,
             "provider_status": health_results,
         }
-    
     except Exception as e:
         logger.error(f"Health check error: {e}")
         return {
@@ -243,8 +328,9 @@ async def knowledge_health_check():
 
 
 @router.get("/documentation")
-async def get_knowledge_documentation():
+async def get_knowledge_documentation(response: Response):
     """Get documentation on knowledge enhancement features."""
+    _add_cache_headers(response, max_age=3600)
     return {
         "title": "NOVA AI Knowledge Enhancement",
         "description": "Intelligent query routing and multi-provider knowledge fusion",
@@ -277,7 +363,7 @@ async def get_knowledge_documentation():
                 ]
             },
             "plugin_architecture": {
-                "description": "Extensible provider system",
+                "description": "Extensible provider system with filtering and pagination",
                 "current_providers": [
                     "Wikipedia",
                     "GeeksforGeeks",
@@ -287,11 +373,12 @@ async def get_knowledge_documentation():
         },
         "endpoints": {
             "POST /api/knowledge/enhance": "Enhance AI response with knowledge",
-            "POST /api/knowledge/search": "Search for knowledge",
-            "GET /api/knowledge/providers/status": "Get provider status",
+            "POST /api/knowledge/search": "Search for knowledge (with pagination)",
+            "GET  /api/knowledge/providers": "List all providers with details",
+            "GET  /api/knowledge/providers/status": "Get provider health status",
             "POST /api/knowledge/query-route": "Analyze query routing",
-            "GET /api/knowledge/enabled": "Check if enhancement is enabled",
+            "GET  /api/knowledge/enabled": "Check if enhancement is enabled",
             "POST /api/knowledge/enable": "Enable/disable enhancement",
-            "GET /api/knowledge/health": "Health check",
+            "GET  /api/knowledge/health": "Detailed health check",
         }
     }

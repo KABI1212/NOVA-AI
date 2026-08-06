@@ -94,6 +94,12 @@ class _FakeSession:
         return None
 
 
+@pytest.fixture(autouse=True)
+def _disable_debug_otp_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(auth_module.settings, "DEBUG", False)
+    monkeypatch.setattr(auth_module.settings, "AUTH_EXPOSE_DEBUG_OTP", False)
+
+
 def _make_user() -> User:
     return User(
         id=1,

@@ -165,6 +165,7 @@ def test_gmail_app_password_spaces_are_removed_before_login(monkeypatch: pytest.
 def test_test_email_raises_when_provider_is_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     service = EmailService()
 
+    monkeypatch.setattr(email_service_module.settings, "DEBUG", False)
     monkeypatch.setattr(email_service_module.settings, "EMAIL_PROVIDER", "")
     monkeypatch.setattr(email_service_module.settings, "SMTP_HOST", "")
     monkeypatch.setattr(email_service_module.settings, "SMTP_USER", "")
