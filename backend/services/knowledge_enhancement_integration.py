@@ -246,8 +246,6 @@ class KnowledgeEnhancementIntegration:
         max_providers: int = 3
     ) -> List[KnowledgeSource]:
         """Gather knowledge from selected providers in parallel."""
-        from services.knowledge_providers import ProviderRecommendation
-        
         provider_names = routing_result.get("providers", [])
         if not provider_names:
             return []
@@ -256,15 +254,18 @@ class KnowledgeEnhancementIntegration:
         tasks = []
         for provider_name in provider_names[:max_providers]:
             try:
-                # Get providers by type
-                ptype = ProviderType(provider_name)
+                # Handle ProviderType or string
+                if isinstance(provider_name, ProviderType):
+                    ptype = provider_name
+                else:
+                    ptype = ProviderType(str(provider_name).lower())
                 providers = self.registry.get_providers_by_type(ptype)
                 
                 for provider in providers:
                     if provider.is_healthy:
                         tasks.append(self._search_provider(provider, query))
             
-            except ValueError:
+            except (ValueError, KeyError):
                 # Provider type not found
                 continue
         
@@ -326,16 +327,26 @@ class KnowledgeEnhancementIntegration:
             return self.visibility_controller.get_hidden_response_wrapper(ai_response)
         
         # For other visibility levels, add source information
-        sources = [
-            KnowledgeSource(
-                provider=ProviderType[s["provider"].upper()],
-                title=s["title"],
-                content=s["content"],
-                url=s["url"],
-                confidence=s["confidence"],
+        sources = []
+        for s in getattr(fused_knowledge, "sources", []):
+            try:
+                raw_p = s.get("provider", "custom")
+                if isinstance(raw_p, ProviderType):
+                    ptype = raw_p
+                else:
+                    ptype = ProviderType(str(raw_p).lower())
+            except Exception:
+                ptype = ProviderType.CUSTOM
+
+            sources.append(
+                KnowledgeSource(
+                    provider=ptype,
+                    title=s.get("title", "Source"),
+                    content=s.get("content", ""),
+                    url=s.get("url"),
+                    confidence=s.get("confidence", 0.8),
+                )
             )
-            for s in fused_knowledge.sources
-        ]
         
         # Add source citations
         response_with_sources = self.visibility_controller.add_source_citations_inline(

@@ -113,6 +113,21 @@ class KnowledgeProvider(ABC):
         self.is_healthy = False
         self.error_message: Optional[str] = None
         self.config: Dict[str, Any] = {}
+
+    @property
+    def id(self) -> str:
+        """Provider unique identifier."""
+        return f"{self.provider_type.value}_{self.name}".lower()
+
+    @property
+    def description(self) -> str:
+        """Provider description from docstring or default."""
+        return (self.__doc__ or f"{self.name} knowledge provider").strip()
+
+    @property
+    def capabilities(self) -> List[str]:
+        """List of capabilities supported by this provider."""
+        return ["search", "retrieve", "extract", "normalize", "generate"]
     
     async def initialize(self, config: Optional[Dict[str, Any]] = None) -> bool:
         """

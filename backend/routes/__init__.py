@@ -11,6 +11,7 @@ from .voice import router as voice_router
 from .compat import router as compat_router
 from .search import router as search_router
 from .share import router as share_router
+from .knowledge_enhancement import router as knowledge_enhancement_router
 
 __all__ = [
     "auth_router",
@@ -25,5 +26,6 @@ __all__ = [
     "voice_router",
     "compat_router",
     "search_router",
-    "share_router"
+    "share_router",
+    "knowledge_enhancement_router",
 ]

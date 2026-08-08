@@ -343,5 +343,9 @@ class GeeksforGeeksProvider(KnowledgeProvider):
     
     async def close(self) -> None:
         """Close the HTTP client."""
-        if self.http_client:
-            await self.http_client.aclose()
+        if self.http_client and not self.http_client.is_closed:
+            try:
+                await self.http_client.aclose()
+            except Exception:
+                pass
+            self.http_client = None

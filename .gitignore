@@ -5,35 +5,51 @@ __pycache__/
 *.so
 .Python
 venv/
+.venv/
 env/
 ENV/
+backend/venv*/
 *.egg-info/
 dist/
 build/
 
 # Environment variables
 .env
-.env.local
+.env.*
+!.env.example
+!.env.*.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
 
 # Database
 *.db
+*.sqlite
 *.sqlite3
 *.sql.backup
+backend/data/*.db
 
 # Uploads
 backend/uploads/*
 !backend/uploads/.gitkeep
+uploads/*
 
-# Node
+# Node & Frontend
 node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+build/
+.next/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# Build
-dist/
-build/
+# Build & Logs
 *.log
 
 # IDEs
@@ -56,7 +72,7 @@ dump.rdb
 # Alembic
 alembic/versions/*.pyc
 
-# Misc
+# Misc & Temp
 .cache/
 tmp/
 temp/
@@ -64,6 +80,4 @@ temp/
 .tmp_test_artifacts/
 desktop.ini
 cmdtorun
-NOVA-AI-main/
-backend/venv*/
-frontend/node_modules/
+NOVA-AI-main/

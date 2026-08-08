@@ -41,20 +41,23 @@ class WikipediaProvider(KnowledgeProvider):
         super().__init__("Wikipedia", ProviderType.WIKIPEDIA)
         self.http_client: Optional[httpx.AsyncClient] = None
         self.timeout = 10.0
+        self.headers = {
+            "User-Agent": "NovaAI/1.0 (https://nova-ai.org; contact@nova-ai.org)",
+            "Accept": "application/json",
+        }
     
     async def _setup(self) -> bool:
         """Setup Wikipedia provider."""
         try:
-            self.http_client = httpx.AsyncClient(timeout=self.timeout)
+            if not self.http_client:
+                self.http_client = httpx.AsyncClient(timeout=self.timeout, headers=self.headers)
             # Test the API connection
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    WIKIPEDIA_API_BASE,
-                    params={"action": "query", "format": "json", "meta": "siteinfo"},
-                    timeout=self.timeout,
-                )
-                response.raise_for_status()
-            return True
+            response = await self.http_client.get(
+                WIKIPEDIA_API_BASE,
+                params={"action": "query", "format": "json", "meta": "siteinfo"},
+                timeout=self.timeout,
+            )
+            return response.status_code == 200
         except Exception as e:
             logger.error(f"Wikipedia setup failed: {e}")
             return False
@@ -66,7 +69,7 @@ class WikipediaProvider(KnowledgeProvider):
         
         try:
             if not self.http_client:
-                self.http_client = httpx.AsyncClient(timeout=self.timeout)
+                self.http_client = httpx.AsyncClient(timeout=self.timeout, headers=self.headers)
             
             params = {
                 "action": "query",
@@ -85,12 +88,14 @@ class WikipediaProvider(KnowledgeProvider):
             
             results = []
             for item in search_results[:limit]:
+                raw_title = item.get("title", "")
+                wiki_slug = raw_title.replace(" ", "_")
                 results.append({
-                    "id": item.get("title", "").replace(" ", "_"),
-                    "title": item.get("title", ""),
+                    "id": wiki_slug,
+                    "title": raw_title,
                     "snippet": item.get("snippet", ""),
                     "size": item.get("size", 0),
-                    "url": f"https://en.wikipedia.org/wiki/{item.get('title', '').replace(' ', '_')}",
+                    "url": f"https://en.wikipedia.org/wiki/{wiki_slug}",
                     "relevance": 0.8,  # Wikipedia is fairly authoritative
                 })
             
@@ -122,13 +127,15 @@ class WikipediaProvider(KnowledgeProvider):
         """Retrieve full article content from Wikipedia."""
         try:
             if not self.http_client:
-                self.http_client = httpx.AsyncClient(timeout=self.timeout)
+                self.http_client = httpx.AsyncClient(timeout=self.timeout, headers=self.headers)
             
-            # source_id is the article title
+            # source_id is the article title or slug
+            clean_title = source_id.replace("_", " ")
+            wiki_slug = clean_title.replace(" ", "_")
             params = {
                 "action": "query",
                 "format": "json",
-                "titles": source_id.replace("_", " "),
+                "titles": clean_title,
                 "prop": "extracts|pageprops",
                 "explaintext": True,
                 "exsectionformat": "plain",
@@ -145,7 +152,7 @@ class WikipediaProvider(KnowledgeProvider):
                 if page_id == "-1":  # Article not found
                     return None
                 
-                title = page_data.get("title", source_id)
+                title = page_data.get("title", clean_title)
                 content = page_data.get("extract", "")[:3000]  # Limit to 3000 chars
                 
                 if not content:
@@ -155,7 +162,7 @@ class WikipediaProvider(KnowledgeProvider):
                     "title": title,
                     "content": content,
                     "source_id": source_id,
-                    "url": f"https://en.wikipedia.org/wiki/{source_id}",
+                    "url": f"https://en.wikipedia.org/wiki/{wiki_slug}",
                 })
             
             return None
@@ -278,5 +285,9 @@ class WikipediaProvider(KnowledgeProvider):
     
     async def close(self) -> None:
         """Close the HTTP client."""
-        if self.http_client:
-            await self.http_client.aclose()
+        if self.http_client and not self.http_client.is_closed:
+            try:
+                await self.http_client.aclose()
+            except Exception:
+                pass
+            self.http_client = None

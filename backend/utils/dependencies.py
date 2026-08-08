@@ -1,6 +1,7 @@
 
 from typing import Any, Optional
 
+# pyrefly: ignore [missing-import]
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 

@@ -172,10 +172,9 @@ class KnowledgeFusionEngine:
     ) -> bool:
         """Check if source is similar to any in the list."""
         for existing in sources:
-            similarity = self._calculate_text_similarity(
-                source.title + " " + source.summary or source.content[:100],
-                existing.title + " " + (existing.summary or existing.content[:100])
-            )
+            source_text = source.title + " " + (source.summary or source.content[:100] if source.content else "")
+            existing_text = existing.title + " " + (existing.summary or existing.content[:100] if existing.content else "")
+            similarity = self._calculate_text_similarity(source_text, existing_text)
             if similarity >= self.similarity_threshold:
                 return True
         return False

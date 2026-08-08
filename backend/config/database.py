@@ -57,13 +57,19 @@ def _resolve_database_name() -> str:
     return database_name or "nova_ai"
 
 
-def _create_client() -> MongoClient:
-    return MongoClient(
-        settings.DATABASE_URL,
-        serverSelectionTimeoutMS=settings.MONGODB_SERVER_SELECTION_TIMEOUT_MS,
-        connectTimeoutMS=settings.MONGODB_CONNECT_TIMEOUT_MS,
-        socketTimeoutMS=settings.MONGODB_SOCKET_TIMEOUT_MS,
-    )
+def _create_client() -> MongoClient | None:
+    uri = (settings.DATABASE_URL or "").strip()
+    if not (uri.startswith("mongodb://") or uri.startswith("mongodb+srv://")):
+        return None
+    try:
+        return MongoClient(
+            uri,
+            serverSelectionTimeoutMS=settings.MONGODB_SERVER_SELECTION_TIMEOUT_MS,
+            connectTimeoutMS=settings.MONGODB_CONNECT_TIMEOUT_MS,
+            socketTimeoutMS=settings.MONGODB_SOCKET_TIMEOUT_MS,
+        )
+    except Exception:
+        return None
 
 
 _CLIENT = _create_client()
@@ -82,6 +88,11 @@ def get_database_status() -> dict[str, Any]:
 
 
 def _get_database() -> Database:
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = _create_client()
+    if _CLIENT is None:
+        raise PyMongoError(_database_unavailable_message())
     return _CLIENT[_DATABASE_NAME]
 
 

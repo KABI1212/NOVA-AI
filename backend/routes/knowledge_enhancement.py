@@ -44,23 +44,44 @@ router = APIRouter(prefix="/api/knowledge", tags=["Knowledge Enhancement"])
 # Request/Response Models
 # ==============================
 
-class EnhanceRequest(BaseModel):
-    """Request to enhance an AI response with knowledge."""
-    query: str = Field(..., min_length=1, max_length=5000, description="User query")
-    ai_response: str = Field(..., min_length=1, description="AI response to enhance")
-    include_sources: bool = Field(False, description="Include source citations in response")
-    visibility_level: Optional[str] = Field(None, description="Override default source visibility")
-    providers: Optional[List[str]] = Field(None, description="Specific providers to use (all if None)")
-    exclude_providers: Optional[List[str]] = Field(None, description="Providers to exclude")
-    fusion_strategy: Optional[str] = Field(None, description="Fusion strategy: 'dedupe', 'priority', 'conflict_resolve'")
+try:
+    from pydantic import field_validator
+    class EnhanceRequest(BaseModel):
+        """Request to enhance an AI response with knowledge."""
+        query: str = Field(..., min_length=1, max_length=5000, description="User query")
+        ai_response: str = Field(..., min_length=1, description="AI response to enhance")
+        include_sources: bool = Field(False, description="Include source citations in response")
+        visibility_level: Optional[str] = Field(None, description="Override default source visibility")
+        providers: Optional[List[str]] = Field(None, description="Specific providers to use (all if None)")
+        exclude_providers: Optional[List[str]] = Field(None, description="Providers to exclude")
+        fusion_strategy: Optional[str] = Field(None, description="Fusion strategy: 'dedupe', 'priority', 'conflict_resolve'")
 
-    @validator('visibility_level', pre=True, always=True)
-    def validate_visibility(cls, v):
-        if v is not None:
-            allowed = [level.value for level in SourceVisibilityLevel]
-            if v not in allowed:
-                raise ValueError(f"visibility_level must be one of {allowed}")
-        return v
+        @field_validator('visibility_level', mode='before')
+        @classmethod
+        def validate_visibility(cls, v):
+            if v is not None:
+                allowed = [level.value for level in SourceVisibilityLevel]
+                if v not in allowed:
+                    raise ValueError(f"visibility_level must be one of {allowed}")
+            return v
+except ImportError:
+    class EnhanceRequest(BaseModel):
+        """Request to enhance an AI response with knowledge."""
+        query: str = Field(..., min_length=1, max_length=5000, description="User query")
+        ai_response: str = Field(..., min_length=1, description="AI response to enhance")
+        include_sources: bool = Field(False, description="Include source citations in response")
+        visibility_level: Optional[str] = Field(None, description="Override default source visibility")
+        providers: Optional[List[str]] = Field(None, description="Specific providers to use (all if None)")
+        exclude_providers: Optional[List[str]] = Field(None, description="Providers to exclude")
+        fusion_strategy: Optional[str] = Field(None, description="Fusion strategy: 'dedupe', 'priority', 'conflict_resolve'")
+
+        @validator('visibility_level', pre=True, always=True)
+        def validate_visibility(cls, v):
+            if v is not None:
+                allowed = [level.value for level in SourceVisibilityLevel]
+                if v not in allowed:
+                    raise ValueError(f"visibility_level must be one of {allowed}")
+            return v
 
 
 class SearchRequest(BaseModel):
@@ -195,12 +216,13 @@ async def list_providers(response: Response):
         provider_details = []
         for provider in providers:
             provider_details.append({
-                "id": provider.id,
+                "id": getattr(provider, "id", f"{provider.provider_type.value}_{provider.name}".lower()),
                 "name": provider.name,
-                "description": provider.description,
-                "capabilities": provider.capabilities,
-                "health": await provider.health_check(),
-                "is_healthy": await provider.is_healthy(),
+                "type": provider.provider_type.value,
+                "description": getattr(provider, "description", f"{provider.name} knowledge provider"),
+                "capabilities": getattr(provider, "capabilities", ["search", "retrieve", "extract", "normalize", "generate"]),
+                "healthy": provider.is_healthy,
+                "status": provider.get_status(),
                 "priority": getattr(provider, "priority", 0),
             })
         _add_cache_headers(response, max_age=120)
@@ -224,7 +246,7 @@ async def get_providers_status(response: Response):
         _add_cache_headers(response, max_age=30)
         return {
             "total": len(status),
-            "healthy": sum(1 for s in status.values() if s.get("healthy", False)),
+            "healthy": sum(1 for s in status.values() if isinstance(s, dict) and s.get("healthy", False)),
             "providers": status,
         }
     except Exception as e:
@@ -303,12 +325,8 @@ async def knowledge_health_check(response: Response):
     try:
         registry = get_provider_registry()
         health_results = await registry.health_check_all()
-        healthy_count = sum(1 for v in health_results.values() if v.get("healthy", False))
+        healthy_count = sum(1 for v in health_results.values() if bool(v))
         total_count = len(health_results)
-
-        # Calculate average latency and success rate if available
-        latencies = [v.get("latency_ms", 0) for v in health_results.values() if "latency_ms" in v]
-        avg_latency = sum(latencies) / len(latencies) if latencies else None
 
         status = "healthy" if healthy_count > 0 else "degraded"
         _add_cache_headers(response, max_age=10)
@@ -316,7 +334,6 @@ async def knowledge_health_check(response: Response):
             "status": status,
             "providers_healthy": healthy_count,
             "providers_total": total_count,
-            "average_latency_ms": avg_latency,
             "provider_status": health_results,
         }
     except Exception as e:
