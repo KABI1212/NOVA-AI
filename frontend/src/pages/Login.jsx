@@ -347,15 +347,17 @@ function Login() {
               <form onSubmit={handleCredentialSubmit} className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Email
+                    Email or Username
                   </label>
                   <div className="relative">
                     <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                     <input
-                      type="email"
+                      id="login-identifier"
+                      type="text"
                       required
+                      autoComplete="username"
                       className="input-field pl-10"
-                      placeholder="you@example.com"
+                      placeholder="you@example.com or username"
                       value={formData.email}
                       onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                     />
