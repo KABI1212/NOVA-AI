@@ -15,6 +15,7 @@ except ImportError:
         """Fallback when SQLAlchemy is not installed."""
 
 try:
+    # pyrefly: ignore [missing-import]
     from sqlalchemy.orm import Session
 except ImportError:
     Session = Any
@@ -967,15 +968,24 @@ def _password_reset_resend_available_at(user: User) -> datetime:
     return sent_at + timedelta(seconds=settings.AUTH_OTP_RESEND_COOLDOWN_SECONDS)
 
 
-async def _issue_password_reset_otp(user: User, db: Session) -> dict:
+async def _issue_password_reset_otp(
+    user: User,
+    db: Session,
+    *,
+    is_resend: bool = False,
+) -> dict:
     _ensure_password_reset_not_locked(user, db)
 
     now = utcnow_naive()
     snapshot = _snapshot_password_reset_state(user)
 
-    if user.password_reset_otp_sent_at:
+    is_active_challenge = bool(
+        user.password_reset_otp_expires_at and user.password_reset_otp_expires_at > now
+    )
+
+    if is_resend and is_active_challenge:
         resend_available_at = _password_reset_resend_available_at(user)
-        if resend_available_at > now:
+        if user.password_reset_otp_sent_at and resend_available_at > now:
             seconds_remaining = max(
                 int((resend_available_at - now).total_seconds() + 0.999),
                 1,
@@ -1273,11 +1283,9 @@ async def login(
             detail="User account is inactive",
         )
 
-    if not user.is_verified and settings.AUTH_ALLOW_PASSWORD_ONLY_FALLBACK:
+    if not user.is_verified:
         user.is_verified = True
         _persist_user(db, user)
-    elif not user.is_verified:
-        return await _issue_login_otp(user, db, is_registration=True)
 
     if _has_login_otp_state(user):
         _clear_login_otp_state(user)

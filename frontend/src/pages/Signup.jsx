@@ -302,11 +302,7 @@ function Signup() {
               <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
                 {otpAttemptsRemaining} verification attempts remaining. {resendAttemptsRemaining} resend attempts remaining.
               </p>
-              {debugOtpCode ? (
-                <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                  Debug OTP: <span className="font-semibold tracking-[0.3em]">{debugOtpCode}</span>
-                </div>
-              ) : null}
+
 
               <form onSubmit={handleOtpSubmit} className="space-y-4">
                 <div>
@@ -316,15 +312,24 @@ function Signup() {
                   <div className="relative">
                     <Shield className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                     <input
+                      id="signup-otp-input"
                       type="text"
                       required
                       inputMode="numeric"
                       autoComplete="one-time-code"
-                      className="input-field pl-10 tracking-[0.45em]"
+                      className="input-field pl-10 tracking-[0.45em] font-mono text-center text-lg"
                       placeholder="000000"
                       maxLength={6}
                       value={otp}
                       onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      onPaste={(e) => {
+                        const text = e.clipboardData?.getData('text') || '';
+                        const digits = text.replace(/\D/g, '').slice(0, 6);
+                        if (digits) {
+                          e.preventDefault();
+                          setOtp(digits);
+                        }
+                      }}
                     />
                   </div>
                 </div>

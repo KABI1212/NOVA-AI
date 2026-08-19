@@ -16,6 +16,7 @@ const getStoredValue = (key, fallback = null) => {
   }
 };
 
+// @ts-ignore
 const setStoredValue = (key, value) => {
   if (!hasLocalStorage()) {
     return;
