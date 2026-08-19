@@ -135,7 +135,7 @@ class LoginOtpResendRequest(BaseModel):
 
 
 class ForgotPasswordRequest(BaseModel):
-    email: EmailStr
+    email: str
 
 
 class ResetPasswordRequest(BaseModel):
@@ -1409,11 +1409,17 @@ async def forgot_password(
 ):
     """Send a password-reset OTP when an active account exists."""
 
-    email = request.email.strip().lower()
-    user = _load_user_by_email(email, db)
+    raw_identifier = request.email.strip()
+    normalized = raw_identifier.lower()
+    user = _load_user_by_email(normalized, db)
+    if user is None:
+        user = _load_user_by_login_identifier(raw_identifier, normalized, db)
 
     if user is None:
-        return {"message": PASSWORD_RESET_REQUEST_GENERIC_MESSAGE}
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No account found with this email or username. Please check the spelling or create a new account.",
+        )
 
     if not user.is_active:
         raise HTTPException(
