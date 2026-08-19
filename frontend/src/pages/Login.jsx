@@ -325,7 +325,7 @@ function Login() {
       >
         <div className="text-center mb-8">
           <div className="flex items-center justify-center mb-4">
-            <NovaLogo size={40} textColor={isDark ? '#ffffff' : '#111111'} />
+            <NovaLogo size={40} />
           </div>
           <p className="text-gray-600 dark:text-gray-400">
             Your Intelligent Assistant

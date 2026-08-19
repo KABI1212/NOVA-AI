@@ -5,7 +5,7 @@ const NOVA_APP_ICON_SRC = "/icons/nova-app-icon.png";
 
 function NovaLogo({
   size = 32,
-  textColor,
+  novaColor = '#D4AF37',
   accentColor = '#2563eb',
   className = '',
   showText = true,
@@ -36,11 +36,10 @@ function NovaLogo({
           className="font-bold tracking-wider select-none leading-none"
           style={{
             fontSize: `${fontSize}px`,
-            color: textColor || 'currentColor',
             fontFamily: "'Times New Roman', Times, serif",
           }}
         >
-          NOVA <span style={{ color: accentColor }}>AI</span>
+          <span style={{ color: novaColor }}>NOVA</span> <span style={{ color: accentColor }}>AI</span>
         </span>
       )}
     </div>

@@ -65,14 +65,13 @@ export default function SharedView() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
-
       {/* Top bar */}
       <div className="border-b border-gray-800 px-6 py-4
                       flex items-center justify-between sticky top-0
                       bg-gray-950/95 backdrop-blur z-10">
         <div className="flex items-center gap-3">
           {/* NOVA-AI logo */}
-          <NovaLogo size={32} textColor="#ffffff" />
+          <NovaLogo size={32} />
           <div>
             <h1 className="font-semibold text-white text-sm">
               {convo.title}

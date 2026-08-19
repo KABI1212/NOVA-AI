@@ -101,7 +101,7 @@ function Layout({ children }) {
       >
         <div className="flex h-full flex-col px-4 pb-4 pt-5">
           <div className="mb-5 border-b border-[#314052] pb-4">
-            <NovaLogo size={34} textColor="#f5f8fc" accentColor="#8bd1ff" />
+            <NovaLogo size={34} />
             <p className="mt-3 px-1 text-xs leading-5 text-[#9cafc5]">
               Choose a focused tool and keep your work in one place.
             </p>
