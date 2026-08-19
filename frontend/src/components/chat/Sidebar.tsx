@@ -358,7 +358,7 @@ export default function Sidebar({
     <>
       <aside className={`sb claude${resolvedCollapsed ? " col" : ""}`}>
         <div className="logo">
-          <NovaLogo size={30} showText className="li" />
+          <NovaLogo size={30} showText={!resolvedCollapsed} />
         </div>
 
         <div className="sb-scroll">
