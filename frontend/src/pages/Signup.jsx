@@ -100,9 +100,14 @@ function Signup() {
     setAuthError('');
 
     try {
+      const email = formData.email.trim();
+      const rawUsername = formData.username.trim();
+      const derived = rawUsername || email.split('@')[0].replace(/[^A-Za-z0-9._-]/g, '') || 'user';
+      const username = derived.length >= 3 ? derived.slice(0, 32) : `${derived}123`.slice(0, 32);
+
       const payload = {
-        email: formData.email.trim(),
-        username: formData.username.trim(),
+        email,
+        username,
         password: formData.password,
         full_name: formData.full_name.trim(),
       };
@@ -196,8 +201,15 @@ function Signup() {
 
         <div className="card p-8">
           {authError ? (
-            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {authError}
+            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-950/40 px-4 py-3 text-sm text-red-700 dark:text-red-300">
+              <p>{authError}</p>
+              {authError.toLowerCase().includes('already') || authError.toLowerCase().includes('sign in') ? (
+                <div className="mt-2">
+                  <Link to="/login" className="font-semibold underline hover:text-primary-600 dark:hover:text-primary-400">
+                    Sign in with your existing account →
+                  </Link>
+                </div>
+              ) : null}
             </div>
           ) : null}
           {step === 'details' ? (
@@ -225,16 +237,13 @@ function Signup() {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Username
+                    Username <span className="text-xs text-gray-400 font-normal">(optional)</span>
                   </label>
                   <div className="relative">
                     <User className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                     <input
                       type="text"
-                      required
-                      minLength={3}
                       maxLength={32}
-                      pattern="[A-Za-z0-9._-]+"
                       className="input-field pl-10"
                       placeholder="johndoe"
                       value={formData.username}

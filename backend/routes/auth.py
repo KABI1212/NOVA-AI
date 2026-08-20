@@ -1,5 +1,6 @@
 import logging
 import re
+import secrets
 from fastapi.encoders import jsonable_encoder
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -1188,9 +1189,31 @@ def _validate_pending_password_reset(
     return user
 
 
+def _generate_unique_username(base_name: str, email: str, db: Session) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]", "", (base_name or "").strip())
+    if len(cleaned) < 3:
+        email_prefix = (email or "").split("@")[0]
+        cleaned = re.sub(r"[^A-Za-z0-9._-]", "", email_prefix)
+    if len(cleaned) < 3:
+        cleaned = "user"
+    candidate = cleaned[:24]
+
+    existing = db.query(User).filter(User.username == candidate).first()
+    if not existing:
+        return candidate
+
+    for _ in range(100):
+        suffix = secrets.token_hex(2)
+        suffixed = f"{candidate[:20]}_{suffix}"
+        if not db.query(User).filter(User.username == suffixed).first():
+            return suffixed
+
+    return f"user_{secrets.token_hex(4)}"
+
+
 @router.post(
     "/signup",
-    response_model=TokenResponse | LoginChallengeResponse,
+    response_model=LoginChallengeResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def signup(
@@ -1202,24 +1225,35 @@ async def signup(
     """Register a new user and require OTP verification before sign-in."""
 
     email = request.email.strip().lower()  # FIX: case-sensitive login bug
-    username = request.username.strip()
+    raw_username = (request.username or "").strip()
     full_name = request.full_name.strip() if request.full_name else ""
 
-    existing_user = db.query(User).filter(
-        (User.email == email) | (User.username == username)
-    ).first()
+    existing_user = _load_user_by_email(email, db)
 
     if existing_user:
+        if not existing_user.is_verified:
+            # If an unverified account exists with the same email, update credentials and re-issue OTP
+            existing_user.hashed_password = get_password_hash(request.password)
+            if full_name:
+                existing_user.full_name = full_name
+            if raw_username and existing_user.username != raw_username:
+                existing_user.username = _generate_unique_username(raw_username, email, db)
+            _persist_user(db, existing_user)
+            return await _issue_login_otp(existing_user, db, is_registration=True)
+
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User with this email or username already exists",
+            detail="An account with this email already exists. Please sign in instead.",
         )
+
+    # Automatically ensure a unique username so signup NEVER fails on username collision
+    username = _generate_unique_username(raw_username or full_name, email, db)
 
     new_user = User(
         email=email,
         username=username,
         hashed_password=get_password_hash(request.password),
-        full_name=full_name,
+        full_name=full_name or username,
         is_verified=False,
     )
 
@@ -1228,10 +1262,10 @@ async def signup(
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User with this email or username already exists",
-        )
+        username = _generate_unique_username(f"{username}_{secrets.token_hex(2)}", email, db)
+        new_user.username = username
+        db.add(new_user)
+        db.commit()
     db.refresh(new_user)
 
     try:
@@ -1283,9 +1317,13 @@ async def login(
             detail="User account is inactive",
         )
 
-    if not user.is_verified:
+    _ensure_login_not_locked(user, db)
+
+    if not user.is_verified and settings.AUTH_ALLOW_PASSWORD_ONLY_FALLBACK:
         user.is_verified = True
         _persist_user(db, user)
+    elif not user.is_verified:
+        return await _issue_login_otp(user, db, is_registration=True)
 
     if _has_login_otp_state(user):
         _clear_login_otp_state(user)
@@ -1416,10 +1454,7 @@ async def forgot_password(
         user = _load_user_by_login_identifier(raw_identifier, normalized, db)
 
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No account found with this email or username. Please check the spelling or create a new account.",
-        )
+        return {"message": PASSWORD_RESET_REQUEST_GENERIC_MESSAGE}
 
     if not user.is_active:
         raise HTTPException(
