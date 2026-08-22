@@ -606,34 +606,83 @@ class EmailService:
         message.set_content(text_body)
         message.add_alternative(html_body, subtype="html")
 
-        smtp_factory = smtplib.SMTP_SSL if settings.SMTP_USE_SSL else smtplib.SMTP
         context = ssl.create_default_context()
+        configured_port = settings.SMTP_PORT or (465 if settings.SMTP_USE_SSL else 587)
 
-        try:
-            with smtp_factory(host, settings.SMTP_PORT, timeout=settings.SMTP_TIMEOUT_SECONDS) as client:
-                if not settings.SMTP_USE_SSL and settings.SMTP_USE_TLS:
-                    client.starttls(context=context)
-                if smtp_username:
-                    client.login(smtp_username, smtp_password)
-                client.send_message(message, from_addr=from_address, to_addrs=[recipient_email])
-        except smtplib.SMTPAuthenticationError as exc:
-            logger.error(
-                "smtp_auth_failed host=%s port=%s username=%s smtp_code=%s smtp_error=%s",
-                host,
-                settings.SMTP_PORT,
-                smtp_username,
-                getattr(exc, "smtp_code", None),
-                getattr(exc, "smtp_error", b"").decode("utf-8", errors="ignore"),
-            )
-            if host.lower() == "smtp.gmail.com":
-                raise EmailDeliveryError(
-                    "Gmail rejected the SMTP login. Use a Google App Password, not your normal Gmail password."
-                ) from exc
-            raise EmailDeliveryError("SMTP login failed. Check the username and password for your mail provider.") from exc
-        except smtplib.SMTPException as exc:
-            raise EmailDeliveryError("SMTP could not deliver the verification email.") from exc
-        except OSError as exc:
-            raise EmailDeliveryError("SMTP connection failed while sending the verification email.") from exc
+        # Build primary and fallback delivery attempts
+        attempts: list[tuple[str, str, int]] = []
+        if settings.SMTP_USE_SSL:
+            attempts.append(("ssl", host, configured_port))
+            if host.lower() == "smtp.gmail.com" and configured_port != 587:
+                attempts.append(("tls", host, 587))
+        else:
+            attempts.append(("tls" if settings.SMTP_USE_TLS else "plain", host, configured_port))
+            if host.lower() == "smtp.gmail.com" and configured_port != 465:
+                attempts.append(("ssl", host, 465))
+
+        last_error: Exception | None = None
+
+        for mode, target_host, target_port in attempts:
+            try:
+                if mode == "ssl":
+                    with smtplib.SMTP_SSL(
+                        target_host,
+                        target_port,
+                        context=context,
+                        timeout=settings.SMTP_TIMEOUT_SECONDS,
+                    ) as client:
+                        if smtp_username:
+                            client.login(smtp_username, smtp_password)
+                        client.send_message(message, from_addr=from_address, to_addrs=[recipient_email])
+                    return
+                else:
+                    with smtplib.SMTP(
+                        target_host,
+                        target_port,
+                        timeout=settings.SMTP_TIMEOUT_SECONDS,
+                    ) as client:
+                        if mode == "tls":
+                            client.starttls(context=context)
+                        if smtp_username:
+                            client.login(smtp_username, smtp_password)
+                        client.send_message(message, from_addr=from_address, to_addrs=[recipient_email])
+                    return
+            except smtplib.SMTPAuthenticationError as exc:
+                logger.error(
+                    "smtp_auth_failed host=%s port=%s username=%s mode=%s smtp_code=%s smtp_error=%s",
+                    target_host,
+                    target_port,
+                    smtp_username,
+                    mode,
+                    getattr(exc, "smtp_code", None),
+                    getattr(exc, "smtp_error", b"").decode("utf-8", errors="ignore"),
+                )
+                if target_host.lower() == "smtp.gmail.com":
+                    raise EmailDeliveryError(
+                        "Gmail rejected the SMTP login. Use a Google App Password, not your normal Gmail password."
+                    ) from exc
+                raise EmailDeliveryError("SMTP login failed. Check the username and password for your mail provider.") from exc
+            except (smtplib.SMTPException, OSError) as exc:
+                logger.warning(
+                    "smtp_attempt_failed mode=%s host=%s port=%s error=%s",
+                    mode,
+                    target_host,
+                    target_port,
+                    exc,
+                )
+                last_error = exc
+
+        if last_error:
+            if settings.DEBUG:
+                logger.warning("smtp_failed_falling_back_to_console in debug mode: %s", last_error)
+                self._send_via_console(
+                    recipient_email=recipient_email,
+                    subject=subject,
+                    text_body=text_body,
+                    html_body=html_body,
+                )
+                return
+            raise EmailDeliveryError("SMTP could not deliver the verification email.") from last_error
 
     def _send_via_console(
         self,
