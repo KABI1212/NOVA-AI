@@ -5,6 +5,7 @@ import smtplib
 import ssl
 from email.message import EmailMessage
 from html import escape
+from typing import Any
 
 import requests
 
@@ -756,7 +757,12 @@ class EmailService:
             if host.lower() == "smtp.gmail.com" and configured_port != 587:
                 attempts.append(("tls", host, 587))
         else:
-            attempts.append(("tls" if settings.SMTP_USE_TLS else "plain", host, configured_port))
+            # If USE_SSL is False, try the configured port with TLS/plain
+            if settings.SMTP_USE_TLS:
+                attempts.append(("tls", host, configured_port))
+            else:
+                attempts.append(("plain", host, configured_port))
+            # Add fallback for Gmail
             if host.lower() == "smtp.gmail.com" and configured_port != 465:
                 attempts.append(("ssl", host, 465))
 
