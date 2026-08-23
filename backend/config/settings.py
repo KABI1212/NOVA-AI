@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     SMTP_USE_SSL: bool = False
     SMTP_TIMEOUT_SECONDS: int = 10
     SENDGRID_API_KEY: str = ""
+    RESEND_API_KEY: str = ""
+    BREVO_API_KEY: str = ""
 
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = ""

@@ -12,7 +12,7 @@ from config.settings import settings
 
 
 logger = logging.getLogger(__name__)
-SUPPORTED_EMAIL_PROVIDERS = {"sendgrid", "smtp", "console"}
+SUPPORTED_EMAIL_PROVIDERS = {"sendgrid", "resend", "brevo", "smtp", "console"}
 
 
 class EmailDeliveryError(RuntimeError):
@@ -25,8 +25,14 @@ class EmailService:
         if configured_provider:
             return configured_provider
 
+        if (settings.RESEND_API_KEY or "").strip() and self._configured_from_address():
+            return "resend"
+
         if (settings.SENDGRID_API_KEY or "").strip() and self._configured_from_address():
             return "sendgrid"
+
+        if (settings.BREVO_API_KEY or "").strip() and self._configured_from_address():
+            return "brevo"
 
         if (settings.SMTP_HOST or "").strip() and self._configured_from_address():
             return "smtp"
@@ -43,12 +49,32 @@ class EmailService:
         smtp_username = self._configured_smtp_username()
         smtp_password = self._configured_smtp_password()
         sendgrid_key_ready = bool((settings.SENDGRID_API_KEY or "").strip())
+        resend_key_ready = bool((settings.RESEND_API_KEY or "").strip())
+        brevo_key_ready = bool((settings.BREVO_API_KEY or "").strip())
+
+        if provider == "resend":
+            ready = from_address_ready and resend_key_ready
+            return {
+                "configured_provider": (settings.EMAIL_PROVIDER or "").strip().lower() or None,
+                "provider": "resend",
+                "delivery_mode": "email" if ready else "unconfigured",
+                "ready": ready,
+            }
 
         if provider == "sendgrid":
             ready = from_address_ready and sendgrid_key_ready
             return {
                 "configured_provider": (settings.EMAIL_PROVIDER or "").strip().lower() or None,
                 "provider": "sendgrid",
+                "delivery_mode": "email" if ready else "unconfigured",
+                "ready": ready,
+            }
+
+        if provider == "brevo":
+            ready = from_address_ready and brevo_key_ready
+            return {
+                "configured_provider": (settings.EMAIL_PROVIDER or "").strip().lower() or None,
+                "provider": "brevo",
                 "delivery_mode": "email" if ready else "unconfigured",
                 "ready": ready,
             }
@@ -160,8 +186,26 @@ class EmailService:
         html_body: str,
     ) -> str:
         provider = self._resolved_provider()
+        if provider == "resend":
+            self._send_via_resend(
+                recipient_email=recipient_email,
+                subject=subject,
+                text_body=text_body,
+                html_body=html_body,
+            )
+            return "email"
+
         if provider == "sendgrid":
             self._send_via_sendgrid(
+                recipient_email=recipient_email,
+                subject=subject,
+                text_body=text_body,
+                html_body=html_body,
+            )
+            return "email"
+
+        if provider == "brevo":
+            self._send_via_brevo(
                 recipient_email=recipient_email,
                 subject=subject,
                 text_body=text_body,
@@ -190,7 +234,7 @@ class EmailService:
         configured_provider = (settings.EMAIL_PROVIDER or "").strip().lower()
         if configured_provider and configured_provider not in SUPPORTED_EMAIL_PROVIDERS:
             raise EmailDeliveryError(
-                f"Unknown EMAIL_PROVIDER '{configured_provider}'. Use 'smtp', 'sendgrid', or 'console'."
+                f"Unknown EMAIL_PROVIDER '{configured_provider}'. Use 'resend', 'sendgrid', 'brevo', 'smtp', or 'console'."
             )
 
         raise EmailDeliveryError(self._configuration_error_message())
@@ -520,6 +564,97 @@ class EmailService:
 </html>
 """.strip()
 
+    def _send_via_resend(
+        self,
+        *,
+        recipient_email: str,
+        subject: str,
+        text_body: str,
+        html_body: str,
+    ) -> None:
+        api_key = (settings.RESEND_API_KEY or "").strip()
+        from_header = self._from_header()
+
+        if not api_key:
+            raise EmailDeliveryError("RESEND_API_KEY is required when EMAIL_PROVIDER=resend.")
+
+        payload: dict[str, Any] = {
+            "from": from_header,
+            "to": [recipient_email],
+            "subject": subject,
+            "html": html_body,
+            "text": text_body,
+        }
+
+        reply_to = (settings.EMAIL_REPLY_TO or "").strip()
+        if reply_to:
+            payload["reply_to"] = reply_to
+
+        try:
+            response = requests.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=settings.SMTP_TIMEOUT_SECONDS,
+            )
+            if not response.ok:
+                logger.error("resend_send_failed status=%s response=%s", response.status_code, response.text)
+                response.raise_for_status()
+        except requests.RequestException as exc:
+            err_msg = "Resend could not deliver the verification email."
+            if hasattr(exc, "response") and exc.response is not None:
+                err_msg += f" (Status {exc.response.status_code}: {exc.response.text})"
+            raise EmailDeliveryError(err_msg) from exc
+
+    def _send_via_brevo(
+        self,
+        *,
+        recipient_email: str,
+        subject: str,
+        text_body: str,
+        html_body: str,
+    ) -> None:
+        api_key = (settings.BREVO_API_KEY or "").strip()
+        from_address = self._from_address()
+        from_name = (settings.EMAIL_FROM_NAME or "").strip() or "NOVA AI"
+
+        if not api_key:
+            raise EmailDeliveryError("BREVO_API_KEY is required when EMAIL_PROVIDER=brevo.")
+
+        payload: dict[str, Any] = {
+            "sender": {"name": from_name, "email": from_address},
+            "to": [{"email": recipient_email}],
+            "subject": subject,
+            "htmlContent": html_body,
+            "textContent": text_body,
+        }
+
+        reply_to = (settings.EMAIL_REPLY_TO or "").strip()
+        if reply_to:
+            payload["replyTo"] = {"email": reply_to}
+
+        try:
+            response = requests.post(
+                "https://api.brevo.com/v3/smtp/email",
+                headers={
+                    "api-key": api_key,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=settings.SMTP_TIMEOUT_SECONDS,
+            )
+            if not response.ok:
+                logger.error("brevo_send_failed status=%s response=%s", response.status_code, response.text)
+                response.raise_for_status()
+        except requests.RequestException as exc:
+            err_msg = "Brevo could not deliver the verification email."
+            if hasattr(exc, "response") and exc.response is not None:
+                err_msg += f" (Status {exc.response.status_code}: {exc.response.text})"
+            raise EmailDeliveryError(err_msg) from exc
+
     def _send_via_sendgrid(
         self,
         *,
@@ -562,9 +697,14 @@ class EmailService:
                 json=payload,
                 timeout=settings.SMTP_TIMEOUT_SECONDS,
             )
-            response.raise_for_status()
+            if not response.ok:
+                logger.error("sendgrid_send_failed status=%s response=%s", response.status_code, response.text)
+                response.raise_for_status()
         except requests.RequestException as exc:
-            raise EmailDeliveryError("SendGrid could not deliver the verification email.") from exc
+            err_msg = "SendGrid could not deliver the verification email."
+            if hasattr(exc, "response") and exc.response is not None:
+                err_msg += f" (Status {exc.response.status_code}: {exc.response.text})"
+            raise EmailDeliveryError(err_msg) from exc
 
     def _send_via_smtp(
         self,
