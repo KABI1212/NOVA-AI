@@ -4,6 +4,7 @@ import importlib
 import smtplib
 
 import pytest
+import requests
 
 from services.email_service import EmailService
 email_service_module = importlib.import_module("services.email_service")
@@ -98,6 +99,7 @@ def test_gmail_smtp_auth_failure_maps_to_app_password_message(monkeypatch: pytes
     monkeypatch.setattr(email_service_module.settings, "SMTP_PASS", "wrong-password")
     monkeypatch.setattr(email_service_module.settings, "SMTP_USERNAME", "")
     monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "")
+    monkeypatch.setattr(email_service_module.settings, "DEBUG", False)
     monkeypatch.setattr(email_service_module.settings, "SMTP_USE_TLS", True)
     monkeypatch.setattr(email_service_module.settings, "SMTP_USE_SSL", False)
     monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM", "kabileshk702@gmail.com")
@@ -160,6 +162,78 @@ def test_gmail_app_password_spaces_are_removed_before_login(monkeypatch: pytest.
 
     assert captured["username"] == "kabileshkofficial@gmail.com"
     assert captured["password"] == "gnnwossoygckyhbx"
+
+
+def test_resend_testing_only_error_falls_back_to_smtp(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = EmailService()
+    captured: dict = {}
+
+    class _FakeResendResponse:
+        ok = False
+        status_code = 403
+        text = (
+            '{"statusCode":403,"name":"validation_error",'
+            '"message":"You can only send testing emails to your own email address (kabileshkofficial@gmail.com). "'
+            '"To send emails to other recipients, please verify a domain at resend.com/domains, and change the `from` address to an email using this domain."}'
+        )
+
+        def raise_for_status(self) -> None:
+            raise requests.HTTPError("403 Forbidden")
+
+    class _FakeSMTP:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def starttls(self, context=None) -> None:
+            return None
+
+        def login(self, username: str, password: str) -> None:
+            captured["username"] = username
+            captured["password"] = password
+
+        def send_message(self, message, from_addr=None, to_addrs=None) -> None:
+            captured["sent"] = True
+            captured["to_addrs"] = to_addrs
+            captured["from_addr"] = from_addr
+
+    def _fake_post(url: str, *args, **kwargs):
+        if url == "https://api.resend.com/emails":
+            return _FakeResendResponse()
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_PROVIDER", "resend")
+    monkeypatch.setattr(email_service_module.settings, "RESEND_API_KEY", "test-resend-key")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM", "kabileshkofficial@gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_REPLY_TO", "")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_HOST", "smtp.gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PORT", 587)
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USER", "kabileshkofficial@gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASS", "app-password")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USERNAME", "")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USE_TLS", True)
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USE_SSL", False)
+    monkeypatch.setattr(email_service_module.requests, "post", _fake_post)
+    monkeypatch.setattr(email_service_module.smtplib, "SMTP", _FakeSMTP)
+
+    service._send_via_resend(
+        recipient_email="someone@example.com",
+        subject="Test",
+        text_body="Hello",
+        html_body="<p>Hello</p>",
+    )
+
+    assert captured["sent"] is True
+    assert captured["to_addrs"] == ["someone@example.com"]
+    assert captured["username"] == "kabileshkofficial@gmail.com"
+    assert captured["password"] == "app-password"
 
 
 def test_test_email_raises_when_provider_is_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:

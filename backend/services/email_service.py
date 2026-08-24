@@ -55,7 +55,14 @@ class EmailService:
             if configured_provider == "console":
                 return "console"
 
-        # Autodetect provider by available credentials (preferred order)
+        # Autodetect provider by available credentials (preferred order).
+        # SMTP is intentionally checked before API services because it is the most
+        # predictable fallback for account-signup email delivery and avoids
+        # accidental Resend testing-domain rejections when a verified SMTP Gmail
+        # account is already configured.
+        if (settings.SMTP_HOST or "").strip() and self._configured_from_address():
+            return "smtp"
+
         if (settings.RESEND_API_KEY or "").strip() and self._configured_from_address():
             return "resend"
 
@@ -64,9 +71,6 @@ class EmailService:
 
         if (settings.BREVO_API_KEY or "").strip() and self._configured_from_address():
             return "brevo"
-
-        if (settings.SMTP_HOST or "").strip() and self._configured_from_address():
-            return "smtp"
 
         if settings.DEBUG:
             return "console"
@@ -595,6 +599,19 @@ class EmailService:
 </html>
 """.strip()
 
+    def _smtp_fallback_available(self) -> bool:
+        return bool((settings.SMTP_HOST or "").strip() and self._configured_from_address())
+
+    def _resend_testing_only_error(self, response_text: str | None) -> bool:
+        if not response_text:
+            return False
+        lower = response_text.lower()
+        return (
+            "testing emails to your own email address" in lower
+            or "verify a domain at resend.com/domains" in lower
+            or "invalid from address" in lower
+        )
+
     def _send_via_resend(
         self,
         *,
@@ -633,8 +650,33 @@ class EmailService:
             )
             if not response.ok:
                 logger.error("resend_send_failed status=%s response=%s", response.status_code, response.text)
+                if self._resend_testing_only_error(response.text) and self._smtp_fallback_available():
+                    logger.warning(
+                        "resend_testing_only_error_detected; falling back to configured SMTP delivery for %s",
+                        recipient_email,
+                    )
+                    self._send_via_smtp(
+                        recipient_email=recipient_email,
+                        subject=subject,
+                        text_body=text_body,
+                        html_body=html_body,
+                    )
+                    return
                 response.raise_for_status()
         except requests.RequestException as exc:
+            response_text = getattr(getattr(exc, "response", None), "text", "") or ""
+            if self._resend_testing_only_error(response_text) and self._smtp_fallback_available():
+                logger.warning(
+                    "resend_testing_only_error_detected; falling back to configured SMTP delivery for %s",
+                    recipient_email,
+                )
+                self._send_via_smtp(
+                    recipient_email=recipient_email,
+                    subject=subject,
+                    text_body=text_body,
+                    html_body=html_body,
+                )
+                return
             err_msg = "Resend could not deliver the verification email."
             if hasattr(exc, "response") and exc.response is not None:
                 err_msg += f" (Status {exc.response.status_code}: {exc.response.text})"
