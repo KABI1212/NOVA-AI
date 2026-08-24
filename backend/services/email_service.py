@@ -24,8 +24,38 @@ class EmailService:
     def _resolved_provider(self) -> str:
         configured_provider = (settings.EMAIL_PROVIDER or "").strip().lower()
         if configured_provider:
-            return configured_provider
+            # If a specific provider is configured, only return it if it appears
+            # to be usable (credentials + from address). If it's misconfigured,
+            # fall back to autodetection so the app can still attempt delivery
+            # via another available provider.
+            if configured_provider not in SUPPORTED_EMAIL_PROVIDERS:
+                return configured_provider
 
+            # Quick readiness checks for explicitly configured providers
+            if configured_provider == "resend":
+                if (settings.RESEND_API_KEY or "").strip() and self._configured_from_address():
+                    return "resend"
+                logger.warning("EMAIL_PROVIDER=resend configured but RESEND_API_KEY or EMAIL_FROM is missing; falling back to autodetect.")
+
+            if configured_provider == "sendgrid":
+                if (settings.SENDGRID_API_KEY or "").strip() and self._configured_from_address():
+                    return "sendgrid"
+                logger.warning("EMAIL_PROVIDER=sendgrid configured but SENDGRID_API_KEY or EMAIL_FROM is missing; falling back to autodetect.")
+
+            if configured_provider == "brevo":
+                if (settings.BREVO_API_KEY or "").strip() and self._configured_from_address():
+                    return "brevo"
+                logger.warning("EMAIL_PROVIDER=brevo configured but BREVO_API_KEY or EMAIL_FROM is missing; falling back to autodetect.")
+
+            if configured_provider == "smtp":
+                if (settings.SMTP_HOST or "").strip() and self._configured_from_address():
+                    return "smtp"
+                logger.warning("EMAIL_PROVIDER=smtp configured but SMTP_HOST or EMAIL_FROM is missing; falling back to autodetect.")
+
+            if configured_provider == "console":
+                return "console"
+
+        # Autodetect provider by available credentials (preferred order)
         if (settings.RESEND_API_KEY or "").strip() and self._configured_from_address():
             return "resend"
 
@@ -803,6 +833,23 @@ class EmailService:
                     getattr(exc, "smtp_code", None),
                     getattr(exc, "smtp_error", b"").decode("utf-8", errors="ignore"),
                 )
+                # On authentication failures, prefer to surface an error in production,
+                # but allow a console fallback during local development for easier testing.
+                if settings.DEBUG:
+                    logger.warning(
+                        "SMTP auth failed but DEBUG=True, falling back to console delivery: host=%s port=%s username=%s",
+                        target_host,
+                        target_port,
+                        smtp_username,
+                    )
+                    self._send_via_console(
+                        recipient_email=recipient_email,
+                        subject=subject,
+                        text_body=text_body,
+                        html_body=html_body,
+                    )
+                    return
+
                 if target_host.lower() == "smtp.gmail.com":
                     raise EmailDeliveryError(
                         "Gmail rejected the SMTP login. Use a Google App Password, not your normal Gmail password."

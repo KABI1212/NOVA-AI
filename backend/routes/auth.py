@@ -954,6 +954,21 @@ async def _issue_login_otp(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=EMAIL_DELIVERY_FAILURE_MESSAGE,
         ) from exc
+    else:
+        # Log OTP in development or when explicitly enabled for debugging.
+        try:
+            if settings.DEBUG and settings.AUTH_EXPOSE_DEBUG_OTP:
+                logger.info(
+                    "[DEV OTP] purpose=%s user_id=%s email=%s otp=%s expires_at=%s",
+                    "registration" if is_registration else "login",
+                    user.id,
+                    user.email,
+                    otp_code,
+                    expires_at,
+                )
+        except Exception:
+            # Do not let logging interfere with OTP issuance flow
+            logger.debug("failed to log debug otp", exc_info=True)
 
     return _build_login_challenge_response(
         user,
@@ -1037,6 +1052,18 @@ async def _issue_password_reset_otp(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=PASSWORD_RESET_DELIVERY_FAILURE_MESSAGE,
         ) from exc
+    else:
+        try:
+            if settings.DEBUG and settings.AUTH_EXPOSE_DEBUG_OTP:
+                logger.info(
+                    "[DEV OTP] purpose=password_reset user_id=%s email=%s otp=%s expires_at=%s",
+                    user.id,
+                    user.email,
+                    otp_code,
+                    expires_at,
+                )
+        except Exception:
+            logger.debug("failed to log debug otp", exc_info=True)
 
     response = {
         "challenge_token": challenge_token,
