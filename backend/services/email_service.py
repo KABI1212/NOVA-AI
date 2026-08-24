@@ -24,14 +24,15 @@ class EmailService:
     def _resolved_provider(self) -> str:
         configured_provider = (settings.EMAIL_PROVIDER or "").strip().lower()
         if configured_provider:
-            # If a specific provider is configured, only return it if it appears
-            # to be usable (credentials + from address). If it's misconfigured,
-            # fall back to autodetection so the app can still attempt delivery
-            # via another available provider.
             if configured_provider not in SUPPORTED_EMAIL_PROVIDERS:
                 return configured_provider
 
-            # Quick readiness checks for explicitly configured providers
+            if configured_provider == "smtp":
+                return "smtp"
+
+            # Explicit API providers remain authoritative only when they are actually
+            # configured; otherwise the app can still fall back to another available
+            # provider during autodetect.
             if configured_provider == "resend":
                 if (settings.RESEND_API_KEY or "").strip() and self._configured_from_address():
                     return "resend"
@@ -46,11 +47,6 @@ class EmailService:
                 if (settings.BREVO_API_KEY or "").strip() and self._configured_from_address():
                     return "brevo"
                 logger.warning("EMAIL_PROVIDER=brevo configured but BREVO_API_KEY or EMAIL_FROM is missing; falling back to autodetect.")
-
-            if configured_provider == "smtp":
-                if (settings.SMTP_HOST or "").strip() and self._configured_from_address():
-                    return "smtp"
-                logger.warning("EMAIL_PROVIDER=smtp configured but SMTP_HOST or EMAIL_FROM is missing; falling back to autodetect.")
 
             if configured_provider == "console":
                 return "console"
@@ -822,21 +818,16 @@ class EmailService:
         context = ssl.create_default_context()
         configured_port = settings.SMTP_PORT or (465 if settings.SMTP_USE_SSL else 587)
 
-        # Build primary and fallback delivery attempts
+        # Respect the configured SMTP port exactly; do not silently switch from
+        # the intended Gmail TLS configuration (587) to implicit SSL on 465.
         attempts: list[tuple[str, str, int]] = []
         if settings.SMTP_USE_SSL:
             attempts.append(("ssl", host, configured_port))
-            if host.lower() == "smtp.gmail.com" and configured_port != 587:
-                attempts.append(("tls", host, 587))
         else:
-            # If USE_SSL is False, try the configured port with TLS/plain
             if settings.SMTP_USE_TLS:
                 attempts.append(("tls", host, configured_port))
             else:
                 attempts.append(("plain", host, configured_port))
-            # Add fallback for Gmail
-            if host.lower() == "smtp.gmail.com" and configured_port != 465:
-                attempts.append(("ssl", host, 465))
 
         last_error: Exception | None = None
 

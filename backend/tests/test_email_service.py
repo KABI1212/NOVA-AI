@@ -320,3 +320,76 @@ def test_delivery_status_auto_detects_smtp_when_provider_is_blank(
         "ready": True,
     }
     assert service.can_send_real_email() is True
+
+
+def test_explicit_smtp_provider_is_respected_over_resend(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = EmailService()
+
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_PROVIDER", "smtp")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM", "kabileshkofficial@gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_HOST", "smtp.gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USER", "kabileshkofficial@gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASS", "app-password")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USERNAME", "")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "")
+    monkeypatch.setattr(email_service_module.settings, "RESEND_API_KEY", "test-resend-key")
+
+    assert service._resolved_provider() == "smtp"
+
+
+def test_smtp_uses_configured_tls_port_587_without_465_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = EmailService()
+    captured: dict = {}
+
+    class _FakeSMTP:
+        def __init__(self, host: str, port: int, timeout: int | None = None) -> None:
+            captured["connect"] = (host, port)
+            self.host = host
+            self.port = port
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def starttls(self, context=None) -> None:
+            captured["tls_called"] = True
+            captured["tls_context"] = context
+
+        def login(self, username: str, password: str) -> None:
+            captured["login"] = (username, password)
+
+        def send_message(self, message, from_addr=None, to_addrs=None) -> None:
+            captured["send_message"] = {
+                "from_addr": from_addr,
+                "to_addrs": to_addrs,
+                "subject": message["Subject"],
+            }
+
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_PROVIDER", "smtp")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_HOST", "smtp.gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PORT", 587)
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USER", "kabileshkofficial@gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASS", "app-password")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USERNAME", "")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "")
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USE_TLS", True)
+    monkeypatch.setattr(email_service_module.settings, "SMTP_USE_SSL", False)
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM", "kabileshkofficial@gmail.com")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "")
+    monkeypatch.setattr(email_service_module.smtplib, "SMTP", _FakeSMTP)
+
+    service._send_via_smtp(
+        recipient_email="someone@example.com",
+        subject="Test",
+        text_body="Hello",
+        html_body="<p>Hello</p>",
+    )
+
+    assert captured["connect"] == ("smtp.gmail.com", 587)
+    assert captured.get("tls_called") is True
+    assert captured["login"] == ("kabileshkofficial@gmail.com", "app-password")
+    assert captured["send_message"]["to_addrs"] == ["someone@example.com"]
