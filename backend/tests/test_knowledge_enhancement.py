@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import pytest
 import httpx
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -74,55 +75,60 @@ def test_provider_base_properties():
     assert provider.get_status()["name"] == "Dummy"
 
 
-@pytest.mark.anyio
-async def test_wikipedia_provider_search_and_retrieve():
-    provider = WikipediaProvider()
-    assert provider.provider_type == ProviderType.WIKIPEDIA
+def test_wikipedia_provider_search_and_retrieve():
+    async def scenario():
+        provider = WikipediaProvider()
+        assert provider.provider_type == ProviderType.WIKIPEDIA
 
-    mock_client = AsyncMock()
-    mock_setup_resp = MagicMock(status_code=200)
-    mock_health_resp = MagicMock(status_code=200)
-    mock_search_resp = MagicMock(
-        status_code=200,
-        json=MagicMock(return_value={
-            "query": {
-                "search": [
-                    {"title": "Artificial intelligence", "snippet": "AI is intelligence demonstrated by machines", "size": 1234}
-                ]
-            }
-        }),
-    )
-    mock_search_resp.raise_for_status = MagicMock()
+        mock_client = AsyncMock()
+        mock_setup_resp = MagicMock(status_code=200)
+        mock_health_resp = MagicMock(status_code=200)
+        mock_search_resp = MagicMock(
+            status_code=200,
+            json=MagicMock(return_value={
+                "query": {
+                    "search": [
+                        {"title": "Artificial intelligence", "snippet": "AI is intelligence demonstrated by machines", "size": 1234}
+                    ]
+                }
+            }),
+        )
+        mock_search_resp.raise_for_status = MagicMock()
 
-    mock_extract_resp = MagicMock(
-        status_code=200,
-        json=MagicMock(return_value={
-            "query": {
-                "pages": {
-                    "123": {
-                        "title": "Artificial intelligence",
-                        "extract": "Artificial intelligence is intelligence demonstrated by machines.",
+        mock_extract_resp = MagicMock(
+            status_code=200,
+            json=MagicMock(return_value={
+                "query": {
+                    "pages": {
+                        "123": {
+                            "title": "Artificial intelligence",
+                            "extract": "Artificial intelligence is intelligence demonstrated by machines.",
+                        }
                     }
                 }
-            }
-        }),
-    )
-    mock_extract_resp.raise_for_status = MagicMock()
+            }),
+        )
+        mock_extract_resp.raise_for_status = MagicMock()
 
-    mock_client.get.side_effect = [mock_setup_resp, mock_health_resp, mock_search_resp, mock_extract_resp]
-    provider.http_client = mock_client
+        mock_client.get.side_effect = [mock_setup_resp, mock_health_resp, mock_search_resp, mock_extract_resp]
+        provider.http_client = mock_client
 
-    assert await provider.initialize() is True
-    search_res = await provider.search("AI", limit=2)
-    assert search_res.is_successful is True
-    assert len(search_res.results) == 1
-    assert search_res.results[0]["title"] == "Artificial intelligence"
+        try:
+            assert await provider.initialize() is True
+            search_res = await provider.search("AI", limit=2)
+            assert search_res.is_successful is True
+            assert len(search_res.results) == 1
+            assert search_res.results[0]["title"] == "Artificial intelligence"
 
-    # Retrieve
-    source = await provider.retrieve("Artificial_intelligence")
-    assert source is not None
-    assert source.title == "Artificial intelligence"
-    assert "intelligence" in source.content
+            # Retrieve
+            source = await provider.retrieve("Artificial_intelligence")
+            assert source is not None
+            assert source.title == "Artificial intelligence"
+            assert "intelligence" in source.content
+        finally:
+            await provider.close()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.anyio

@@ -7,6 +7,7 @@ from .document import Document
 from .file_chunk import FileChunk
 from .file_record import FileRecord
 from .learning import LearningProgress
+from .user_memory import UserMemory
 
 __all__ = [
     "User",
@@ -18,4 +19,6 @@ __all__ = [
     "FileRecord",
     "FileChunk",
     "LearningProgress",
+    "UserMemory",
 ]
+

@@ -43,9 +43,15 @@ class GeeksforGeeksProvider(KnowledgeProvider):
     async def _setup(self) -> bool:
         """Setup GeeksforGeeks provider."""
         try:
-            self.http_client = httpx.AsyncClient(timeout=self.timeout)
-            # Test connection
-            async with httpx.AsyncClient() as client:
+            if self.http_client:
+                response = await self.http_client.get(
+                    self.base_url,
+                    timeout=5.0,
+                    headers={"User-Agent": "Mozilla/5.0 (Educational AI)"},
+                )
+                return response.status_code == 200
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(
                     self.base_url,
                     timeout=5.0,
@@ -62,30 +68,32 @@ class GeeksforGeeksProvider(KnowledgeProvider):
         start_time = time.time()
         
         try:
-            if not self.http_client:
-                self.http_client = httpx.AsyncClient(timeout=self.timeout)
-            
-            # Build search URL with query
-            search_query = query.replace(" ", "-")
-            search_params = f"?q={query}"
-            search_endpoint = f"{self.search_url}{search_params}"
-            
             headers = {
                 "User-Agent": "Mozilla/5.0 (Educational AI)",
                 "Accept": "application/json, text/plain, */*",
             }
             
-            response = await self.http_client.get(
-                search_endpoint,
-                headers=headers,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            
-            # Parse search results using regex-based extraction
-            results = await self._parse_search_results(
-                response.text, query, limit
-            )
+            if self.http_client:
+                response = await self.http_client.get(
+                    search_endpoint,
+                    headers=headers,
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                results = await self._parse_search_results(
+                    response.text, query, limit
+                )
+            else:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.get(
+                        search_endpoint,
+                        headers=headers,
+                        timeout=self.timeout,
+                    )
+                    response.raise_for_status()
+                    results = await self._parse_search_results(
+                        response.text, query, limit
+                    )
             
             search_time = (time.time() - start_time) * 1000
             
@@ -150,24 +158,19 @@ class GeeksforGeeksProvider(KnowledgeProvider):
     async def _retrieve(self, source_id: str) -> Optional[KnowledgeSource]:
         """Retrieve content from GeeksforGeeks article."""
         try:
-            if not self.http_client:
-                self.http_client = httpx.AsyncClient(timeout=self.timeout)
-            
-            # source_id could be URL or article slug
-            if source_id.startswith("http"):
-                url = source_id
-            else:
-                url = f"{self.base_url}/{source_id}/"
-            
             headers = {
                 "User-Agent": "Mozilla/5.0 (Educational AI)",
             }
             
-            response = await self.http_client.get(url, headers=headers, timeout=self.timeout)
-            response.raise_for_status()
-            
-            # Extract article content
-            content, title = await self._extract_article_content(response.text)
+            if self.http_client:
+                response = await self.http_client.get(url, headers=headers, timeout=self.timeout)
+                response.raise_for_status()
+                content, title = await self._extract_article_content(response.text)
+            else:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.get(url, headers=headers, timeout=self.timeout)
+                    response.raise_for_status()
+                    content, title = await self._extract_article_content(response.text)
             
             if not content:
                 return None
@@ -327,15 +330,21 @@ class GeeksforGeeksProvider(KnowledgeProvider):
     async def _health_check(self) -> bool:
         """Check if GeeksforGeeks is accessible."""
         try:
-            if not self.http_client:
-                self.http_client = httpx.AsyncClient(timeout=self.timeout)
-            
-            response = await self.http_client.get(
-                self.base_url,
-                timeout=5.0,
-                headers={"User-Agent": "Mozilla/5.0 (Educational AI)"},
-            )
-            return response.status_code == 200
+            if self.http_client:
+                response = await self.http_client.get(
+                    self.base_url,
+                    timeout=5.0,
+                    headers={"User-Agent": "Mozilla/5.0 (Educational AI)"},
+                )
+                return response.status_code == 200
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    self.base_url,
+                    timeout=5.0,
+                    headers={"User-Agent": "Mozilla/5.0 (Educational AI)"},
+                )
+                return response.status_code == 200
         
         except Exception as e:
             logger.error(f"GeeksforGeeks health check failed: {e}")

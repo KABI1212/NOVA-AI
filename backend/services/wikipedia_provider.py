@@ -49,15 +49,21 @@ class WikipediaProvider(KnowledgeProvider):
     async def _setup(self) -> bool:
         """Setup Wikipedia provider."""
         try:
-            if not self.http_client:
-                self.http_client = httpx.AsyncClient(timeout=self.timeout, headers=self.headers)
-            # Test the API connection
-            response = await self.http_client.get(
-                WIKIPEDIA_API_BASE,
-                params={"action": "query", "format": "json", "meta": "siteinfo"},
-                timeout=self.timeout,
-            )
-            return response.status_code == 200
+            if self.http_client:
+                response = await self.http_client.get(
+                    WIKIPEDIA_API_BASE,
+                    params={"action": "query", "format": "json", "meta": "siteinfo"},
+                    timeout=self.timeout,
+                )
+                return response.status_code == 200
+
+            async with httpx.AsyncClient(timeout=self.timeout, headers=self.headers) as client:
+                response = await client.get(
+                    WIKIPEDIA_API_BASE,
+                    params={"action": "query", "format": "json", "meta": "siteinfo"},
+                    timeout=self.timeout,
+                )
+                return response.status_code == 200
         except Exception as e:
             logger.error(f"Wikipedia setup failed: {e}")
             return False
@@ -68,9 +74,6 @@ class WikipediaProvider(KnowledgeProvider):
         start_time = time.time()
         
         try:
-            if not self.http_client:
-                self.http_client = httpx.AsyncClient(timeout=self.timeout, headers=self.headers)
-            
             params = {
                 "action": "query",
                 "format": "json",
@@ -80,10 +83,16 @@ class WikipediaProvider(KnowledgeProvider):
                 "srprop": "snippet|size",
             }
             
-            response = await self.http_client.get(WIKIPEDIA_SEARCH_URL, params=params)
-            response.raise_for_status()
+            if self.http_client:
+                response = await self.http_client.get(WIKIPEDIA_SEARCH_URL, params=params)
+                response.raise_for_status()
+                data = response.json()
+            else:
+                async with httpx.AsyncClient(timeout=self.timeout, headers=self.headers) as client:
+                    response = await client.get(WIKIPEDIA_SEARCH_URL, params=params)
+                    response.raise_for_status()
+                    data = response.json()
             
-            data = response.json()
             search_results = data.get("query", {}).get("search", [])
             
             results = []
@@ -126,9 +135,6 @@ class WikipediaProvider(KnowledgeProvider):
     async def _retrieve(self, source_id: str) -> Optional[KnowledgeSource]:
         """Retrieve full article content from Wikipedia."""
         try:
-            if not self.http_client:
-                self.http_client = httpx.AsyncClient(timeout=self.timeout, headers=self.headers)
-            
             # source_id is the article title or slug
             clean_title = source_id.replace("_", " ")
             wiki_slug = clean_title.replace(" ", "_")
@@ -142,10 +148,15 @@ class WikipediaProvider(KnowledgeProvider):
                 "redirects": True,
             }
             
-            response = await self.http_client.get(WIKIPEDIA_EXTRACT_URL, params=params)
-            response.raise_for_status()
-            
-            data = response.json()
+            if self.http_client:
+                response = await self.http_client.get(WIKIPEDIA_EXTRACT_URL, params=params)
+                response.raise_for_status()
+                data = response.json()
+            else:
+                async with httpx.AsyncClient(timeout=self.timeout, headers=self.headers) as client:
+                    response = await client.get(WIKIPEDIA_EXTRACT_URL, params=params)
+                    response.raise_for_status()
+                    data = response.json()
             pages = data.get("query", {}).get("pages", {})
             
             for page_id, page_data in pages.items():
@@ -269,15 +280,21 @@ class WikipediaProvider(KnowledgeProvider):
     async def _health_check(self) -> bool:
         """Check if Wikipedia API is accessible."""
         try:
-            if not self.http_client:
-                self.http_client = httpx.AsyncClient(timeout=self.timeout)
-            
-            response = await self.http_client.get(
-                WIKIPEDIA_API_BASE,
-                params={"action": "query", "format": "json", "meta": "siteinfo"},
-                timeout=5.0,
-            )
-            return response.status_code == 200
+            if self.http_client:
+                response = await self.http_client.get(
+                    WIKIPEDIA_API_BASE,
+                    params={"action": "query", "format": "json", "meta": "siteinfo"},
+                    timeout=5.0,
+                )
+                return response.status_code == 200
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    WIKIPEDIA_API_BASE,
+                    params={"action": "query", "format": "json", "meta": "siteinfo"},
+                    timeout=5.0,
+                )
+                return response.status_code == 200
         
         except Exception as e:
             logger.error(f"Wikipedia health check failed: {e}")

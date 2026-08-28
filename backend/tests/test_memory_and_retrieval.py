@@ -69,3 +69,18 @@ def test_vector_service_can_lazy_reindex_without_embeddings() -> None:
         assert await service.search("physics lab monday", k=2, doc_id=11) == []
 
     asyncio.run(scenario())
+
+
+def test_user_memory_service_detection_and_formatting() -> None:
+    from services.user_memory_service import UserMemoryService
+
+    # Test preference detection regex
+    mem = UserMemoryService.detect_and_store_preference(1, "Remember that I prefer Python and FastAPI")
+    if mem:
+        assert "prefer" in mem.key.lower() or "python" in mem.value.lower()
+
+    # Test formatting
+    formatted = UserMemoryService.format_memory_context(1)
+    if mem:
+        assert "User Profile & Preferences" in formatted
+

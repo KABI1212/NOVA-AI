@@ -25,6 +25,7 @@ from routes import (
     image_router,
     knowledge_enhancement_router,
     learning_router,
+    memory_router,
     orchestrator_router,
     search_router,
     share_router,
@@ -210,6 +211,7 @@ app.include_router(explain_router)
 app.include_router(files_router)
 app.include_router(image_router)
 app.include_router(learning_router)
+app.include_router(memory_router)
 app.include_router(orchestrator_router)
 app.include_router(voice_router)
 app.include_router(compat_router)

@@ -131,12 +131,7 @@ class DocumentationProvider(KnowledgeProvider):
     
     async def _setup(self) -> bool:
         """Setup documentation provider."""
-        try:
-            self.http_client = httpx.AsyncClient(timeout=self.timeout)
-            return True
-        except Exception as e:
-            logger.error(f"Documentation provider setup failed: {e}")
-            return False
+        return True
     
     def _detect_documentation_type(self, query: str) -> Optional[str]:
         """Detect which documentation to use for the query."""
@@ -286,31 +281,19 @@ class DocumentationProvider(KnowledgeProvider):
     async def _retrieve(self, source_id: str) -> Optional[KnowledgeSource]:
         """Retrieve content from official documentation."""
         try:
-            if not self.http_client:
-                self.http_client = httpx.AsyncClient(timeout=self.timeout)
-            
-            # Parse the source ID to get URL and type
-            parts = source_id.split(":", 1)
-            if len(parts) == 2:
-                doc_type, identifier = parts
-            else:
-                return None
-            
-            if doc_type not in self.DOCUMENTATION_SOURCES:
-                return None
-            
-            source = self.DOCUMENTATION_SOURCES[doc_type]
-            url = f"{source['base_url']}/{identifier}"
-            
             headers = {
                 "User-Agent": "Mozilla/5.0 (Educational AI)",
             }
             
-            response = await self.http_client.get(url, headers=headers, timeout=self.timeout)
-            response.raise_for_status()
-            
-            # Extract content
-            content = await self._extract_doc_content(response.text, doc_type)
+            if self.http_client:
+                response = await self.http_client.get(url, headers=headers, timeout=self.timeout)
+                response.raise_for_status()
+                content = await self._extract_doc_content(response.text, doc_type)
+            else:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.get(url, headers=headers, timeout=self.timeout)
+                    response.raise_for_status()
+                    content = await self._extract_doc_content(response.text, doc_type)
             
             return await self._normalize({
                 "title": identifier.replace("-", " ").title(),
@@ -442,26 +425,24 @@ class DocumentationProvider(KnowledgeProvider):
     async def _health_check(self) -> bool:
         """Check if documentation sources are accessible."""
         try:
-            if not self.http_client:
-                self.http_client = httpx.AsyncClient(timeout=self.timeout)
-            
             # Check a few major documentation sources
             test_urls = [
                 self.DOCUMENTATION_SOURCES["python"]["base_url"],
                 self.DOCUMENTATION_SOURCES["mdn"]["base_url"],
             ]
             
-            for url in test_urls:
-                try:
-                    response = await self.http_client.get(
-                        url,
-                        timeout=5.0,
-                        headers={"User-Agent": "Mozilla/5.0 (Educational AI)"},
-                    )
-                    if response.status_code == 200:
-                        return True
-                except:
-                    continue
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                for url in test_urls:
+                    try:
+                        response = await client.get(
+                            url,
+                            timeout=5.0,
+                            headers={"User-Agent": "Mozilla/5.0 (Educational AI)"},
+                        )
+                        if response.status_code == 200:
+                            return True
+                    except Exception:
+                        continue
             
             return False
         

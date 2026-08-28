@@ -88,3 +88,24 @@ def test_run_tool_returns_result_with_tool_metadata(monkeypatch: pytest.MonkeyPa
         assert payload["tool"]["id"] == "echo_tool"
 
     asyncio.run(scenario())
+
+
+def test_calculator_tool_evaluates_math() -> None:
+    async def scenario() -> None:
+        res = await run_tool("calculator", {"expression": "2 + 3 * 4"})
+        assert res["result"] == 14
+
+        res2 = await run_tool("calculator", {"expression": "sqrt(144) + 2^3"})
+        assert res2["result"] == 20
+
+    asyncio.run(scenario())
+
+
+def test_datetime_now_tool_returns_time() -> None:
+    async def scenario() -> None:
+        res = await run_tool("datetime_now", {})
+        assert "utc_date" in res
+        assert "iso" in res
+
+    asyncio.run(scenario())
+

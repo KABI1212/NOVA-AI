@@ -459,14 +459,11 @@ export const imageAPI = {
   variation: (data) => api.post('/image/variations', data, { timeout: 240000 }),
 };
 
-export const generateImage = async (prompt, options = {}) => {
-  const response = await imageAPI.generate({ prompt, ...options });
-  return response.data?.url || response.data?.images?.[0] || '';
-};
-
-export const optimizeImagePrompt = async (data) => {
-  const response = await imageAPI.optimizePrompt(data);
-  return response.data?.revised_prompt || response.data?.prompt || '';
+export const memoryAPI = {
+  getMemories: (category) => api.get('/memory', { params: category ? { category } : {} }),
+  createMemory: (data) => api.post('/memory', data),
+  deleteMemory: (memoryId) => api.delete(`/memory/${memoryId}`),
+  clearAll: () => api.delete('/memory'),
 };
 
 export default api;
