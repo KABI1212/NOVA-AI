@@ -13,7 +13,7 @@ from config.settings import settings
 
 
 logger = logging.getLogger(__name__)
-SUPPORTED_EMAIL_PROVIDERS = {"sendgrid", "resend", "brevo", "smtp", "console"}
+SUPPORTED_EMAIL_PROVIDERS = {"sendgrid", "resend", "brevo", "smtp", "console", "gmail_relay", "gmail", "apps_script"}
 
 
 class EmailDeliveryError(RuntimeError):
@@ -26,6 +26,14 @@ class EmailService:
         if configured_provider:
             if configured_provider not in SUPPORTED_EMAIL_PROVIDERS:
                 return configured_provider
+
+            if configured_provider in {"gmail_relay", "gmail", "apps_script"}:
+                if (settings.GMAIL_RELAY_URL or "").strip():
+                    return "gmail_relay"
+                logger.warning(
+                    "EMAIL_PROVIDER=%s configured but GMAIL_RELAY_URL is missing; falling back to autodetect.",
+                    configured_provider,
+                )
 
             if configured_provider == "smtp":
                 return "smtp"
@@ -52,10 +60,9 @@ class EmailService:
                 return "console"
 
         # Autodetect provider by available credentials (preferred order).
-        # SMTP is intentionally checked before API services because it is the most
-        # predictable fallback for account-signup email delivery and avoids
-        # accidental Resend testing-domain rejections when a verified SMTP Gmail
-        # account is already configured.
+        if (settings.GMAIL_RELAY_URL or "").strip():
+            return "gmail_relay"
+
         if (settings.SMTP_HOST or "").strip() and self._configured_from_address():
             return "smtp"
 
@@ -82,6 +89,15 @@ class EmailService:
         sendgrid_key_ready = bool((settings.SENDGRID_API_KEY or "").strip())
         resend_key_ready = bool((settings.RESEND_API_KEY or "").strip())
         brevo_key_ready = bool((settings.BREVO_API_KEY or "").strip())
+        gmail_relay_ready = bool((settings.GMAIL_RELAY_URL or "").strip())
+
+        if provider == "gmail_relay":
+            return {
+                "configured_provider": (settings.EMAIL_PROVIDER or "").strip().lower() or None,
+                "provider": "gmail_relay",
+                "delivery_mode": "email" if gmail_relay_ready else "unconfigured",
+                "ready": gmail_relay_ready,
+            }
 
         if provider == "resend":
             ready = from_address_ready and resend_key_ready
@@ -217,6 +233,15 @@ class EmailService:
         html_body: str,
     ) -> str:
         provider = self._resolved_provider()
+        if provider == "gmail_relay":
+            self._send_via_gmail_relay(
+                recipient_email=recipient_email,
+                subject=subject,
+                text_body=text_body,
+                html_body=html_body,
+            )
+            return "email"
+
         if provider == "resend":
             self._send_via_resend(
                 recipient_email=recipient_email,
@@ -265,7 +290,7 @@ class EmailService:
         configured_provider = (settings.EMAIL_PROVIDER or "").strip().lower()
         if configured_provider and configured_provider not in SUPPORTED_EMAIL_PROVIDERS:
             raise EmailDeliveryError(
-                f"Unknown EMAIL_PROVIDER '{configured_provider}'. Use 'resend', 'sendgrid', 'brevo', 'smtp', or 'console'."
+                f"Unknown EMAIL_PROVIDER '{configured_provider}'. Use 'gmail_relay', 'resend', 'sendgrid', 'brevo', 'smtp', or 'console'."
             )
 
         raise EmailDeliveryError(self._configuration_error_message())
@@ -607,6 +632,55 @@ class EmailService:
             or "verify a domain at resend.com/domains" in lower
             or "invalid from address" in lower
         )
+
+    def _send_via_gmail_relay(
+        self,
+        *,
+        recipient_email: str,
+        subject: str,
+        text_body: str,
+        html_body: str,
+    ) -> None:
+        relay_url = (settings.GMAIL_RELAY_URL or "").strip()
+        from_name = (settings.EMAIL_FROM_NAME or "").strip() or settings.APP_NAME
+
+        if not relay_url:
+            raise EmailDeliveryError("GMAIL_RELAY_URL is required when EMAIL_PROVIDER=gmail_relay.")
+
+        payload: dict[str, Any] = {
+            "to": recipient_email,
+            "subject": subject,
+            "htmlBody": html_body,
+            "textBody": text_body,
+            "fromName": from_name,
+        }
+        if (settings.GMAIL_RELAY_SECRET or "").strip():
+            payload["secret"] = (settings.GMAIL_RELAY_SECRET or "").strip()
+
+        try:
+            response = requests.post(
+                relay_url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=settings.SMTP_TIMEOUT_SECONDS,
+                allow_redirects=True,
+            )
+            if not response.ok:
+                logger.error("gmail_relay_send_failed status=%s response=%s", response.status_code, response.text)
+                response.raise_for_status()
+
+            # Attempt to parse response if it returns an error JSON
+            try:
+                data = response.json()
+                if isinstance(data, dict) and data.get("status") == "error":
+                    raise EmailDeliveryError(f"Gmail relay error: {data.get('message', 'Unknown error')}")
+            except (ValueError, TypeError):
+                pass
+        except requests.RequestException as exc:
+            err_msg = "Gmail Relay could not deliver the verification email."
+            if hasattr(exc, "response") and exc.response is not None:
+                err_msg += f" (Status {exc.response.status_code}: {exc.response.text})"
+            raise EmailDeliveryError(err_msg) from exc
 
     def _send_via_resend(
         self,
@@ -959,11 +1033,10 @@ class EmailService:
 
     def _configuration_error_message(self) -> str:
         return (
-            "Email delivery is not configured. For SMTP, set EMAIL_PROVIDER=smtp, "
-            "SMTP_HOST, SMTP_PORT, SMTP_USER or SMTP_USERNAME, SMTP_PASS or "
-            "SMTP_PASSWORD, and EMAIL_FROM or EMAIL_FROM_ADDRESS. For SendGrid, "
-            "set EMAIL_PROVIDER=sendgrid, SENDGRID_API_KEY, and EMAIL_FROM or "
-            "EMAIL_FROM_ADDRESS."
+            "Email delivery is not configured. For Gmail Relay, set EMAIL_PROVIDER=gmail_relay and "
+            "GMAIL_RELAY_URL. For SMTP, set EMAIL_PROVIDER=smtp, SMTP_HOST, SMTP_PORT, "
+            "SMTP_USER, and SMTP_PASS. For Brevo, set EMAIL_PROVIDER=brevo and BREVO_API_KEY. "
+            "For Resend, set EMAIL_PROVIDER=resend and RESEND_API_KEY."
         )
 
 

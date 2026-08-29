@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     SENDGRID_API_KEY: str = ""
     RESEND_API_KEY: str = ""
     BREVO_API_KEY: str = ""
+    GMAIL_RELAY_URL: str = ""
+    GMAIL_RELAY_SECRET: str = ""
 
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = ""

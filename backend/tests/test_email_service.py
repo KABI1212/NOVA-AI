@@ -246,6 +246,9 @@ def test_test_email_raises_when_provider_is_not_configured(monkeypatch: pytest.M
     monkeypatch.setattr(email_service_module.settings, "SMTP_PASS", "")
     monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM", "")
     monkeypatch.setattr(email_service_module.settings, "SENDGRID_API_KEY", "")
+    monkeypatch.setattr(email_service_module.settings, "RESEND_API_KEY", "")
+    monkeypatch.setattr(email_service_module.settings, "BREVO_API_KEY", "")
+    monkeypatch.setattr(email_service_module.settings, "GMAIL_RELAY_URL", "")
 
     with pytest.raises(email_service_module.EmailDeliveryError):
         service.send_test_email(
@@ -262,6 +265,7 @@ def test_unknown_email_provider_reports_supported_values(monkeypatch: pytest.Mon
     monkeypatch.setattr(email_service_module.settings, "SENDGRID_API_KEY", "")
     monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM", "sender@example.com")
     monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "")
+    monkeypatch.setattr(email_service_module.settings, "GMAIL_RELAY_URL", "")
 
     with pytest.raises(email_service_module.EmailDeliveryError) as exc_info:
         service.send_test_email(
@@ -285,6 +289,7 @@ def test_smtp_username_requires_password(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "")
     monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM", "sender@example.com")
     monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_ADDRESS", "")
+    monkeypatch.setattr(email_service_module.settings, "GMAIL_RELAY_URL", "")
 
     with pytest.raises(email_service_module.EmailDeliveryError) as exc_info:
         service.send_test_email(
@@ -310,6 +315,9 @@ def test_delivery_status_auto_detects_smtp_when_provider_is_blank(
     monkeypatch.setattr(email_service_module.settings, "SMTP_USERNAME", "")
     monkeypatch.setattr(email_service_module.settings, "SMTP_PASSWORD", "")
     monkeypatch.setattr(email_service_module.settings, "SENDGRID_API_KEY", "")
+    monkeypatch.setattr(email_service_module.settings, "RESEND_API_KEY", "")
+    monkeypatch.setattr(email_service_module.settings, "BREVO_API_KEY", "")
+    monkeypatch.setattr(email_service_module.settings, "GMAIL_RELAY_URL", "")
 
     status = service.get_delivery_status()
 
@@ -393,3 +401,45 @@ def test_smtp_uses_configured_tls_port_587_without_465_fallback(monkeypatch: pyt
     assert captured.get("tls_called") is True
     assert captured["login"] == ("kabileshkofficial@gmail.com", "app-password")
     assert captured["send_message"]["to_addrs"] == ["someone@example.com"]
+
+
+def test_gmail_relay_provider_resolution_and_send(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = EmailService()
+    captured_request: dict = {}
+
+    class _FakeResponse:
+        status_code = 200
+        ok = True
+        text = '{"status":"success"}'
+
+        def json(self):
+            return {"status": "success"}
+
+    def _fake_post(url, json=None, headers=None, timeout=None, allow_redirects=None):
+        captured_request["url"] = url
+        captured_request["json"] = json
+        captured_request["allow_redirects"] = allow_redirects
+        return _FakeResponse()
+
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_PROVIDER", "gmail_relay")
+    monkeypatch.setattr(email_service_module.settings, "GMAIL_RELAY_URL", "https://script.google.com/macros/s/AKfycb.../exec")
+    monkeypatch.setattr(email_service_module.settings, "EMAIL_FROM_NAME", "NOVA AI")
+    monkeypatch.setattr(email_service_module.requests, "post", _fake_post)
+
+    assert service._resolved_provider() == "gmail_relay"
+    status = service.get_delivery_status()
+    assert status["provider"] == "gmail_relay"
+    assert status["ready"] is True
+
+    service._deliver_email(
+        recipient_email="user@example.com",
+        subject="Your OTP",
+        text_body="Code: 123456",
+        html_body="<p>Code: 123456</p>",
+    )
+
+    assert captured_request["url"] == "https://script.google.com/macros/s/AKfycb.../exec"
+    assert captured_request["json"]["to"] == "user@example.com"
+    assert captured_request["json"]["subject"] == "Your OTP"
+    assert captured_request["json"]["textBody"] == "Code: 123456"
+    assert captured_request["allow_redirects"] is True
