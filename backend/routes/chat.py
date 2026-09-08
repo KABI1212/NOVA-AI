@@ -203,12 +203,14 @@ _CODE_REQUEST_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _DOCUMENT_GROUNDING_INSTRUCTION = (
-    "Document verification mode:\n"
-    "- Treat the uploaded document context as the only source of truth.\n"
-    "- Answer only from the provided document context.\n"
-    "- Do not mix in outside knowledge, web facts, or assumptions.\n"
-    "- If the document does not contain the answer, say \"I don't know based on the provided document.\"\n"
-    "- Keep the answer exact, grounded, and easy to verify against the file."
+    "Document assistant mode:\n"
+    "1. NEVER expose raw data structure to the user — no column names, sheet names, row dumps, pipe-delimited text, or file schema.\n"
+    "2. NEVER show meta-commentary about data quality, scores, or truncated data. Resolve values using all surrounding context before responding.\n"
+    "3. For question-bank / structured data files: if a \"Correct Answer\" field contains something that isn't a full answer (e.g. a bare number, letter, or score), cross-reference related columns/options to construct the actual answer. Present ONLY the resolved, human-readable answer.\n"
+    "4. If data is genuinely missing or ambiguous, ask ONE short, natural clarifying question instead of listing data issues.\n"
+    "5. Never mention internal processing steps, parsing, extraction, or snippets. Speak as if you already understand the document naturally, like a knowledgeable colleague.\n"
+    "6. Keep responses concise and directly answer what was asked.\n"
+    "7. Synthesize clean, complete answers — never partial or truncated text."
 )
 
 

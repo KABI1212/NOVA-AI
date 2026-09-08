@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 import React, { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -76,13 +76,33 @@ const normalizeChatNav = (value) => {
   return CHAT_NAV_VALUES.has(normalized) ? normalized : DEFAULT_CHAT_NAV;
 };
 
+const stringifyMessageContent = (value) => {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  if (typeof value === "object") {
+    if (typeof value.detail === "string") return value.detail;
+    if (typeof value.message === "string") return value.message;
+    if (typeof value.text === "string") return value.text;
+    if (typeof value.answer === "string") return value.answer;
+    if (Array.isArray(value)) {
+      return value.map((item) => (typeof item === "string" ? item : item?.msg || item?.message || JSON.stringify(item))).join("\n");
+    }
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+};
+
 const createMessage = (role, content, conversationId = null, extra = {}) => ({
   id:
     typeof crypto !== "undefined" && crypto.randomUUID
       ? crypto.randomUUID()
       : String(Date.now() + Math.random()),
   role,
-  content,
+  content: stringifyMessageContent(content),
   conversation_id: conversationId,
   ...extra,
 });
@@ -1000,14 +1020,18 @@ function Chat() {
       if (!file) {
         return;
       }
+      setUploadedFiles((previous) =>
+        previous.filter((item) => (file.id ? item.id !== file.id : item.clientId !== file.clientId))
+      );
       if (!file.id) {
-        setUploadedFiles((previous) => previous.filter((item) => item.clientId !== file.clientId));
         return;
       }
       try {
         await filesAPI.remove(file.id);
-        setUploadedFiles((previous) => previous.filter((item) => item.id !== file.id));
       } catch (error) {
+        if (error?.response?.status === 404) {
+          return;
+        }
         if (error?.response?.status === 401 || error?.response?.status === 403) {
           handleUnauthorized();
           return;
@@ -1329,7 +1353,7 @@ function Chat() {
             ...(hasDocumentAttachment ? { attachment_kind: "document" } : {}),
             ...(attachedImageDataUrl ? { image_origin: "upload" } : {}),
             ...(initialDocumentReference?.id != null ? { document_id: initialDocumentReference.id } : {}),
-            ...(initialDocumentReference?.name ? { document_name: initialDocumentReference.name } : {}),
+            document_name: initialDocumentReference?.name || (readySessionFiles[0]?.original_name ?? null),
             ...(readyFileIds.length ? { file_ids: readyFileIds } : {}),
           },
         },
@@ -1468,7 +1492,7 @@ function Chat() {
             ...previous,
             createMessage(
               "assistant",
-              "Your files are still being analyzed. Give me a moment and ask again as soon as they show Ready to chat.",
+              "Your file is still being analyzed. Give me a moment and try again once processing completes.",
               currentConversationId
             ),
           ]);
@@ -1512,7 +1536,7 @@ function Chat() {
               ...previous,
               createMessage(
                 "assistant",
-                "The file is still analyzing. Ask again in a moment once it shows Ready to chat.",
+                "Your file is still being analyzed. Give me a moment and try again once processing completes.",
                 currentConversationId
               ),
             ]);
@@ -1544,6 +1568,30 @@ function Chat() {
         }
 
         const hasActiveUploadedFiles = activeFileIds.length > 0 && !predictedImageRequest;
+
+        if (hasActiveUploadedFiles && !documentReference?.name && readySessionFiles[0]?.original_name) {
+          documentReference = {
+            id: readySessionFiles[0]?.id ?? null,
+            name: readySessionFiles[0]?.original_name,
+          };
+          setMessages((previous) =>
+            previous.map((message) =>
+              message.id === optimisticUserMessage.id
+                ? {
+                    ...message,
+                    meta: {
+                      ...(message.meta || {}),
+                      attachment_kind: "document",
+                      file_ids: activeFileIds,
+                      ...(documentReference?.id != null ? { document_id: documentReference.id } : {}),
+                      ...(documentReference?.name ? { document_name: documentReference.name } : {}),
+                    },
+                  }
+                : message
+            )
+          );
+        }
+
         const requestMode = hasActiveUploadedFiles
           ? "files"
           : hasDocumentAttachment

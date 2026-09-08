@@ -6,11 +6,10 @@ import {
   FileSpreadsheet,
   FileText,
   Image as ImageIcon,
+  Loader2,
   RefreshCw,
-  Trash2,
+  X,
 } from "lucide-react";
-
-import UploadProgressBar from "./UploadProgressBar";
 
 const IMAGE_TYPES = ["image/", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"];
 
@@ -53,105 +52,133 @@ function formatFileSize(size) {
   return `${(numeric / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-function statusTone(status) {
-  if (status === "ready") {
-    return "success";
-  }
-  if (status === "failed" || status === "failed-upload") {
-    return "error";
-  }
-  return "default";
-}
-
-function statusLabel(file) {
-  const status = String(file?.status || "").toLowerCase();
-  if (status === "ready") {
-    return "Ready to chat";
-  }
-  if (status === "failed" || status === "failed-upload") {
-    return file?.error || "Upload failed";
-  }
-  const progressMessage = String(file?.progress?.message || "").trim();
-  return progressMessage || "Analyzing...";
-}
-
 export default function FileCard({ file, onPreview, onRetry, onRemove, disabled = false }) {
   const Icon = resolveIcon(file);
-  const progress = Number(file?.progress?.progress ?? (file?.status === "ready" ? 100 : 0));
-  const tone = statusTone(file?.status);
-  const canRetry = file?.status === "failed" || file?.status === "failed-upload";
+  const status = String(file?.status || "").toLowerCase();
+  const fileName = file?.original_name || file?.name || "Document";
+  const isFailed = status === "failed" || status === "failed-upload";
+  const isReady = status === "ready";
+
+  // 1. Ready State: Collapse into a sleek dismissible chip (ChatGPT / Claude style pill)
+  if (isReady) {
+    return (
+      <div className="group relative inline-flex items-center gap-2 rounded-xl border border-white/10 bg-slate-900/90 px-3 py-1.5 backdrop-blur-md transition-all hover:border-white/20 hover:bg-slate-800/90 shadow-sm animate-in fade-in zoom-in-95 duration-200">
+        <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg bg-white/5 text-sky-400">
+          <Icon className="h-3.5 w-3.5" />
+        </div>
+
+        <div className="flex items-baseline gap-1.5 min-w-0">
+          <span className="truncate max-w-[170px] sm:max-w-[240px] text-xs font-medium text-slate-100" title={fileName}>
+            {fileName}
+          </span>
+          <span className="text-[10px] text-slate-400 flex-shrink-0">{formatFileSize(file?.size)}</span>
+        </div>
+
+        <div className="flex items-center gap-0.5 ml-1">
+          {onPreview ? (
+            <button
+              type="button"
+              className="flex h-5 w-5 items-center justify-center rounded-md text-slate-400 transition hover:bg-white/10 hover:text-slate-100 disabled:opacity-40"
+              onClick={() => onPreview(file)}
+              disabled={disabled}
+              title="Inspect preview"
+              aria-label="Inspect preview"
+            >
+              <Eye className="h-3 w-3" />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="flex h-5 w-5 items-center justify-center rounded-md text-slate-400 transition hover:bg-rose-500/20 hover:text-rose-300 disabled:opacity-40"
+            onClick={() => onRemove?.(file)}
+            disabled={disabled}
+            title="Remove attachment"
+            aria-label="Remove attachment"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Failed State: Compact chip with retry & remove
+  if (isFailed) {
+    const errorText = file?.error || "Processing failed";
+    return (
+      <div className="relative inline-flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-950/40 px-3 py-1.5 text-xs text-rose-200 shadow-sm backdrop-blur-md max-w-[340px] animate-in fade-in duration-200">
+        <AlertCircle className="h-4 w-4 flex-shrink-0 text-rose-400" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-xs font-medium text-rose-100" title={fileName}>
+            {fileName}
+          </div>
+          <div className="truncate text-[10px] text-rose-300/80" title={errorText}>
+            {errorText}
+          </div>
+        </div>
+        {onRetry ? (
+          <button
+            type="button"
+            className="flex h-5 w-5 items-center justify-center rounded-md text-amber-300 transition hover:bg-amber-500/20"
+            onClick={() => onRetry(file)}
+            disabled={disabled}
+            title="Retry"
+            aria-label="Retry"
+          >
+            <RefreshCw className="h-3 w-3" />
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="flex h-5 w-5 items-center justify-center rounded-md text-rose-300 transition hover:bg-rose-500/20"
+          onClick={() => onRemove?.(file)}
+          disabled={disabled}
+          title="Remove"
+          aria-label="Remove"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    );
+  }
+
+  // 3. Uploading / In-Progress State: Compact card with slim progress indicator
+  const progress = Number(file?.progress?.progress ?? 0);
+  const message =
+    file?.progress?.message || (status === "uploading" ? `Uploading ${progress}%` : "Analyzing...");
 
   return (
-    <div className="group rounded-2xl border border-white/10 bg-white/[0.025] p-3 shadow-none transition-colors duration-150 hover:bg-white/[0.04]">
-      <div className="flex items-start gap-2.5">
-        <div className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-white/5 text-slate-300">
-          <Icon className="h-4 w-4" />
+    <div className="relative flex items-center gap-2.5 rounded-xl border border-sky-500/20 bg-slate-900/90 px-3 py-2 text-xs text-slate-200 shadow-sm backdrop-blur-md min-w-[200px] max-w-[300px] overflow-hidden animate-in fade-in duration-200">
+      <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-sky-500/10 text-sky-400">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs font-medium text-slate-100" title={fileName}>
+          {fileName}
         </div>
-
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <div className="truncate text-[13px] font-semibold tracking-tight text-slate-50">
-                {file?.original_name || file?.name || "Untitled file"}
-              </div>
-              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
-                <span>{formatFileSize(file?.size)}</span>
-                <span className="rounded-full border border-white/10 px-1.5 py-0.5 uppercase tracking-[0.14em] text-[9px] text-slate-300">
-                  {String(file?.status || "queued").replace(/-/g, " ")}
-                </span>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-transparent text-slate-300 transition hover:border-sky-300/30 hover:bg-sky-500/10 hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={() => onPreview?.(file)}
-                disabled={disabled}
-                aria-label="Preview file"
-                title="Preview"
-              >
-                <Eye className="h-3.5 w-3.5" />
-              </button>
-              {canRetry ? (
-                <button
-                  type="button"
-                  className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-transparent text-amber-300 transition hover:border-amber-300/30 hover:bg-amber-500/10 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  onClick={() => onRetry?.(file)}
-                  disabled={disabled}
-                  aria-label="Retry upload"
-                  title="Retry"
-                >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-transparent text-slate-300 transition hover:border-rose-300/30 hover:bg-rose-500/10 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={() => onRemove?.(file)}
-                disabled={disabled}
-                aria-label="Remove file"
-                title="Remove"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-2 space-y-1.5">
-            <UploadProgressBar progress={progress} tone={tone} />
-            <div className="flex items-center gap-1.5 text-[11px] text-slate-300">
-              {tone === "error" ? <AlertCircle className="h-3.5 w-3.5 text-rose-300" /> : null}
-              <span>{statusLabel(file)}</span>
-            </div>
-          </div>
-
-          {file?.preview_text ? (
-            <div className="mt-2 line-clamp-2 rounded-xl border border-white/8 bg-black/20 px-2.5 py-2 text-[11px] leading-4 text-slate-300">
-              {file.preview_text}
-            </div>
-          ) : null}
+        <div className="text-[10px] text-sky-300/80 truncate">
+          {message}
         </div>
+      </div>
+
+      <button
+        type="button"
+        className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md text-slate-400 transition hover:bg-white/10 hover:text-slate-200 disabled:opacity-40"
+        onClick={() => onRemove?.(file)}
+        disabled={disabled}
+        title="Cancel"
+        aria-label="Cancel upload"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+
+      {/* Slim progress bar pinned to the bottom */}
+      <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-white/10">
+        <div
+          className="h-full bg-gradient-to-r from-sky-400 to-indigo-400 transition-all duration-300 ease-out"
+          style={{ width: `${Math.max(5, Math.min(progress, 100))}%` }}
+        />
       </div>
     </div>
   );

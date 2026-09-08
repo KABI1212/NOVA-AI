@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Check, Copy, ExternalLink, Pencil, RotateCcw, Volume2, VolumeX } from "lucide-react";
+import { Check, Copy, ExternalLink, FileText, Pencil, RotateCcw, Volume2, VolumeX } from "lucide-react";
 
 import MarkdownAnswer from "./common/MarkdownAnswer";
 import NovaLogo from "./common/NovaLogo";
@@ -105,7 +105,10 @@ function getMessageSources(message) {
       (item) =>
         item &&
         typeof item === "object" &&
-        (item.url || item.label || item.title || item.excerpt)
+        item.kind !== "file" &&
+        item.url &&
+        typeof item.url === "string" &&
+        item.url.startsWith("http")
     )
     .slice(0, 3);
 }
@@ -244,7 +247,13 @@ function ChatWindow({
                 <div className={`message-content bb ${isUser ? "user-message" : "ai-message"}`}>
                   {isUser ? (
                     <>
-                      {message.content}
+                      {message.meta?.document_name ? (
+                        <div className="mb-2 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-slate-200">
+                          <FileText className="h-3.5 w-3.5 text-sky-400 flex-shrink-0" />
+                          <span className="max-w-[240px] truncate">{message.meta.document_name}</span>
+                        </div>
+                      ) : null}
+                      {getUserQuestionText(message)}
                       <MessageImages message={message} />
                     </>
                   ) : (

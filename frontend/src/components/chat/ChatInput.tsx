@@ -382,8 +382,7 @@ export default function ChatInput({
       return;
     }
 
-    const baseValue = valueRef.current.trim();
-    voiceBaseValueRef.current = baseValue;
+    const baseValue = voiceBaseValueRef.current.trim();
     capturedSpeechRef.current = spokenText;
     previewSpeechRef.current = spokenText;
     setHeardText(spokenText);

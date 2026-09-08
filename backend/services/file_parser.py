@@ -263,17 +263,25 @@ class FileParserService:
     async def _parse_spreadsheet(self, path: str, *, original_name: str, mime_type: str) -> ParsedFile:
         sections: list[ParsedSection] = []
         sheet_names: list[str] = []
+        parsed_with_pandas = False
 
         if pd is not None:
-            workbook = pd.ExcelFile(path)
-            for sheet_name in workbook.sheet_names:
-                data_frame = workbook.parse(sheet_name).fillna("")
-                sheet_text = data_frame.to_csv(index=False)
-                cleaned = self._clean_text(sheet_text)
-                if cleaned:
-                    sections.append(ParsedSection(text=cleaned, sheet_name=sheet_name))
-                    sheet_names.append(sheet_name)
-        elif load_workbook is not None:
+            try:
+                workbook = pd.ExcelFile(path)
+                for sheet_name in workbook.sheet_names:
+                    data_frame = workbook.parse(sheet_name).fillna("")
+                    sheet_text = data_frame.to_csv(index=False)
+                    cleaned = self._clean_text(sheet_text)
+                    if cleaned:
+                        sections.append(ParsedSection(text=cleaned, sheet_name=sheet_name))
+                        sheet_names.append(sheet_name)
+                parsed_with_pandas = True
+            except Exception:
+                sections.clear()
+                sheet_names.clear()
+                parsed_with_pandas = False
+
+        if not parsed_with_pandas and load_workbook is not None:
             workbook = load_workbook(path, data_only=True)
             for worksheet in workbook.worksheets:
                 lines = []
@@ -285,6 +293,8 @@ class FileParserService:
                 if cleaned:
                     sections.append(ParsedSection(text=cleaned, sheet_name=worksheet.title))
                     sheet_names.append(worksheet.title)
+        elif not parsed_with_pandas and load_workbook is None:
+            raise ValueError("Spreadsheet parsing is unavailable because neither openpyxl nor pandas is installed.")
 
         combined = "\n\n".join(
             f"{section.sheet_name}\n{section.text}" if section.sheet_name else section.text
@@ -293,7 +303,7 @@ class FileParserService:
         return ParsedFile(
             text=combined,
             preview_text=combined[:400],
-            metadata={"parser": "pandas" if pd is not None else "openpyxl", "sheet_names": sheet_names},
+            metadata={"parser": "pandas" if parsed_with_pandas else "openpyxl", "sheet_names": sheet_names},
             sections=sections,
         )
 

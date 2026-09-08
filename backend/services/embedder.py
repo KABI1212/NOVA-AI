@@ -50,11 +50,14 @@ class EmbedderService:
             return [float(value) for value in cached]
 
         if self.enabled():
-            response = await self.client.embeddings.create(
-                input=cleaned,
-                model=self.model,
-            )
-            embedding = [float(value) for value in response.data[0].embedding]
+            try:
+                response = await self.client.embeddings.create(
+                    input=cleaned,
+                    model=self.model,
+                )
+                embedding = [float(value) for value in response.data[0].embedding]
+            except Exception:
+                embedding = self._local_embedding(cleaned)
         else:
             embedding = self._local_embedding(cleaned)
 

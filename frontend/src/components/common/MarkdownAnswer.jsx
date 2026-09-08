@@ -1,4 +1,4 @@
-import { Component, memo, useDeferredValue, useEffect, useState } from "react";
+import React, { Component, memo, useDeferredValue, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -252,10 +252,46 @@ function MarkdownCodeBlock({ children, fullContent = "", ...props }) {
   );
 }
 
+function extractStringContent(content) {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (content == null) {
+    return "";
+  }
+  if (typeof content === "object") {
+    if (typeof content.text === "string") {
+      return content.text;
+    }
+    if (typeof content.answer === "string") {
+      return content.answer;
+    }
+    if (typeof content.message === "string") {
+      return content.message;
+    }
+    if (typeof content.detail === "string") {
+      return content.detail;
+    }
+    if (Array.isArray(content)) {
+      return content
+        .map((item) => (typeof item === "string" ? item : item?.msg || item?.message || JSON.stringify(item)))
+        .join("\n");
+    }
+    try {
+      return JSON.stringify(content, null, 2);
+    } catch {
+      return String(content);
+    }
+  }
+  return String(content);
+}
+
 function MarkdownAnswer({ content = "", className = "", streaming = false }) {
-  const deferredContent = useDeferredValue(content);
-  const normalizedContent = streaming ? normalizeStreamingMarkdown(deferredContent) : content;
-  const unescapedContent = normalizedContent.replace(/\\([$])/g, '$1');
+  const safeContent = extractStringContent(content);
+  const deferredContent = useDeferredValue(safeContent);
+  const normalizedContent = streaming ? normalizeStreamingMarkdown(deferredContent) : safeContent;
+  const stringContent = typeof normalizedContent === "string" ? normalizedContent : extractStringContent(normalizedContent);
+  const unescapedContent = stringContent.replace(/\\([$])/g, '$1');
   const renderContent = normalizeHeadingSeparators(unescapedContent);
   const rootClassName = `nova-markdown${className ? ` ${className}` : ""}`;
   const Heading = ({ level, className: headingClassName, children }) => {
@@ -274,7 +310,20 @@ function MarkdownAnswer({ content = "", className = "", streaming = false }) {
             h2: ({ children }) => <Heading level={2} className="nova-h2">{children}</Heading>,
             h3: ({ children }) => <Heading level={3} className="nova-h3">{children}</Heading>,
             h4: ({ children }) => <Heading level={4} className="nova-h4">{children}</Heading>,
-            p: ({ children }) => <p className={paragraphClassName(children)}>{children}</p>,
+            p: ({ children }) => {
+              const hasBlockChild = React.Children.toArray(children).some(
+                (child) =>
+                  React.isValidElement(child) &&
+                  (child.type === "div" ||
+                    child.type === "pre" ||
+                    child.type === MarkdownCodeBlock ||
+                    (typeof child.props?.className === "string" && child.props.className.includes("nova-code")))
+              );
+              if (hasBlockChild) {
+                return <div className={paragraphClassName(children)}>{children}</div>;
+              }
+              return <p className={paragraphClassName(children)}>{children}</p>;
+            },
             ul: ({ children }) => <ul className="nova-list nova-list-unordered">{children}</ul>,
             ol: ({ children }) => <ol className="nova-list nova-list-ordered">{children}</ol>,
             li: ({ children }) => <li className="nova-list-item">{children}</li>,
@@ -314,8 +363,13 @@ function MarkdownAnswer({ content = "", className = "", streaming = false }) {
               ) : (
                 <input type={type} {...props} />
               ),
-            code({ inline, children, ...props }) {
-              if (inline) {
+            pre: ({ children }) => <>{children}</>,
+            code({ node, inline, className, children, ...props }) {
+              const match = /language-(\w+)/.exec(className || "");
+              const isBlock = Boolean(match || String(children || "").includes("\n"));
+              const isInline = inline !== undefined ? inline : !isBlock;
+
+              if (isInline) {
                 return (
                   <code className="nova-inline-code" {...props}>
                     {children}
@@ -324,7 +378,7 @@ function MarkdownAnswer({ content = "", className = "", streaming = false }) {
               }
 
               return (
-                <MarkdownCodeBlock {...props} fullContent={renderContent}>
+                <MarkdownCodeBlock {...props} className={className} fullContent={renderContent}>
                   {children}
                 </MarkdownCodeBlock>
               );
