@@ -165,11 +165,13 @@ _SEARCH_FALLBACK_STOPWORDS = {
 }
 _FILE_TAG_PATTERN = re.compile(r"(?:\s*\+\s*)?\[File:\s*([^\]]+)\]\s*", re.IGNORECASE)
 _ALL_QUESTIONS_PATTERN = re.compile(
-    r"\b(?:answer|solve|write|give|provide|return|generate)\s+(?:all|every)\s+(?:the\s+)?(?:questions?|answers?)\b"
+    r"\b(?:answer|solve|write|give|provide|return|generate|process)\s+(?:all|every|the)?\s*(?:questions?|answers?|document|paper|file)\b"
     r"|\ball questions?\b"
     r"|\ball question answers?\b"
     r"|\bquestion paper\b"
-    r"|\bsub-?questions?\b",
+    r"|\bquestions?\b"
+    r"|\bsub-?questions?\b"
+    r"|\bprocess this document\b",
     re.IGNORECASE,
 )
 _MULTI_MARK_REQUEST_PATTERN = re.compile(
@@ -204,13 +206,59 @@ _CODE_REQUEST_PATTERN = re.compile(
 )
 _DOCUMENT_GROUNDING_INSTRUCTION = (
     "Document assistant mode:\n"
-    "1. NEVER expose raw data structure to the user — no column names, sheet names, row dumps, pipe-delimited text, or file schema.\n"
-    "2. NEVER show meta-commentary about data quality, scores, or truncated data. Resolve values using all surrounding context before responding.\n"
-    "3. For question-bank / structured data files: if a \"Correct Answer\" field contains something that isn't a full answer (e.g. a bare number, letter, or score), cross-reference related columns/options to construct the actual answer. Present ONLY the resolved, human-readable answer.\n"
-    "4. If data is genuinely missing or ambiguous, ask ONE short, natural clarifying question instead of listing data issues.\n"
-    "5. Never mention internal processing steps, parsing, extraction, or snippets. Speak as if you already understand the document naturally, like a knowledgeable colleague.\n"
-    "6. Keep responses concise and directly answer what was asked.\n"
-    "7. Synthesize clean, complete answers — never partial or truncated text."
+    "### MULTI-QUESTION PROCESSING AND ANSWERING RULES:\n"
+    "When the uploaded document contains questions (exam paper, assignment, question bank, spreadsheet with questions, test, or any document with multiple questions), or when the user asks to answer/solve questions from the document:\n"
+    "You MUST process and answer ALL questions present in the document. You must NOT randomly select, summarize, filter, or answer only a few questions.\n"
+    "- If the document contains 10 questions → answer all 10 questions.\n"
+    "- If the document contains 30 questions → answer all 30 questions.\n"
+    "- If the document contains 100 questions → answer all 100 questions.\n\n"
+    "Required Behavior:\n"
+    "1. First, identify and extract EVERY question from the uploaded document.\n"
+    "2. Count the total number of questions detected.\n"
+    "3. Preserve the original question numbering and order.\n"
+    "4. Answer every question one by one, providing both the direct answer and a comprehensive, full detailed explanation.\n"
+    "5. Do NOT skip any question.\n"
+    "6. Do NOT randomly select questions.\n"
+    "7. Do NOT combine multiple questions into one answer unless the user explicitly asks.\n"
+    "8. Do NOT summarize the document instead of answering the questions.\n"
+    "9. If a question is unclear or unreadable, mention that specific question and explain that it could not be read accurately.\n"
+    "10. If the document contains duplicate questions, still process them unless the user asks to remove duplicates.\n"
+    "11. If the document has questions across multiple pages/sheets, scan ALL pages/sheets before generating the final answer.\n"
+    "12. For Excel files, check ALL relevant sheets and rows containing questions.\n"
+    "13. For each question's explanation, provide a FULL, in-depth explanation — never give a brief or one-line explanation. Thoroughly explain the concepts, step-by-step logic, working principles, formulas/derivations, or rationale.\n"
+    "14. Before finishing, verify that the number of answered questions matches the number of detected questions.\n\n"
+    "Required Output Format:\n"
+    "Start with:\n"
+    "Total questions detected: X\n\n"
+    "Then provide:\n"
+    "Question 1: [Original question]\n"
+    "Answer: [Answer]\n"
+    "Explanation: [Full, detailed, step-by-step explanation covering concepts, reasoning, mechanisms, or derivations in depth]\n\n"
+    "Question 2: [Original question]\n"
+    "Answer: [Answer]\n"
+    "Explanation: [Full, detailed, step-by-step explanation covering concepts, reasoning, mechanisms, or derivations in depth]\n\n"
+    "Question 3: [Original question]\n"
+    "Answer: [Answer]\n"
+    "Explanation: [Full, detailed, step-by-step explanation covering concepts, reasoning, mechanisms, or derivations in depth]\n\n"
+    "Continue until EVERY question has been answered with its full detailed explanation.\n\n"
+    "If the document contains more questions than can reasonably fit in one response, DO NOT skip questions. Clearly divide the output into parts:\n"
+    "Part 1: Questions 1–20\n"
+    "Part 2: Questions 21–40\n"
+    "Part 3: Questions 41–60\n"
+    "Continue until all questions are completed.\n\n"
+    "Completeness Check (Self-Verification):\n"
+    "- Did I process the entire uploaded document?\n"
+    "- Did I check every page/sheet?\n"
+    "- Did I identify all questions?\n"
+    "- Did I preserve the original order?\n"
+    "- Did I answer every detected question?\n"
+    "- Did I accidentally skip or merge any questions?\n\n"
+    "IMPORTANT: The user's uploaded document is the source of truth. Do not generate questions that are not present in the document, and do not omit questions that are present in the document.\n\n"
+    "General Guidelines:\n"
+    "- NEVER expose raw data structure to the user — no column names, sheet names, row dumps, pipe-delimited text, or file schema.\n"
+    "- NEVER show meta-commentary about data quality, scores, or truncated data. Resolve values using all surrounding context before responding.\n"
+    "- For question-bank / structured data files: if a \"Correct Answer\" field contains something that isn't a full answer (e.g. a bare number, letter, or score), cross-reference related columns/options to construct the actual answer. Present ONLY the resolved, human-readable answer.\n"
+    "- Speak as if you already understand the document naturally, like a knowledgeable colleague."
 )
 
 
@@ -1273,10 +1321,10 @@ def _looks_like_diagram_request(message: Optional[str]) -> bool:
 
 
 def _needs_full_document_context(message: Optional[str]) -> bool:
-    raw_text = str(message or "")
+    raw_text = str(message or "").strip()
+    if not raw_text:
+        return True
     cleaned_text = " ".join(raw_text.split())
-    if not cleaned_text:
-        return False
 
     if _ALL_QUESTIONS_PATTERN.search(cleaned_text):
         return True
@@ -1284,7 +1332,7 @@ def _needs_full_document_context(message: Optional[str]) -> bool:
     if len(_MULTI_MARK_REQUEST_PATTERN.findall(cleaned_text)) >= 2:
         return True
 
-    if len(_QUESTION_LINE_PATTERN.findall(raw_text)) >= 2:
+    if len(_QUESTION_LINE_PATTERN.findall(raw_text)) >= 1:
         return True
 
     return False

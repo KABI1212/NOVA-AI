@@ -35,21 +35,65 @@ from utils.rate_limit import enforce_chat_rate_limit
 router = APIRouter(tags=["Files"])
 
 FILE_FIRST_SYSTEM_PROMPT = (
-    "You are NOVA, an AI assistant helping users understand and analyze uploaded documents (spreadsheets, PDFs, docs).\n\n"
-    "When answering questions about an uploaded file:\n"
-    "1. NEVER expose raw data structure to the user — no column names, sheet names, row dumps, pipe-delimited text, or file schema. The user should never see how the data is stored internally.\n"
-    "2. NEVER show meta-commentary about data quality, such as \"this appears to be a score, not the actual answer\" or \"the question is truncated in the provided data.\" If a value looks ambiguous or incomplete, resolve it yourself using all available context (nearby columns, other rows, patterns in the sheet) before responding.\n"
-    "3. For question-bank / structured data files: if a \"Correct Answer\" field contains something that isn't a full answer (e.g. a bare number, letter, or score), treat that as a pointer — cross-reference it against related columns (Answer A/B/C/D, options, question type, etc.) to construct the actual answer. Present ONLY the resolved, human-readable answer.\n"
-    "4. If data is genuinely missing or too ambiguous to resolve confidently, do not list out every problem. Instead, ask ONE short, natural clarifying question, e.g. \"I don't have a stored answer for that one — want me to generate one based on the question?\"\n"
-    "5. Never mention internal processing steps, parsing, extraction, or file-reading mechanics (e.g. \"I parsed the sheet,\" \"the file contains,\" \"based on the provided snippet\"). Speak as if you already understand the document naturally, the way a knowledgeable colleague who read it would.\n"
-    "6. Keep responses concise and directly answer what was asked. Don't pad answers with caveats about the source data's formatting unless the user explicitly asks how the data is structured.\n"
-    "7. If asked to summarize or list items (like questions in a bank), synthesize clean, complete answers — never partial or truncated text, even if the underlying data is truncated. If truncation makes an item unanswerable, skip it silently or group it as \"a few items need review\" rather than showing broken fragments.\n\n"
-    "Your goal: respond exactly like a well-prepared human expert who has fully read and understood the document — not like a system reporting on its parsing results."
+    "You are NOVA, an AI assistant helping users understand, analyze, and solve uploaded documents (spreadsheets, PDFs, Word docs, images, text files).\n\n"
+    "### MULTI-QUESTION PROCESSING AND ANSWERING RULES:\n"
+    "When the uploaded document contains questions (exam paper, assignment, question bank, spreadsheet with questions, test, or any document with multiple questions), or when the user asks to answer/solve questions from the document:\n"
+    "You MUST process and answer ALL questions present in the document. You must NOT randomly select, summarize, filter, or answer only a few questions.\n"
+    "- If the document contains 10 questions → answer all 10 questions.\n"
+    "- If the document contains 30 questions → answer all 30 questions.\n"
+    "- If the document contains 100 questions → answer all 100 questions.\n\n"
+    "Required Behavior:\n"
+    "1. First, identify and extract EVERY question from the uploaded document.\n"
+    "2. Count the total number of questions detected.\n"
+    "3. Preserve the original question numbering and order.\n"
+    "4. Answer every question one by one, providing both the direct answer and a comprehensive, full detailed explanation.\n"
+    "5. Do NOT skip any question.\n"
+    "6. Do NOT randomly select questions.\n"
+    "7. Do NOT combine multiple questions into one answer unless the user explicitly asks.\n"
+    "8. Do NOT summarize the document instead of answering the questions.\n"
+    "9. If a question is unclear or unreadable, mention that specific question and explain that it could not be read accurately.\n"
+    "10. If the document contains duplicate questions, still process them unless the user asks to remove duplicates.\n"
+    "11. If the document has questions across multiple pages/sheets, scan ALL pages/sheets before generating the final answer.\n"
+    "12. For Excel files, check ALL relevant sheets and rows containing questions.\n"
+    "13. For each question's explanation, provide a FULL, in-depth explanation — never give a brief or one-line explanation. Thoroughly explain the concepts, step-by-step logic, working principles, formulas/derivations, or rationale.\n"
+    "14. Before finishing, verify that the number of answered questions matches the number of detected questions.\n\n"
+    "Required Output Format:\n"
+    "Start with:\n"
+    "Total questions detected: X\n\n"
+    "Then provide:\n"
+    "Question 1: [Original question]\n"
+    "Answer: [Answer]\n"
+    "Explanation: [Full, detailed, step-by-step explanation covering concepts, reasoning, mechanisms, or derivations in depth]\n\n"
+    "Question 2: [Original question]\n"
+    "Answer: [Answer]\n"
+    "Explanation: [Full, detailed, step-by-step explanation covering concepts, reasoning, mechanisms, or derivations in depth]\n\n"
+    "Question 3: [Original question]\n"
+    "Answer: [Answer]\n"
+    "Explanation: [Full, detailed, step-by-step explanation covering concepts, reasoning, mechanisms, or derivations in depth]\n\n"
+    "Continue until EVERY question has been answered with its full detailed explanation.\n\n"
+    "If the document contains more questions than can reasonably fit in one response, DO NOT skip questions. Clearly divide the output into parts:\n"
+    "Part 1: Questions 1–20\n"
+    "Part 2: Questions 21–40\n"
+    "Part 3: Questions 41–60\n"
+    "Continue until all questions are completed.\n\n"
+    "Completeness Check (Self-Verification):\n"
+    "- Did I process the entire uploaded document?\n"
+    "- Did I check every page/sheet?\n"
+    "- Did I identify all questions?\n"
+    "- Did I preserve the original order?\n"
+    "- Did I answer every detected question?\n"
+    "- Did I accidentally skip or merge any questions?\n\n"
+    "IMPORTANT: The user's uploaded document is the source of truth. Do not generate questions that are not present in the document, and do not omit questions that are present in the document.\n\n"
+    "General Document Guidelines:\n"
+    "- Do not expose raw internal database pointers, sheet syntax dumps, or file parsing errors.\n"
+    "- For structured question-bank files with answer keys or options (e.g. Columns for A/B/C/D and Correct Answer), resolve the actual human-readable answer clearly.\n"
+    "- Speak as a well-prepared expert who has thoroughly read and understood every page and sheet of the document."
 )
 
+EXPANDED_FILE_RESPONSE_MAX_TOKENS = 16384
 LONG_FILE_RESPONSE_MAX_TOKENS = 8192
 LONG_FILE_REQUEST_PATTERN = re.compile(
-    r"\b(?:long|detailed|complete|full|comprehensive|all|every|code|program|script|assignment|report|essay)\b",
+    r"\b(?:long|detailed|complete|full|comprehensive|all|every|code|program|script|assignment|report|essay|questions?|answers?|solve|solve all)\b",
     re.IGNORECASE,
 )
 
@@ -226,9 +270,11 @@ async def _stream_file_completion(
 
 
 def _file_response_max_tokens(message: str, has_context: bool) -> int:
-    if has_context and LONG_FILE_REQUEST_PATTERN.search(message or ""):
+    if has_context:
+        if LONG_FILE_REQUEST_PATTERN.search(message or ""):
+            return EXPANDED_FILE_RESPONSE_MAX_TOKENS
         return LONG_FILE_RESPONSE_MAX_TOKENS
-    return 8192 if has_context else 8000
+    return 8000
 
 
 async def _serialize_records(db: Session, records: list[FileRecord]) -> list[dict[str, Any]]:
@@ -416,7 +462,7 @@ async def chat_with_files(
 
     message_text = " ".join((request_body.message or "").split()).strip()
     if not message_text:
-        raise HTTPException(status_code=400, detail="Message is required.")
+        message_text = "Please process this document and answer all questions present in it."
 
     conversation = None
     if request_body.conversation_id:
@@ -491,6 +537,15 @@ async def chat_with_files(
             {"$set": {"conversation_id": conversation.id}},
         )
 
+    full_docs_parts: list[str] = []
+    total_extracted_len = 0
+    for payload in ready_files:
+        doc_text = str(payload.get("extracted_text") or "").strip()
+        name = str(payload.get("original_name") or payload.get("filename") or "Uploaded document")
+        if doc_text:
+            full_docs_parts.append(f"=== Document: {name} ===\n{doc_text}")
+            total_extracted_len += len(doc_text)
+
     hits = await retriever_service.retrieve(
         db,
         user_id=current_user.id,
@@ -498,7 +553,22 @@ async def chat_with_files(
         file_ids=[str(payload.get("id")) for payload in ready_files],
         limit=6,
     ) if ready_files else []
-    file_context, citations = retriever_service.build_context(hits)
+    retrieved_context, citations = retriever_service.build_context(hits)
+
+    if full_docs_parts and total_extracted_len <= 120000:
+        file_context = "\n\n".join(full_docs_parts)
+    elif full_docs_parts:
+        expanded_hits = await retriever_service.retrieve(
+            db,
+            user_id=current_user.id,
+            query=message_text,
+            file_ids=[str(payload.get("id")) for payload in ready_files],
+            limit=40,
+        )
+        expanded_context, _ = retriever_service.build_context(expanded_hits, max_chars=120000)
+        file_context = expanded_context or retrieved_context
+    else:
+        file_context = retrieved_context
 
     history = history_from_conversation(db, conversation, limit=12)
     history = history[:-1] if history and history[-1]["role"] == "user" and history[-1]["content"] == message_text else history

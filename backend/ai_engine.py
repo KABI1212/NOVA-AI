@@ -43,11 +43,13 @@ _STRICT_EXAM_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _MULTI_QUESTION_REQUEST_PATTERN = re.compile(
-    r"\b(?:answer|solve|write|give|provide|return|generate)\s+(?:all|every)\s+(?:the\s+)?(?:questions?|answers?)\b"
+    r"\b(?:answer|solve|write|give|provide|return|generate|process)\s+(?:all|every|the)?\s*(?:questions?|answers?|document|paper|file)\b"
     r"|\ball questions?\b"
     r"|\ball question answers?\b"
     r"|\bquestion paper\b"
-    r"|\bsub-?questions?\b",
+    r"|\bquestions?\b"
+    r"|\bsub-?questions?\b"
+    r"|\bprocess this document\b",
     re.IGNORECASE,
 )
 _QUESTION_ITEM_PATTERN = re.compile(
@@ -250,12 +252,28 @@ def _multi_question_answer_instruction(message: str) -> str | None:
 
     return (
         "This request involves multiple questions.\n"
+        "You MUST process and answer ALL questions present. Do NOT randomly select, summarize, filter, or answer only a few.\n"
         "- Answer all visible questions and sub-questions, not just the first few.\n"
-        "- Keep the same order as the source question paper or prompt.\n"
-        "- Use clear separators or headings so each answer is easy to match to its question.\n"
+        "- First, identify and extract EVERY question and count the total.\n"
+        "- Start the output with: Total questions detected: X\n"
+        "- Preserve the original question numbering and order.\n"
+        "- Format every question one by one:\n"
+        "  Question 1: [Original question]\n"
+        "  Answer: [Answer]\n"
+        "  Explanation: [Full, detailed, step-by-step explanation covering concepts, reasoning, mechanisms, or derivations in depth]\n\n"
+        "  Question 2: [Original question]\n"
+        "  Answer: [Answer]\n"
+        "  Explanation: [Full, detailed, step-by-step explanation covering concepts, reasoning, mechanisms, or derivations in depth]\n\n"
+        "  Question 3: [Original question]\n"
+        "  Answer: [Answer]\n"
+        "  Explanation: [Full, detailed, step-by-step explanation covering concepts, reasoning, mechanisms, or derivations in depth]\n\n"
+        "- Do NOT skip any question, do NOT randomly select, and do NOT summarize instead of answering.\n"
+        "- For the explanation, give a FULL, comprehensive explanation — never give a brief or one-line explanation. Thoroughly explain the underlying concepts, step-by-step logic, formulas/derivations, or rationale.\n"
         "- If different questions have different marks, adjust the answer length for each one individually.\n"
         "- Do not stop after only a few answers when more questions are still visible.\n"
-        "- Never silently stop early."
+        "- If a question is unclear or unreadable, mention that specific question and explain that it could not be read accurately.\n"
+        "- If the document contains more questions than can fit in one response, divide into parts: Part 1: Questions 1–20, Part 2: Questions 21–40, etc.\n"
+        "- Before finishing, verify that the number of answered questions matches the number of detected questions."
     )
 
 
