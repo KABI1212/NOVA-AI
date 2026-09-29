@@ -21,11 +21,13 @@ from config.settings import settings
 router = APIRouter(prefix="/api/document", tags=["Document Analyzer"])
 logger = logging.getLogger(__name__)
 _ALL_QUESTIONS_PATTERN = re.compile(
-    r"\b(?:answer|solve|write|give|provide|return|generate)\s+(?:all|every)\s+(?:the\s+)?(?:questions?|answers?)\b"
+    r"\b(?:answer|solve|write|give|provide|return|generate|process)\s+(?:all|every|the)?\s*(?:questions?|answers?|document|paper|file)\b"
     r"|\ball questions?\b"
     r"|\ball question answers?\b"
     r"|\bquestion paper\b"
-    r"|\bsub-?questions?\b",
+    r"|\bquestions?\b"
+    r"|\bsub-?questions?\b"
+    r"|\bprocess this document\b",
     re.IGNORECASE,
 )
 _MULTI_MARK_REQUEST_PATTERN = re.compile(
@@ -349,10 +351,10 @@ def _document_follow_up_suggestions(question: str, limit: int = 4) -> List[str]:
 
 
 def _needs_full_document_context(question: str) -> bool:
-    raw_text = str(question or "")
+    raw_text = str(question or "").strip()
+    if not raw_text:
+        return True
     cleaned_text = " ".join(raw_text.split())
-    if not cleaned_text:
-        return False
 
     if _ALL_QUESTIONS_PATTERN.search(cleaned_text):
         return True
@@ -360,7 +362,7 @@ def _needs_full_document_context(question: str) -> bool:
     if len(_MULTI_MARK_REQUEST_PATTERN.findall(cleaned_text)) >= 2:
         return True
 
-    if len(_QUESTION_LINE_PATTERN.findall(raw_text)) >= 2:
+    if len(_QUESTION_LINE_PATTERN.findall(raw_text)) >= 1:
         return True
 
     return False

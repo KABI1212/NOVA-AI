@@ -597,6 +597,7 @@ function Chat() {
   const [isConversationLoading, setIsConversationLoading] = useState(false);
   const [currentConversationId, setCurrentConversationId] = useState(null);
   const [uploadedFiles, setUploadedFiles] = useState([]);
+  const [composerFiles, setComposerFiles] = useState([]);
   const [previewFile, setPreviewFile] = useState(null);
   const [speechSupported, setSpeechSupported] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState(null);
@@ -826,6 +827,20 @@ function Chat() {
             );
             return mergeUploadedFiles(retainedPrevious, items);
           });
+          setComposerFiles((previous) => {
+            if (!previous.length) {
+              return previous;
+            }
+            return previous.map((compFile) => {
+              if (!compFile.id) {
+                return compFile;
+              }
+              const updated = items.find((item) => item.id === compFile.id);
+              return updated
+                ? { ...compFile, ...updated, localFile: compFile.localFile || updated.localFile }
+                : compFile;
+            });
+          });
         });
         return items;
       } catch (error) {
@@ -876,24 +891,23 @@ function Chat() {
             ? crypto.randomUUID()
             : `local-file-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
-        setUploadedFiles((previous) =>
-          mergeUploadedFiles(previous, [
-            {
-              clientId,
-              localFile: file,
-              original_name: file.name,
-              size: file.size,
-              mime_type: file.type,
-              status: "uploading",
-              preview_text: "",
-              progress: {
-                progress: 0,
-                stage: "uploading",
-                message: "Uploading...",
-              },
-            },
-          ])
-        );
+        const initialDraft = {
+          clientId,
+          localFile: file,
+          original_name: file.name,
+          size: file.size,
+          mime_type: file.type,
+          status: "uploading",
+          preview_text: "",
+          progress: {
+            progress: 0,
+            stage: "uploading",
+            message: "Uploading...",
+          },
+        };
+
+        setUploadedFiles((previous) => mergeUploadedFiles(previous, [initialDraft]));
+        setComposerFiles((previous) => mergeUploadedFiles(previous, [initialDraft]));
 
         try {
           const formData = new FormData();
@@ -908,19 +922,17 @@ function Chat() {
               const total = Number(event?.total || file.size || 1);
               const loaded = Number(event?.loaded || 0);
               const progress = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
-              setUploadedFiles((previous) =>
-                mergeUploadedFiles(previous, [
-                  {
-                    clientId,
-                    progress: {
-                      progress,
-                      stage: "uploading",
-                      message: progress >= 100 ? "Upload complete" : `Uploading... ${progress}%`,
-                    },
-                    status: "uploading",
-                  },
-                ])
-              );
+              const progressUpdate = {
+                clientId,
+                progress: {
+                  progress,
+                  stage: "uploading",
+                  message: progress >= 100 ? "Upload complete" : `Uploading... ${progress}%`,
+                },
+                status: "uploading",
+              };
+              setUploadedFiles((previous) => mergeUploadedFiles(previous, [progressUpdate]));
+              setComposerFiles((previous) => mergeUploadedFiles(previous, [progressUpdate]));
             },
           });
 
@@ -930,10 +942,17 @@ function Chat() {
           }
 
           uploadedServerFiles.push(serverFile);
+          const serverRecord = { ...serverFile, localFile: file };
           setUploadedFiles((previous) =>
             mergeUploadedFiles(
               previous.filter((item) => item.clientId !== clientId),
-              [{ ...serverFile, localFile: file }]
+              [serverRecord]
+            )
+          );
+          setComposerFiles((previous) =>
+            mergeUploadedFiles(
+              previous.filter((item) => item.clientId !== clientId),
+              [serverRecord]
             )
           );
         } catch (error) {
@@ -941,27 +960,25 @@ function Chat() {
             handleUnauthorized();
             return uploadedServerFiles;
           }
-          setUploadedFiles((previous) =>
-            mergeUploadedFiles(previous, [
-              {
-                clientId,
-                localFile: file,
-                original_name: file.name,
-                size: file.size,
-                mime_type: file.type,
-                status: "failed-upload",
-                error:
-                  error?.response?.data?.detail ||
-                  error?.message ||
-                  "The file could not be uploaded.",
-                progress: {
-                  progress: 100,
-                  stage: "failed",
-                  message: "Upload failed",
-                },
-              },
-            ])
-          );
+          const failRecord = {
+            clientId,
+            localFile: file,
+            original_name: file.name,
+            size: file.size,
+            mime_type: file.type,
+            status: "failed-upload",
+            error:
+              error?.response?.data?.detail ||
+              error?.message ||
+              "The file could not be uploaded.",
+            progress: {
+              progress: 100,
+              stage: "failed",
+              message: "Upload failed",
+            },
+          };
+          setUploadedFiles((previous) => mergeUploadedFiles(previous, [failRecord]));
+          setComposerFiles((previous) => mergeUploadedFiles(previous, [failRecord]));
         }
       }
 
@@ -998,6 +1015,7 @@ function Chat() {
       }
       if (file.localFile instanceof File && !file.id) {
         await uploadFilesToSession([file.localFile]);
+        setComposerFiles((previous) => previous.filter((item) => item.clientId !== file.clientId));
         setUploadedFiles((previous) => previous.filter((item) => item.clientId !== file.clientId));
         return;
       }
@@ -1013,6 +1031,36 @@ function Chat() {
       }
     },
     [currentConversationId, handleUnauthorized, loadUploadedFiles, uploadFilesToSession]
+  );
+
+  const handleRemoveComposerFile = useCallback(
+    async (file) => {
+      if (!file) {
+        return;
+      }
+      setComposerFiles((previous) =>
+        previous.filter((item) => (file.id ? item.id !== file.id : item.clientId !== file.clientId))
+      );
+      setUploadedFiles((previous) =>
+        previous.filter((item) => (file.id ? item.id !== file.id : item.clientId !== file.clientId))
+      );
+      if (!file.id) {
+        return;
+      }
+      try {
+        await filesAPI.remove(file.id);
+      } catch (error) {
+        if (error?.response?.status === 404) {
+          return;
+        }
+        if (error?.response?.status === 401 || error?.response?.status === 403) {
+          handleUnauthorized();
+          return;
+        }
+        toast.error(error?.response?.data?.detail || "Could not remove that file right now.");
+      }
+    },
+    [handleUnauthorized]
   );
 
   const handleRemoveUploadedFile = useCallback(
@@ -1091,6 +1139,7 @@ function Chat() {
           setCurrentConversationId(conversation?.id || conversationId);
           setMessages(loadedMessages);
           setEditingMessageId(null);
+          setComposerFiles([]);
         });
       } catch (error) {
         if (error?.response?.status === 401 || error?.response?.status === 403) {
@@ -1156,6 +1205,7 @@ function Chat() {
     setEditingMessageId(null);
     setCurrentConversationId(null);
     setUploadedFiles([]);
+    setComposerFiles([]);
     setPreviewFile(null);
     handleNavChange(DEFAULT_CHAT_NAV);
   };
@@ -1311,8 +1361,8 @@ function Chat() {
       if (!trimmed && hasImageAttachment && attachedFile && !predictedImageRequest) {
         trimmed = "Describe this image clearly.";
       }
-      if (!trimmed && hasDocumentAttachment) {
-        trimmed = "Summarize these files.";
+      if (!trimmed && (hasDocumentAttachment || readyFileIds.length > 0 || composerFiles.length > 0)) {
+        trimmed = "Please process this document and answer all questions present in it.";
       }
       const displayValue = String(displayText || trimmed).trim();
       const effectiveGeneratePromptImage = imageGenerationAvailable && generatePromptImage;
@@ -1359,6 +1409,7 @@ function Chat() {
         },
       );
       setEditingMessageId(null);
+      setComposerFiles([]);
       setMessages((previous) => {
         if (!isEditingMessage) {
           return [...previous, optimisticUserMessage];
@@ -1487,16 +1538,26 @@ function Chat() {
         let documentReference = initialDocumentReference;
         let activeFileIds = readyFileIds;
 
-        if (!hasDocumentAttachment && pendingSessionFiles.length && !readySessionFiles.length && !predictedImageRequest) {
-          setMessages((previous) => [
-            ...previous,
-            createMessage(
-              "assistant",
-              "Your file is still being analyzed. Give me a moment and try again once processing completes.",
-              currentConversationId
-            ),
-          ]);
-          return;
+        if (!hasDocumentAttachment && pendingSessionFiles.length && !predictedImageRequest) {
+          setStatus("Finishing document analysis...");
+          const pendingIds = pendingSessionFiles.map((file) => file.id).filter(Boolean);
+          if (pendingIds.length) {
+            const processedFiles = await waitForFilesReady(pendingIds, 90000);
+            const readyProcessedFiles = processedFiles.filter((file) =>
+              READY_FILE_STATUSES.has(String(file?.status || "").toLowerCase())
+            );
+            if (readyProcessedFiles.length) {
+              activeFileIds = Array.from(
+                new Set([...activeFileIds, ...readyProcessedFiles.map((file) => file.id).filter(Boolean)])
+              );
+              if (!documentReference) {
+                documentReference = {
+                  id: readyProcessedFiles[0]?.id ?? null,
+                  name: readyProcessedFiles[0]?.original_name || null,
+                };
+              }
+            }
+          }
         }
 
         if (hasDocumentAttachment && attachedFile) {
@@ -2206,10 +2267,10 @@ function Chat() {
           >
             <div className="input-wrapper-inner space-y-4">
               <UploadedFilesPanel
-                files={uploadedFiles}
+                files={composerFiles}
                 onPreview={setPreviewFile}
                 onRetry={handleRetryUploadedFile}
-                onRemove={handleRemoveUploadedFile}
+                onRemove={handleRemoveComposerFile}
                 disabled={isTyping || isConversationLoading}
               />
               <ChatInput
@@ -2217,6 +2278,7 @@ function Chat() {
                 onChange={setInput}
                 onSend={handleSend}
                 onSelectFiles={handleSelectFiles}
+                hasAttachments={composerFiles.length > 0}
                 disabled={isTyping || isConversationLoading}
                 requestedPresetId={requestedPresetId}
                 modelOptions={modelOptions}

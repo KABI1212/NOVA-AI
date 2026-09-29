@@ -63,6 +63,7 @@ interface ChatInputProps {
   onTogglePromptImage?: () => void;
   onToggleAnswerImage?: () => void;
   onSelectFiles?: (files: File[]) => void;
+  hasAttachments?: boolean;
 }
 
 const PRESET_MAP = Object.fromEntries(
@@ -151,6 +152,7 @@ export default function ChatInput({
   onTogglePromptImage,
   onToggleAnswerImage,
   onSelectFiles,
+  hasAttachments = false,
 }: ChatInputProps) {
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
   const [speechSupported, setSpeechSupported] = useState(false);
@@ -180,7 +182,8 @@ export default function ChatInput({
   const attachedImage = isImageFile(attachedFile);
   const placeholder = selectedPreset?.placeholder || "Ask anything...";
   const showVoicePanel = isListening || showVoiceDraft;
-  const isSendDisabled = disabled || (!value.trim() && !attachedFile);
+  const hasAnyAttachment = Boolean(attachedFile || hasAttachments);
+  const isSendDisabled = disabled || (!value.trim() && !hasAnyAttachment);
   const voiceButtonTitle = speechSupported
     ? isListening
       ? "Stop voice input"
@@ -191,7 +194,7 @@ export default function ChatInput({
     : attachedFile
       ? attachedImage
         ? "Photo uploads now go straight into the image tool for edits or remixes."
-        : "Document ready for chat analysis. Ask a question or send to get a summary."
+        : "Document ready for chat analysis. Ask a question or send to process all questions."
       : status || "Use + to attach a file, launch research, or switch into image mode.";
 
   useEffect(() => {
@@ -402,6 +405,15 @@ export default function ChatInput({
       return;
     }
 
+    if (onSelectFiles) {
+      onSelectFiles([file]);
+      setLauncherView("closed");
+      if (event.target) {
+        event.target.value = "";
+      }
+      return;
+    }
+
     setAttachedFile(file);
     setLauncherView("closed");
     setSelectedPresetId(isImageFile(file) ? "create_image" : null);
@@ -416,7 +428,7 @@ export default function ChatInput({
     const currentFile = attachedFileRef.current;
     const imageAttachment = isImageFile(currentFile);
     const documentAttachment = Boolean(currentFile && !imageAttachment);
-    if (!trimmed && !currentFile) {
+    if (!trimmed && !currentFile && !hasAttachments) {
       return;
     }
 
@@ -430,8 +442,10 @@ export default function ChatInput({
     const fallbackText = currentFile
       ? imageAttachment
         ? "Create a polished edit from this uploaded photo."
-        : "Summarize this document."
-      : "";
+        : "Please process this document and answer all questions present in it."
+      : hasAttachments
+        ? "Please process this document and answer all questions present in it."
+        : "";
     const text = trimmed || fallbackText;
     const displayText = currentFile
       ? `${trimmed}${trimmed ? " + " : ""}[${attachmentLabel}: ${currentFile.name}]`
